@@ -66,6 +66,15 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+FetchContent_Declare(
+    googlebenchmark
+    URL https://github.com/google/benchmark/archive/refs/tags/v1.9.1.zip
+)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googlebenchmark)
+
 enable_testing()
 include(GoogleTest)
 
@@ -78,10 +87,21 @@ add_library(geometry INTERFACE)
 target_include_directories(geometry INTERFACE src)
 target_link_libraries(geometry INTERFACE database Boost::boost)
 
+# --- view_style: header-only ViewLayer/purpose/color config, distinct from
+# the LEF-mirroring database - see CLAUDE.md for why these aren't schema/cmg-generated ---
+add_library(view_style INTERFACE)
+target_include_directories(view_style INTERFACE src)
+target_link_libraries(view_style INTERFACE database)
+
 # --- scene: header-only per-handle mutable view state (pan/zoom, selection, layer visibility) ---
 add_library(scene INTERFACE)
 target_include_directories(scene INTERFACE src)
-target_link_libraries(scene INTERFACE database)
+target_link_libraries(scene INTERFACE database view_style)
+
+# --- pipeline: header-only shape generation + viewport/size/layer filtering ---
+add_library(pipeline INTERFACE)
+target_include_directories(pipeline INTERFACE src)
+target_link_libraries(pipeline INTERFACE database geometry scene view_style)
 
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp)
@@ -101,17 +121,32 @@ le_enable_coverage_instrumentation(io)
 add_executable(backend_tests
     src/database/tests/database_test.cpp
     src/geometry/tests/geometry_test.cpp
+    src/view_style/tests/view_style_test.cpp
     src/scene/tests/scene_test.cpp
+    src/pipeline/tests/pipeline_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry scene io GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline io GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"
 )
 le_enable_coverage_instrumentation(backend_tests)
 gtest_discover_tests(backend_tests)
+
+# --- benchmarks ---
+add_executable(pipeline_benchmarks src/pipeline/benchmarks/pipeline_benchmark.cpp)
+target_link_libraries(pipeline_benchmarks PRIVATE database geometry scene pipeline io benchmark::benchmark)
+target_compile_definitions(pipeline_benchmarks PRIVATE
+    BENCHMARK_DATA_DIR="${CMAKE_BINARY_DIR}/benchmark_data"
+)
+# Not instrumented for its own coverage (benchmarks aren't run under the
+# `coverage` target) - but it links `io`, which IS instrumented when
+# ENABLE_COVERAGE is on, and that instrumentation pulls in a profiling
+# runtime symbol that only gets linked into the final executable if this
+# target also passes -fprofile-instr-generate, or the link fails.
+le_enable_coverage_instrumentation(pipeline_benchmarks)
 
 # --- coverage: `cmake --build build --target coverage` (requires -DENABLE_COVERAGE=ON at configure time) ---
 if(ENABLE_COVERAGE)

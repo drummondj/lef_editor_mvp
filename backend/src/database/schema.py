@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.1.0",
+    version="0.2.0",
     classes=[
         Klass(
             name="Technology",
@@ -53,84 +53,6 @@ schema = Schema(
                     description="The layer routing direction",
                     type="RoutingDirection",
                 ),
-            ],
-        ),
-        Klass(
-            name="ViewLayer",
-            description="A view layer is used in the layout viewer to display shapes on a Layer",
-            fields=[
-                Field(
-                    name="name",
-                    description="The name of the layer, e.g. M1, VIA1, M2 etc",
-                    type="str",
-                    example="VIA1",
-                ),
-                Field(
-                    name="purpose",
-                    description="The purpose of the layer, e.g. drawing, text, pin, blockage etc",
-                    type="str",
-                    example="drawing",
-                ),
-                Field(
-                    name="shapes",
-                    description="The shapes on this view layer",
-                    type="Shape",
-                    is_list=True,
-                ),
-                Field(
-                    name="style",
-                    description="The style of this view layer",
-                    type="ViewLayerStyle",
-                ),
-            ],
-        ),
-        Klass(
-            name="Color",
-            description="RGBA style color",
-            has_pool=False,
-            fields=[
-                Field(
-                    name="r",
-                    description="Red amount (0-255)",
-                    type="uint8_t",
-                    example="200",
-                ),
-                Field(
-                    name="g",
-                    description="Green amount (0-255)",
-                    type="uint8_t",
-                    example="100",
-                ),
-                Field(
-                    name="b",
-                    description="Blue amount (0-255)",
-                    type="uint8_t",
-                    example="50",
-                ),
-                Field(
-                    name="a",
-                    description="Alpha amount (0-255)",
-                    type="uint8_t",
-                    example="255",
-                ),
-            ],
-        ),
-        Klass(
-            name="ViewLayerStyle",
-            description="Describes how a a ViewLayer is visually styled",
-            has_pool=False,
-            fields=[
-                Field(
-                    name="outline_color",
-                    description="The outline color",
-                    type="Color",
-                ),
-                Field(
-                    name="fill_color",
-                    description="The fill color",
-                    type="Color",
-                ),
-                # TODO: add fill patterns and other parameters later
             ],
         ),
         Klass(

@@ -1,5 +1,6 @@
 #pragma once
 #include "../database/database.hpp"
+#include "../view_style/view_style.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <variant>
@@ -47,8 +48,11 @@ namespace le
         int viewport_height_px() const { return viewport_height_px_; }
 
         // --- Layer visibility (defaults to visible until toggled) ---
-        void set_layer_visible(LayerId id, bool visible) { layer_visible_[id] = visible; }
-        bool is_layer_visible(LayerId id) const
+        // Keyed by ViewLayerId (purpose-tagged: e.g. "M1 terminals" and "M1
+        // obstructions" toggle independently), not the physical LayerId -
+        // see view_style.hpp for why.
+        void set_layer_visible(ViewLayerId id, bool visible) { layer_visible_[id] = visible; }
+        bool is_layer_visible(ViewLayerId id) const
         {
             auto it = layer_visible_.find(id);
             return it == layer_visible_.end() ? true : it->second;
@@ -81,7 +85,7 @@ namespace le
         double scale_ = 1.0;
         int viewport_width_px_ = 0;
         int viewport_height_px_ = 0;
-        std::unordered_map<LayerId, bool> layer_visible_;
+        std::unordered_map<ViewLayerId, bool> layer_visible_;
         std::vector<SelectionRef> selection_;
     };
 }

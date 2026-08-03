@@ -51,20 +51,22 @@ TEST(Scene, SetScaleIgnoresNonPositiveValues)
 
 TEST(Scene, LayerVisibilityDefaultsToTrueUntilSet)
 {
+    // Scene only stores/queries by ViewLayerId - it doesn't know or care
+    // about ViewLayerSet, so an arbitrary id is enough to test this.
     Scene scene;
-    LayerId layer{3, 0};
+    ViewLayerId view_layer{3, 0};
 
-    EXPECT_TRUE(scene.is_layer_visible(layer));
+    EXPECT_TRUE(scene.is_layer_visible(view_layer));
 
-    scene.set_layer_visible(layer, false);
-    EXPECT_FALSE(scene.is_layer_visible(layer));
+    scene.set_layer_visible(view_layer, false);
+    EXPECT_FALSE(scene.is_layer_visible(view_layer));
 
-    scene.set_layer_visible(layer, true);
-    EXPECT_TRUE(scene.is_layer_visible(layer));
+    scene.set_layer_visible(view_layer, true);
+    EXPECT_TRUE(scene.is_layer_visible(view_layer));
 
-    // A different, never-toggled layer is unaffected.
-    LayerId other_layer{4, 0};
-    EXPECT_TRUE(scene.is_layer_visible(other_layer));
+    // A different, never-toggled ViewLayer is unaffected.
+    ViewLayerId other_view_layer{4, 0};
+    EXPECT_TRUE(scene.is_layer_visible(other_view_layer));
 }
 
 TEST(Scene, SelectDeselectAndClear)

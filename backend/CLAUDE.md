@@ -26,14 +26,57 @@ the full brief and the live plan checklist.
   `Point`/`Rect`/`Polygon`/`Path`/`Shape` types. Ported from the sibling
   `layout_engine/backend/utils/geometry.hpp`. Fully covered by
   `geometry_test.cpp`.
+- `src/view_style/` — `ViewLayerSet`/`ViewLayer`, the rendering-purpose layer
+  concept distinct from the LEF-mirroring `database`: a `TERMINAL` and
+  `OBSTRUCTION` `ViewLayer` per physical `Layer`, plus one `BOUNDARY`
+  `ViewLayer` not tied to any physical `Layer`. Hand-written (not
+  cmg-generated) but reuses `database`'s generic `Id<Tag>`/`Pool<T,IdT>`
+  templates directly. `ViewLayerSet::build_for_technology` builds the full
+  set for a `Technology` once, shared/global — which `ViewLayer`s exist and
+  how they're styled (`ViewLayerStyle`: outline/fill `Color`) isn't a
+  per-`Scene` concern, only which ones are toggled off is. Fully covered by
+  `view_style_test.cpp` (93.75% branch coverage is an accepted, irreducible
+  gap: an exhaustive closed-enum `switch` still gets an instrumented
+  "no case matched" branch region that can't be hit without UB).
 - `src/scene/` — `Scene`, per-handle mutable view state (currently displayed
-  `AbstractId`, pan/scale/viewport-size transform, per-layer visibility,
-  selection). Distinct from the persistent `Root` database: the pipeline
-  will read from a `Scene`, events will write into one. Selection is
-  `std::variant<TerminalId, ObstructionId>` — only the object kinds with a
-  rendered geometric representation in an Abstract view today; extend the
-  variant rather than generalizing to a type-erased handle before another
-  kind (e.g. `Instance`, once a Layout/placement view exists) needs it.
+  `AbstractId`, pan/scale/viewport-size transform, per-`ViewLayer`
+  visibility, selection). Distinct from the persistent `Root` database: the
+  pipeline reads from a `Scene`, events will write into one. Layer
+  visibility is keyed by `ViewLayerId` (see `src/view_style/`), not `LayerId`
+  — a physical layer has independently toggleable `TERMINAL`/`OBSTRUCTION`
+  visibility. Selection is `std::variant<TerminalId, ObstructionId>` — only
+  the object kinds with a rendered geometric representation in an Abstract
+  view today; extend the variant rather than generalizing to a type-erased
+  handle before another kind (e.g. `Instance`, once a Layout/placement view
+  exists) needs it.
+- `src/pipeline/` — `Pipeline`, a single straight-line 4-stage pass over a
+  `Scene`'s `current_abstract()` (no node/task framework, no caching - see
+  README's build-order notes on why): `generate_shapes` → `filter_by_
+  viewport_and_size` → `resolve_view_layers` → `filter_by_layer_visibility`.
+  `generate_shapes` collects `Shape`s from Terminals' Ports, Obstructions,
+  and the Abstract's boundary polygon, tagging each with a cheap
+  `ViewLayerPurpose` (no lookup yet). The size filter culls a shape only if
+  **both** bbox dimensions are under 1px at the `Scene`'s scale, so a long
+  thin wire survives even though its width alone is sub-pixel.
+  `resolve_view_layers` resolves each surviving shape's `Shape::layer_name` +
+  purpose to a `ViewLayerId` (a `Shape` has no `LayerId`/`ViewLayerId`
+  field) — `BOUNDARY`-purpose shapes skip the lookup entirely. The layer
+  filter then drops anything on a hidden `ViewLayerId`, keeping shapes whose
+  `ViewLayerId` didn't resolve (e.g. an undeclared/typo'd layer name) rather
+  than dropping them. Fully covered by `pipeline_test.cpp`.
+  Stage order is benchmark-confirmed at 1M shapes
+  (`src/pipeline/benchmarks/pipeline_benchmark.cpp`): resolving
+  `ViewLayerId` during `generate_shapes` instead of as its own post-filter
+  stage was tried first and made the full pipeline ~46% slower (40.8ms →
+  59.8ms), because it pays the `Layer`-by-name lookup on all 1M shapes
+  instead of only the ~25% that survive viewport culling — same lesson as
+  viewport-before-layer-filter, one level deeper. Current clean Release
+  numbers (`-DENABLE_COVERAGE=OFF` — see the coverage gotcha below):
+  `generate_shapes` 47.0ms, `filter_by_viewport_and_size` 4.54ms,
+  `resolve_view_layers` 1.87ms, `filter_by_layer_visibility` 0.82ms, full
+  `run()` 55.5ms. `generate_shapes` dominates total cost — the real
+  optimization target if pipeline throughput ever needs to improve, not
+  stage order.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Depends on `geometry` for polygon construction/union.
@@ -94,9 +137,10 @@ ctest --test-dir build --output-on-failure
 ```
 
 Dependencies: `spdlog`, `fmt`, `Boost` (headers only, for `geometry`) via
-`find_package` — installed on this dev machine via Homebrew; GoogleTest via
-`FetchContent` (no system install needed). `src/lefdef/lef` is built as an
-`ExternalProject_Add` step that shells out to its own vendored `Makefile`.
+`find_package` — installed on this dev machine via Homebrew; GoogleTest and
+GoogleBenchmark via `FetchContent` (no system install needed). `src/lefdef/lef`
+is built as an `ExternalProject_Add` step that shells out to its own vendored
+`Makefile`.
 
 **Gotcha:** that vendored Makefile's `all: install release` target is not
 safe under a parallel/inherited `make` jobserver — both traversals touch the
@@ -123,8 +167,32 @@ written to `build/coverage/report.txt` and `build/coverage/lcov.info` for
 
 Requires Clang (uses `-fprofile-instr-generate`, not GCC's `--coverage`
 model) and `llvm-profdata`/`llvm-cov` — resolved via `xcrun` automatically
-on macOS. Reconfigure with `-DENABLE_COVERAGE=OFF` (or a fresh `build/`) to
-get back to a normal, uninstrumented build.
+on macOS.
+
+**Gotcha:** `ENABLE_COVERAGE` is a *cached* option — reconfiguring with e.g.
+`-DCMAKE_BUILD_TYPE=Release` alone does **not** reset a previously-set-ON
+value back to OFF, and `le_enable_coverage_instrumentation()` forces `-O0`
+regardless of `CMAKE_BUILD_TYPE`. Always pass `-DENABLE_COVERAGE=OFF`
+explicitly (or use a fresh `build/`) to get back to a normal, uninstrumented
+build — this silently produced ~15-20x-inflated (but suspiciously
+low-variance, so not obviously "noisy") benchmark numbers once already.
+
+### Benchmarks
+
+```
+cmake --build build --target pipeline_benchmarks
+./build/pipeline_benchmarks
+```
+
+Build in `-DCMAKE_BUILD_TYPE=Release` for real numbers — Debug timings aren't
+meaningful. `src/pipeline/benchmarks/pipeline_benchmark.cpp` generates a
+deliberately unrealistic 1M-shape single-macro LEF file (streamed straight to
+`${CMAKE_BINARY_DIR}/benchmark_data/`, ~78MB, never committed — see its
+comment for exactly how shapes/positions/sizes/layers are spread) and times
+each `Pipeline` stage plus the full `run()`. See the `src/pipeline/` entry
+above for the current headline results. Add `--benchmark_repetitions=5
+--benchmark_report_aggregates_only=true` for stable numbers when comparing
+two approaches, and `--benchmark_filter=<regex>` to run a subset.
 
 ## Conventions observed in existing code
 
