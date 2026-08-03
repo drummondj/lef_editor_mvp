@@ -78,6 +78,11 @@ add_library(geometry INTERFACE)
 target_include_directories(geometry INTERFACE src)
 target_link_libraries(geometry INTERFACE database Boost::boost)
 
+# --- scene: header-only per-handle mutable view state (pan/zoom, selection, layer visibility) ---
+add_library(scene INTERFACE)
+target_include_directories(scene INTERFACE src)
+target_link_libraries(scene INTERFACE database)
+
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp)
 add_dependencies(io lef_lib)
@@ -96,10 +101,11 @@ le_enable_coverage_instrumentation(io)
 add_executable(backend_tests
     src/database/tests/database_test.cpp
     src/geometry/tests/geometry_test.cpp
+    src/scene/tests/scene_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry io GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry scene io GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"

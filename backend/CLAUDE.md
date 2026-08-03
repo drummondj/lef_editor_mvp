@@ -26,6 +26,14 @@ the full brief and the live plan checklist.
   `Point`/`Rect`/`Polygon`/`Path`/`Shape` types. Ported from the sibling
   `layout_engine/backend/utils/geometry.hpp`. Fully covered by
   `geometry_test.cpp`.
+- `src/scene/` — `Scene`, per-handle mutable view state (currently displayed
+  `AbstractId`, pan/scale/viewport-size transform, per-layer visibility,
+  selection). Distinct from the persistent `Root` database: the pipeline
+  will read from a `Scene`, events will write into one. Selection is
+  `std::variant<TerminalId, ObstructionId>` — only the object kinds with a
+  rendered geometric representation in an Abstract view today; extend the
+  variant rather than generalizing to a type-erased handle before another
+  kind (e.g. `Instance`, once a Layout/placement view exists) needs it.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Depends on `geometry` for polygon construction/union.

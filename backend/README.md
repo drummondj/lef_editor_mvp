@@ -61,7 +61,7 @@ The process will be developed using a multi-threaded, layer based, render pipeli
 - **`database`** *(exists)* — schema-driven object-pool database (`Root`, generational `XxxId` handles, per-class pools). Source of truth for all layout/schematic data; every other module depends on this.
 - **`geometry`** *(exists)* — bbox, overlap/hit-test, transform, polygon union/buffer, and label-placement operations over `le::Point/Rect/Polygon/Path`, backed by Boost.Geometry (ported from the sibling project's `utils/geometry.hpp`, the one part of it that was real and working). Turned out to be a hard compile-time dependency of `io` (LEF macro boundary/obstruction generation calls `Geometry::union_shapes`/`rect_to_polygon`/`transform` directly), not just a pipeline-filter nicety — built in full rather than as a stub. Depends on: `database`.
 - **`io`** *(exists)* — format readers that populate `Root` from external files. Currently `LEFReader`, compiling and passing tests against the vendored `src/lefdef/lef` parser; DEF and SystemVerilog netlist readers land here later. Depends on: `database`, `geometry`.
-- **`scene`** *(new)* — per-handle mutable view state: pan/zoom transform, currently visible Design/Abstract, layer-visibility toggles, selection. Distinct from the persistent database; the pipeline reads from it and events write into it. Depends on: `database`.
+- **`scene`** *(exists)* — per-handle mutable view state: currently displayed `AbstractId`, pan/scale/viewport-size transform, per-layer visibility, selection (`std::variant<TerminalId, ObstructionId>` — only the kinds with a rendered representation today). Distinct from the persistent database; the pipeline reads from it and events write into it. Built ahead of `pipeline` (moved up from the original build-order plan) since the shape-filter stage genuinely needs its scale for the sub-pixel threshold, not just as a future nicety — same lesson as `geometry` turning out to be a hard `io` dependency. Depends on: `database`.
 - **`pipeline`** *(new)* — the three stages above (order TBD by benchmarking), operating entirely in dbu-space; the sub-pixel size test reads `scene`'s scale to convert the 1px threshold into dbu rather than transforming shapes. Depends on: `database`, `geometry`, `scene`.
 - **`render`** *(new)* — applies the dbu → pixel transform (scale + pan + viewport offset, from `scene`) to the filtered shapes as its first step, then turns them into Skia draw commands and a pixel buffer for the Flutter texture. Depends on: `pipeline`, `scene`, `database`.
 - **`events`** *(new)* — event definitions + dispatch for both C-API-originated events (load file, toolbar click) and surface-originated events (mouse move, object selection, resize/move), routing into `scene`/`database` mutations. Depends on: `scene`, `database`.
@@ -71,10 +71,11 @@ The process will be developed using a multi-threaded, layer based, render pipeli
 ### Recommended build order (thin vertical slice first)
 
 1. ~~CMake + vendored `lefdef` + `io` compiling, existing tests passing.~~ **Done.** `geometry` landed here too (in full, not stubbed) since `io` genuinely needs it to compile.
-2. One straight-line pipeline function (generate → filter → filter), single-threaded, no caching, no node/task framework — prove shapes-in/shapes-out end-to-end before generalizing into a "pipeline" abstraction.
-3. Minimal `render` — Skia raster canvas straight to the output pixel buffer; skip `SkPicture` recording unless a benchmark justifies it.
-4. Minimal `api` — `init`/`destroy`, load-file, `render_pixel_buffer` only; get a real Flutter texture rendering before adding zoom/pan/selection.
-5. Only then layer in `scene`, `events`, `properties`, and revisit pipeline stage order/threading/caching — each backed by a benchmark.
+2. ~~`scene`.~~ **Done.** Pulled forward from step 5 below — `pipeline`'s shape-filter stage needs its scale, so it's a real dependency, not a later nicety.
+3. One straight-line pipeline function (generate → filter → filter), single-threaded, no caching, no node/task framework — prove shapes-in/shapes-out end-to-end before generalizing into a "pipeline" abstraction.
+4. Minimal `render` — Skia raster canvas straight to the output pixel buffer; skip `SkPicture` recording unless a benchmark justifies it.
+5. Minimal `api` — `init`/`destroy`, load-file, `render_pixel_buffer` only; get a real Flutter texture rendering before adding zoom/pan/selection.
+6. Only then layer in `events`, `properties`, and revisit pipeline stage order/threading/caching — each backed by a benchmark.
 
 ### Open design questions (resolve during implementation)
 
