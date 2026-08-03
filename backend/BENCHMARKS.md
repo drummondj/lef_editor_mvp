@@ -128,3 +128,44 @@ pan/zoom/select dominates real usage per the target workflow (read LEF once
 absolute cost ever matters on its own, profiling the copy-volume hypothesis
 above (e.g. avoiding the second full `Shape` copy) is a bigger potential win
 than this caching change alone — not pursued now.
+
+## 2026-08-03 — PipelineCache merged into Pipeline (structural refactor, no behavior change)
+
+`PipelineCache` was hard to read (cascading invalidation via manually-set
+boolean flags scattered across four private methods) and required a
+separate class from `Pipeline`. Restructured: `Pipeline`'s four stage
+methods are now non-static instance methods, each owning a small
+`CachedStage<Key, Value>` member (remembers the last key/compute-result
+pair, recomputes only when the key changes - not a general reactive
+framework, just enough to replace the hand-written flags). Each stage
+chains to the previous one internally and its own key already includes
+every upstream trigger it transitively depends on, so cascading
+invalidation now falls out of key comparison for free. `Pipeline::run()`
+reads as a flat 4-line sequence again, identical in spirit to the original
+pre-caching version. `pipeline_cache.hpp`/`PipelineCache` are gone; one
+`Pipeline` instance now lives per `Scene`-equivalent lifetime instead.
+
+This is a pure structural change - same cache keys, same stage order, same
+algorithm. Re-ran the full benchmark suite to confirm nothing regressed:
+
+| Benchmark | Before (PipelineCache v2) | After (merged Pipeline) |
+|---|---|---|
+| `resolve_view_layers` on full 1M set | 40.3 ms | 41.5 ms |
+| Cold start (fresh instance, one `run()`) | 97.7 ms | 96.7 ms |
+| Reused, pan-only | 6.11 ms | 6.30 ms |
+| Reused, visibility-only | 0.614 ms | 0.625 ms |
+| Reused, no change | ~0.000 ms | ~0.000 ms |
+
+All within normal run-to-run noise - confirms the merge didn't change
+performance, only readability/structure. Isolated-stage benchmarks
+(`BM_GenerateShapes`, `BM_FilterByViewportAndSize`, `BM_ResolveViewLayers`,
+`BM_FilterByLayerVisibility`, `BM_Run`) now construct a fresh `Pipeline`
+per iteration to keep measuring true uncached cost, since the stage
+methods cache internally; `BM_RunCached_*` renamed to `BM_RunReused_*` to
+reflect that they now exercise the same `Pipeline::run()` a real caller
+would use, just with one instance reused across iterations instead of
+constructed fresh. The old `BM_ResolveViewLayers` (measured on the
+250K post-viewport-filter subset, no longer a real code path since resolve
+always runs on the full set now) and `BM_RunCached_ColdStart` (now
+identical in meaning to `BM_Run`) were dropped as redundant; their findings
+remain in the entries above.

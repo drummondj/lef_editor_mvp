@@ -1,6 +1,5 @@
 #include "../../io/lef_reader.hpp"
 #include "../pipeline.hpp"
-#include "../pipeline_cache.hpp"
 #include <benchmark/benchmark.h>
 #include <chrono>
 #include <filesystem>
@@ -162,89 +161,95 @@ namespace
     }
 }
 
+// Pipeline now caches internally per-instance (see pipeline.hpp), so
+// measuring a single stage's *uncached* per-call cost requires a fresh
+// Pipeline every iteration - otherwise iterations after the first would be
+// cache hits and the benchmark would measure ~nothing instead of real work.
+
 static void BM_GenerateShapes(benchmark::State &state)
 {
     const auto &data = stress_data();
     for (auto _ : state)
     {
-        auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
-        benchmark::DoNotOptimize(shapes);
+        Pipeline pipeline;
+        const auto &shapes = pipeline.generate_shapes(data.root, data.abstract_id);
+        const auto *shapes_data = shapes.data();
+        benchmark::DoNotOptimize(shapes_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
 BENCHMARK(BM_GenerateShapes)->Unit(benchmark::kMillisecond);
 
+// Benchmarked on the full 1M-shape resolved set, matching how Pipeline::run()
+// actually calls it (viewport-filtering runs after resolving now - see
+// pipeline.hpp's class comment for why).
 static void BM_FilterByViewportAndSize(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
-    auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
+
+    Pipeline setup;
+    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
+    const auto &resolved = setup.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
 
     for (auto _ : state)
     {
-        auto filtered = Pipeline::filter_by_viewport_and_size(shapes, scene);
-        benchmark::DoNotOptimize(filtered);
+        Pipeline pipeline;
+        const auto &filtered = pipeline.filter_by_viewport_and_size(resolved, scene);
+        const auto *filtered_data = filtered.data();
+        benchmark::DoNotOptimize(filtered_data);
     }
-    state.SetItemsProcessed(state.iterations() * shapes.size());
+    state.SetItemsProcessed(state.iterations() * resolved.size());
 }
 BENCHMARK(BM_FilterByViewportAndSize)->Unit(benchmark::kMillisecond);
 
-// Deliberately benchmarked on the POST-viewport-filter input (~25% of
-// kTotalShapes), matching how run() actually calls it. See pipeline.hpp's
-// class comment: resolving on the full unfiltered set instead (tried first)
-// made the whole pipeline ~46% slower.
+// Benchmarked on the full unfiltered generate_shapes output (all
+// kTotalShapes) - this is what Pipeline::run() actually calls
+// resolve_view_layers with (see pipeline.hpp's class comment for why:
+// decoupling it from the viewport filter's cache means it only pays this
+// cost once per AbstractId, not once per pan/zoom frame).
 static void BM_ResolveViewLayers(benchmark::State &state)
 {
     const auto &data = stress_data();
-    Scene scene = make_scene(data);
-    auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
-    shapes = Pipeline::filter_by_viewport_and_size(shapes, scene);
+
+    Pipeline setup;
+    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
 
     for (auto _ : state)
     {
-        auto rendered = Pipeline::resolve_view_layers(shapes, data.root, data.view_layers);
-        benchmark::DoNotOptimize(rendered);
+        Pipeline pipeline;
+        const auto &rendered = pipeline.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
+        const auto *rendered_data = rendered.data();
+        benchmark::DoNotOptimize(rendered_data);
     }
-    state.SetItemsProcessed(state.iterations() * shapes.size());
+    state.SetItemsProcessed(state.iterations() * generated.size());
 }
 BENCHMARK(BM_ResolveViewLayers)->Unit(benchmark::kMillisecond);
-
-// Benchmarked on the FULL unfiltered generate_shapes output (all
-// kTotalShapes), not the post-viewport-filter survivors above - this is
-// what PipelineCache actually calls resolve_view_layers with (see its
-// class comment for why: caching makes this the right trade even though
-// it costs more per call than the post-filter version above).
-static void BM_ResolveViewLayersOnFullSet(benchmark::State &state)
-{
-    const auto &data = stress_data();
-    auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
-
-    for (auto _ : state)
-    {
-        auto rendered = Pipeline::resolve_view_layers(shapes, data.root, data.view_layers);
-        benchmark::DoNotOptimize(rendered);
-    }
-    state.SetItemsProcessed(state.iterations() * shapes.size());
-}
-BENCHMARK(BM_ResolveViewLayersOnFullSet)->Unit(benchmark::kMillisecond);
 
 static void BM_FilterByLayerVisibility(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
-    auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
-    shapes = Pipeline::filter_by_viewport_and_size(shapes, scene);
-    auto rendered = Pipeline::resolve_view_layers(shapes, data.root, data.view_layers);
+
+    Pipeline setup;
+    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
+    const auto &resolved = setup.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
+    const auto &viewport_filtered = setup.filter_by_viewport_and_size(resolved, scene);
 
     for (auto _ : state)
     {
-        auto filtered = Pipeline::filter_by_layer_visibility(rendered, scene);
-        benchmark::DoNotOptimize(filtered);
+        Pipeline pipeline;
+        const auto &filtered = pipeline.filter_by_layer_visibility(viewport_filtered, scene);
+        const auto *filtered_data = filtered.data();
+        benchmark::DoNotOptimize(filtered_data);
     }
-    state.SetItemsProcessed(state.iterations() * rendered.size());
+    state.SetItemsProcessed(state.iterations() * viewport_filtered.size());
 }
 BENCHMARK(BM_FilterByLayerVisibility)->Unit(benchmark::kMillisecond);
 
+// A fresh Pipeline every iteration, one run() call each - the "just
+// switched to a different Abstract" cold-start case, where every stage is
+// a cache miss.
 static void BM_Run(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -252,70 +257,70 @@ static void BM_Run(benchmark::State &state)
 
     for (auto _ : state)
     {
-        auto result = Pipeline::run(data.root, scene, data.view_layers);
-        benchmark::DoNotOptimize(result);
+        Pipeline pipeline;
+        const auto &result = pipeline.run(data.root, scene, data.view_layers);
+        const auto *result_data = result.data();
+        benchmark::DoNotOptimize(result_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
 BENCHMARK(BM_Run)->Unit(benchmark::kMillisecond);
 
-// PipelineCache benchmarks - compare against the uncached BM_Run baseline
-// above to measure the actual speedup, per BENCHMARKS.md. Each PipelineCache
-// is constructed once per benchmark (outside the timed loop is impossible
-// with Google Benchmark's `for (auto _ : state)` form without extra
-// bookkeeping, but construction itself is cheap - four empty vectors and a
-// handful of scalars) and reused across iterations, since a real caller
-// would keep one alive for a Scene's whole interactive lifetime.
+// The interactive/reused-instance case: one Pipeline constructed once and
+// reused across iterations (as a real caller would keep one alive for a
+// Scene's whole interactive lifetime), compared against BM_Run's cold-start
+// baseline above to measure the actual caching benefit, per BENCHMARKS.md.
 
 // Nothing changes between calls - the steady-state "no input this frame"
 // case. Expect near-zero: every stage hits its cache.
-static void BM_RunCached_NoChange(benchmark::State &state)
+static void BM_RunReused_NoChange(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
-    PipelineCache cache;
+    Pipeline pipeline;
 
     for (auto _ : state)
     {
-        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto &result = pipeline.run(data.root, scene, data.view_layers);
         const auto *result_data = result.data();
         benchmark::DoNotOptimize(result_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
-BENCHMARK(BM_RunCached_NoChange)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_RunReused_NoChange)->Unit(benchmark::kMillisecond);
 
 // Only pan changes each call, simulating interactive panning - the common
-// case generate_shapes's cache is meant for. Expect close to the sum of the
-// uncached filter/resolve/layer-filter stage costs (~7ms), not the full
-// ~56ms run(), since generate_shapes's ~47ms is skipped every iteration.
-static void BM_RunCached_PanOnly(benchmark::State &state)
+// case generate_shapes/resolve_view_layers's shared AbstractId cache is
+// meant for. Expect close to the sum of the uncached viewport-filter and
+// layer-filter costs, not the full BM_Run cost, since generate_shapes and
+// resolve_view_layers are both skipped every iteration.
+static void BM_RunReused_PanOnly(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
-    PipelineCache cache;
+    Pipeline pipeline;
 
     int64_t pan_x = 0;
     for (auto _ : state)
     {
         scene.set_pan(Point{pan_x++, 0});
-        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto &result = pipeline.run(data.root, scene, data.view_layers);
         const auto *result_data = result.data();
         benchmark::DoNotOptimize(result_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
-BENCHMARK(BM_RunCached_PanOnly)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_RunReused_PanOnly)->Unit(benchmark::kMillisecond);
 
 // Only a layer's visibility changes each call, simulating toggling a layer
 // on/off in the UI. Expect close to just the uncached layer-filter stage
-// cost (~0.8ms), since generate_shapes, the viewport filter, and
-// resolve_view_layers are all still cached.
-static void BM_RunCached_VisibilityOnly(benchmark::State &state)
+// cost, since generate_shapes, resolve_view_layers, and the viewport
+// filter are all still cached.
+static void BM_RunReused_VisibilityOnly(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
-    PipelineCache cache;
+    Pipeline pipeline;
     ViewLayerId m1_obstruction = data.view_layers.find(data.root.get_layer_by_name("M1"), ViewLayerPurpose::OBSTRUCTION);
 
     bool visible = true;
@@ -323,35 +328,12 @@ static void BM_RunCached_VisibilityOnly(benchmark::State &state)
     {
         scene.set_layer_visible(m1_obstruction, visible);
         visible = !visible;
-        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto &result = pipeline.run(data.root, scene, data.view_layers);
         const auto *result_data = result.data();
         benchmark::DoNotOptimize(result_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
-BENCHMARK(BM_RunCached_VisibilityOnly)->Unit(benchmark::kMillisecond);
-
-// A fresh PipelineCache every iteration, one run() call each - the "just
-// switched to a different Abstract" cold-start case, where every stage is
-// a cache miss. Measures the real cost of resolve_view_layers running on
-// the full generated set (see BM_ResolveViewLayersOnFullSet above) instead
-// of relying on an extrapolation from the post-viewport-filter cost.
-// Expect somewhat higher than the uncached BM_Run, since resolve now runs
-// on ~4x the shapes it would under Pipeline::run()'s order.
-static void BM_RunCached_ColdStart(benchmark::State &state)
-{
-    const auto &data = stress_data();
-    Scene scene = make_scene(data);
-
-    for (auto _ : state)
-    {
-        PipelineCache cache;
-        const auto &result = cache.run(data.root, scene, data.view_layers);
-        const auto *result_data = result.data();
-        benchmark::DoNotOptimize(result_data);
-    }
-    state.SetItemsProcessed(state.iterations() * kTotalShapes);
-}
-BENCHMARK(BM_RunCached_ColdStart)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_RunReused_VisibilityOnly)->Unit(benchmark::kMillisecond);
 
 BENCHMARK_MAIN();

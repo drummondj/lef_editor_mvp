@@ -124,7 +124,6 @@ add_executable(backend_tests
     src/view_style/tests/view_style_test.cpp
     src/scene/tests/scene_test.cpp
     src/pipeline/tests/pipeline_test.cpp
-    src/pipeline/tests/pipeline_cache_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
 )

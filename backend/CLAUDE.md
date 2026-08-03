@@ -49,34 +49,52 @@ the full brief and the live plan checklist.
   view today; extend the variant rather than generalizing to a type-erased
   handle before another kind (e.g. `Instance`, once a Layout/placement view
   exists) needs it.
-- `src/pipeline/` — `Pipeline`, a single straight-line 4-stage pass over a
-  `Scene`'s `current_abstract()` (no node/task framework, no caching - see
-  README's build-order notes on why): `generate_shapes` → `filter_by_
-  viewport_and_size` → `resolve_view_layers` → `filter_by_layer_visibility`.
+- `src/pipeline/` — `Pipeline`, a 4-stage pass over a `Scene`'s
+  `current_abstract()` (no node/task framework): `generate_shapes` →
+  `resolve_view_layers` → `filter_by_viewport_and_size` →
+  `filter_by_layer_visibility`. Each stage is a non-static instance method
+  owning a small `CachedStage<Key, Value>` member (remembers the last
+  key/result pair, recomputes only when the key changes — not a general
+  reactive framework, just enough to avoid hand-written invalidation flags)
+  and chains to the previous stage internally, so `run()` reads as a flat
+  4-line sequence while still only recomputing what actually changed. One
+  `Pipeline` instance lives per `Scene`-equivalent lifetime and is reused
+  across repeated calls (e.g. every interactive frame) — a fresh instance
+  recomputes everything on its first call.
   `generate_shapes` collects `Shape`s from Terminals' Ports, Obstructions,
   and the Abstract's boundary polygon, tagging each with a cheap
-  `ViewLayerPurpose` (no lookup yet). The size filter culls a shape only if
-  **both** bbox dimensions are under 1px at the `Scene`'s scale, so a long
-  thin wire survives even though its width alone is sub-pixel.
-  `resolve_view_layers` resolves each surviving shape's `Shape::layer_name` +
-  purpose to a `ViewLayerId` (a `Shape` has no `LayerId`/`ViewLayerId`
-  field) — `BOUNDARY`-purpose shapes skip the lookup entirely. The layer
-  filter then drops anything on a hidden `ViewLayerId`, keeping shapes whose
-  `ViewLayerId` didn't resolve (e.g. an undeclared/typo'd layer name) rather
-  than dropping them. Fully covered by `pipeline_test.cpp`.
-  Stage order is benchmark-confirmed at 1M shapes
-  (`src/pipeline/benchmarks/pipeline_benchmark.cpp`): resolving
-  `ViewLayerId` during `generate_shapes` instead of as its own post-filter
-  stage was tried first and made the full pipeline ~46% slower (40.8ms →
-  59.8ms), because it pays the `Layer`-by-name lookup on all 1M shapes
-  instead of only the ~25% that survive viewport culling — same lesson as
-  viewport-before-layer-filter, one level deeper. Current clean Release
-  numbers (`-DENABLE_COVERAGE=OFF` — see the coverage gotcha below):
-  `generate_shapes` 47.0ms, `filter_by_viewport_and_size` 4.54ms,
-  `resolve_view_layers` 1.87ms, `filter_by_layer_visibility` 0.82ms, full
-  `run()` 55.5ms. `generate_shapes` dominates total cost — the real
-  optimization target if pipeline throughput ever needs to improve, not
-  stage order.
+  `ViewLayerPurpose` (no lookup yet), keyed on `AbstractId` alone.
+  `resolve_view_layers` resolves each shape's `Shape::layer_name` + purpose
+  to a `ViewLayerId` (a `Shape` has no `LayerId`/`ViewLayerId` field) —
+  `BOUNDARY`-purpose shapes skip the lookup entirely — and is *also* keyed
+  on `AbstractId` alone (not chained to the viewport filter): its real
+  inputs (`root`/`view_layers`) don't change on pan/zoom, so keying it that
+  way means it's paid once per Abstract selection instead of once per
+  frame. The size filter culls a shape only if **both** bbox dimensions
+  are under 1px at the `Scene`'s scale, so a long thin wire survives even
+  though its width alone is sub-pixel; it's keyed on `AbstractId` +
+  `Scene::viewport_version()`. The layer filter drops anything on a hidden
+  `ViewLayerId`, keeping shapes whose `ViewLayerId` didn't resolve (e.g. an
+  undeclared/typo'd layer name) rather than dropping them; keyed on
+  `AbstractId` + `viewport_version()` + `Scene::visibility_version()`.
+  Fully covered by `pipeline_test.cpp`.
+  Running `resolve_view_layers` right after `generate_shapes` (on the full
+  generated set) instead of after the viewport filter (on the ~25% that
+  survive culling) costs more per Abstract switch (~+42ms at 1M shapes,
+  since resolving 1M shapes measures ~40ms not the ~7ms a naive per-shape
+  extrapolation suggests) but saves ~1.7ms on every subsequent pan/zoom
+  frame — accepted since a one-time Abstract switch can show a loading
+  spinner and affords up to ~1-2s, while pan/zoom is the actual
+  latency-sensitive path. Current clean Release numbers
+  (`-DENABLE_COVERAGE=OFF` — see the coverage gotcha below): fresh-instance
+  `run()` (cold) 96.7ms; reused-instance pan-only 6.30ms, visibility-only
+  0.625ms, no-change ~0ms. See `BENCHMARKS.md` for the full
+  measurement/investigation, including an earlier design (`PipelineCache`,
+  a separate class) that was merged into `Pipeline` itself for
+  readability — cascading invalidation via manually-set boolean flags
+  scattered across private methods was hard to follow and hard to extend;
+  each stage owning its own `CachedStage` and chaining internally replaced
+  that with the same caching behavior, expressed more simply.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Depends on `geometry` for polygon construction/union.
@@ -189,10 +207,14 @@ meaningful. `src/pipeline/benchmarks/pipeline_benchmark.cpp` generates a
 deliberately unrealistic 1M-shape single-macro LEF file (streamed straight to
 `${CMAKE_BINARY_DIR}/benchmark_data/`, ~78MB, never committed — see its
 comment for exactly how shapes/positions/sizes/layers are spread) and times
-each `Pipeline` stage plus the full `run()`. See the `src/pipeline/` entry
-above for the current headline results. Add `--benchmark_repetitions=5
---benchmark_report_aggregates_only=true` for stable numbers when comparing
-two approaches, and `--benchmark_filter=<regex>` to run a subset.
+each `Pipeline` stage in isolation (a fresh instance per iteration, since
+stages cache internally) and `run()` under several call patterns (fresh
+instance/cold start, and a reused instance with no change, pan-only,
+visibility-only). See the `src/pipeline/` entry above for the current
+headline results, and `BENCHMARKS.md` for the full history. Add
+`--benchmark_repetitions=5 --benchmark_report_aggregates_only=true` for
+stable numbers when comparing two approaches, and `--benchmark_filter=<regex>`
+to run a subset.
 
 ## Conventions observed in existing code
 
