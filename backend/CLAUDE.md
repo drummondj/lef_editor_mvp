@@ -89,6 +89,31 @@ the full brief and the live plan checklist.
   extend, replaced by each stage owning its own `CachedStage` and chaining
   internally) and a separate `resolve_view_layers` stage (merged into
   `generate_shapes` once the caching redesign made it redundant, as above).
+- `src/render/` — `Renderer`, two more stages on top of `Pipeline`'s output,
+  same `CachedStage`/chaining pattern: `transform_to_pixels` (dbu→pixel via
+  `pixel = (dbu - pan) * scale` — no Y-axis flip; whether one belongs here
+  or at a later screen/texture-blit step is unresolved, not decided by this
+  transform) then `build_picture` (Skia `SkPictureRecorder`/`SkCanvas` draw
+  calls, each shape styled via its `ViewLayerId`'s `ViewLayerStyle` from
+  `view_layers`). Both keyed on `AbstractId` + `viewport_version()` +
+  `visibility_version()`, matching `filter_by_layer_visibility`'s key —
+  covers everything either stage depends on. Takes a `Pipeline&` from the
+  caller rather than owning one, matching how `Pipeline`'s own stages take
+  the previous stage's output explicitly. `PixelShape` (new: `PixelPoint`/
+  `PixelRect`/`PixelPolygon`/`PixelPath`, mirroring `Shape`'s structure
+  with `double` coordinates instead of dbu's `int64_t`) is the pixel-space
+  counterpart of `RenderedShape`; `Shape::texts` isn't transformed yet —
+  same scope boundary as `Pipeline`'s viewport filter. Single-threaded;
+  `BENCHMARKS.md` shows rendering adds only ~2-2.75ms on top of the
+  pipeline (cold or warm) at 1M shapes, comfortably under a 60fps budget,
+  so there's no benchmark-backed case for a background thread yet (see
+  README's Threading open design question — revisit if a future benchmark,
+  e.g. with real text/rasterization, shows otherwise). Fully covered by
+  `render_test.cpp`, including real pixel-color assertions (rasterize the
+  `SkPicture` into an `SkSurface` and read back actual pixels via
+  `SkBitmap`), not just "didn't crash."
+  Depends on a **machine-specific Skia checkout, not committed to this
+  repo** — see the Skia setup note under Build below.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Depends on `geometry` for polygon construction/union.
@@ -139,6 +164,22 @@ Real test coverage lives in each module's own `tests/` directory, not
   skill for setup (or run it via `poetry run cmg` from the local
   `/Users/john/Projects/synthosilicon/cmg` checkout, which is what was used
   to produce the current `generated/` output).
+- Skia isn't vendored/built by this project either — `src/render/`'s
+  `CMakeLists.txt` `skia` target points `SKIA_DIR` at a pre-built checkout
+  (default `/Users/john/Projects/synthosilicon/skia/skia`, override with
+  `-DSKIA_DIR=...`). That checkout must have `out/MacStatic/libskia.a` built
+  with `is_component_build=false` (static). Link requirements (include
+  path, `libskia.a`, Homebrew `harfbuzz`/`icu4c`/`jpeg`/`png`/`z`/`webp`/
+  `webpdemux`, and macOS `CoreText`/`CoreFoundation`/`CoreGraphics`/
+  `CoreServices` frameworks) were determined empirically by linking a
+  minimal `SkPictureRecorder`/`SkSurface` program, then iterating on
+  `backend_tests`' actual undefined-symbol errors — Skia's static archive
+  unconditionally pulls in its CoreText font manager and several image
+  codecs (jpeg/png/webp) even for pure vector/raster drawing with no text
+  or image decoding in this project's own code. No GPU (Ganesh/Metal)
+  frameworks needed: only the raster (CPU) surface APIs are used, and
+  static linking never pulls in the unused GPU object files despite
+  `libskia.a` containing Metal-backend code from the checkout's own build.
 
 ## Build
 
@@ -201,11 +242,12 @@ meaningful. `src/pipeline/benchmarks/pipeline_benchmark.cpp` generates a
 deliberately unrealistic 1M-shape single-macro LEF file (streamed straight to
 `${CMAKE_BINARY_DIR}/benchmark_data/`, ~78MB, never committed — see its
 comment for exactly how shapes/positions/sizes/layers are spread) and times
-each `Pipeline` stage in isolation (a fresh instance per iteration, since
-stages cache internally) and `run()` under several call patterns (fresh
-instance/cold start, and a reused instance with no change, pan-only,
-visibility-only). See the `src/pipeline/` entry above for the current
-headline results, and `BENCHMARKS.md` for the full history. Add
+each `Pipeline`/`Renderer` stage in isolation (a fresh instance per
+iteration, since stages cache internally), plus the full pipeline+render
+chain under several call patterns (fresh instance/cold start, and a reused
+instance with no change, pan-only, visibility-only). See the
+`src/pipeline/`/`src/render/` entries above for the current headline
+results, and `BENCHMARKS.md` for the full history. Add
 `--benchmark_repetitions=5 --benchmark_report_aggregates_only=true` for
 stable numbers when comparing two approaches, and `--benchmark_filter=<regex>`
 to run a subset.

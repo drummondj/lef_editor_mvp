@@ -1,4 +1,5 @@
 #include "../../io/lef_reader.hpp"
+#include "../../render/render.hpp"
 #include "../pipeline.hpp"
 #include <benchmark/benchmark.h>
 #include <chrono>
@@ -311,5 +312,114 @@ static void BM_RunReused_VisibilityOnly(benchmark::State &state)
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
 BENCHMARK(BM_RunReused_VisibilityOnly)->Unit(benchmark::kMillisecond);
+
+// render module benchmarks - Renderer also caches internally per-instance
+// (see render.hpp), so isolated-stage benchmarks need a fresh Renderer per
+// iteration too, same reasoning as the Pipeline benchmarks above.
+
+static void BM_TransformToPixels(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    Pipeline setup_pipeline;
+    const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
+
+    for (auto _ : state)
+    {
+        Renderer renderer;
+        const auto &pixel_shapes = renderer.transform_to_pixels(generated, scene);
+        const auto *pixel_shapes_data = pixel_shapes.data();
+        benchmark::DoNotOptimize(pixel_shapes_data);
+    }
+    state.SetItemsProcessed(state.iterations() * generated.size());
+}
+BENCHMARK(BM_TransformToPixels)->Unit(benchmark::kMillisecond);
+
+static void BM_BuildPicture(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    Pipeline setup_pipeline;
+    const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
+    Renderer setup_renderer;
+    const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
+
+    for (auto _ : state)
+    {
+        Renderer renderer;
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        benchmark::DoNotOptimize(picture.get());
+    }
+    state.SetItemsProcessed(state.iterations() * pixel_shapes.size());
+}
+BENCHMARK(BM_BuildPicture)->Unit(benchmark::kMillisecond);
+
+// A fresh Pipeline + Renderer every iteration, running the full
+// generate -> filter -> filter -> transform -> picture chain once each -
+// the "just switched to a different Abstract" cold-start case, now
+// including the render stages.
+static void BM_Render(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    for (auto _ : state)
+    {
+        Pipeline pipeline;
+        Renderer renderer;
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        benchmark::DoNotOptimize(picture.get());
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_Render)->Unit(benchmark::kMillisecond);
+
+// Reused Pipeline + Renderer across iterations, mirroring the
+// BM_RunReused_* scenarios above but through the full render chain -
+// real numbers for the threading question (README's open design
+// question): is Skia picture generation actually a bottleneck on the
+// interactive path, or does it stay cheap because it's caching-aware too?
+
+static void BM_RenderReused_NoChange(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    Pipeline pipeline;
+    Renderer renderer;
+
+    for (auto _ : state)
+    {
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        benchmark::DoNotOptimize(picture.get());
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RenderReused_NoChange)->Unit(benchmark::kMillisecond);
+
+static void BM_RenderReused_PanOnly(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    Pipeline pipeline;
+    Renderer renderer;
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        benchmark::DoNotOptimize(picture.get());
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RenderReused_PanOnly)->Unit(benchmark::kMillisecond);
 
 BENCHMARK_MAIN();

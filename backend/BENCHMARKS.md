@@ -208,3 +208,42 @@ touched. This directly resolves the "avoiding the second full `Shape`
 copy" follow-up flagged as a bigger potential win in the "PipelineCache
 v2" entry above, without needing any profiling to confirm it - the
 benchmark speaks for itself.
+
+## 2026-08-03 — render module: dbu→pixel transform + SkPicture generation
+
+New `src/render/render.hpp`: `Renderer` adds two more `CachedStage`-backed
+stages on top of `Pipeline`'s output - `transform_to_pixels` (dbu→pixel,
+`pixel = (dbu - pan) * scale`, no Y-flip) and `build_picture` (Skia
+`SkPictureRecorder`/`SkCanvas` draw calls using each shape's
+`ViewLayerStyle`), both keyed the same way `Pipeline::filter_by_layer_visibility`'s
+output already is. Single-threaded - see the Threading comment below for
+why that's staying true for now, backed by these numbers rather than
+guessed.
+
+| Benchmark | Mean | Notes |
+|---|---|---|
+| `BM_TransformToPixels` (fresh instance, ~250K visible shapes) | 0.715 ms | isolated stage, uncached |
+| `BM_BuildPicture` (fresh instance, ~250K visible shapes) | 1.43 ms | isolated stage, uncached |
+| `BM_Run` (pipeline only, cold) | 59.5 ms | baseline from the entry above |
+| `BM_Render` (pipeline + render, cold) | 62.0 ms | +2.5ms over `BM_Run` |
+| `BM_RunReused_PanOnly` (pipeline only, warm) | 5.81 ms | baseline from the entry above |
+| `BM_RenderReused_PanOnly` (pipeline + render, warm) | 8.56 ms | +2.75ms over `BM_RunReused_PanOnly` |
+| `BM_RenderReused_NoChange` | ~0.000 ms | full cache hit across pipeline + render |
+
+Comment: rendering adds a small, bounded cost on top of the pipeline
+regardless of cold or warm path - roughly +2-2.75ms, consistent with the
+isolated stage costs (0.715+1.43≈2.15ms) plus some noise. `SkPicture`
+*recording* (building the draw-command list) is genuinely cheap at this
+scale, as expected - the expensive part of a real rendering pipeline is
+usually rasterizing a picture to actual pixels, which nothing here does
+yet (that's a Flutter-texture-facing concern, not this module's).
+
+**Threading decision, backed by these numbers**: the warm/interactive path
+(pan-only, the dominant real-usage case) is 8.56ms total with rendering
+included, at 1M synthetic shapes - comfortably under a 60fps/16.6ms frame
+budget with margin to spare. No benchmark here shows Skia picture
+generation as a bottleneck, so per this project's own rule (benchmark
+before optimizing/threading, not intuition) there's no case for adding a
+background thread yet. Single-threaded stays the right choice until a
+future benchmark - larger data, real font/text rendering, or actual pixel
+rasterization once that's added - shows otherwise.

@@ -103,6 +103,46 @@ add_library(pipeline INTERFACE)
 target_include_directories(pipeline INTERFACE src)
 target_link_libraries(pipeline INTERFACE database geometry scene view_style)
 
+# --- Skia (not vendored/built by this project - a pre-built checkout on
+# this machine). SKIA_DIR must contain out/MacStatic/{libskia.a,...} built
+# with is_component_build=false (static). Link set (include path, libskia.a,
+# Homebrew harfbuzz/icu4c, CoreText/CoreFoundation/CoreGraphics frameworks)
+# was determined empirically by linking a minimal SkPictureRecorder/
+# SkSurface program against this exact checkout - see BENCHMARKS.md/
+# CLAUDE.md for why no GPU (Ganesh/Metal) frameworks are needed: we only
+# use the raster (CPU) surface APIs, and static linking never pulls in the
+# unused GPU object files. Machine-specific - not portable/committed;
+# override -DSKIA_DIR=... to point at a different checkout.
+set(SKIA_DIR "/Users/john/Projects/synthosilicon/skia/skia" CACHE PATH
+    "Path to a built Skia checkout (must contain out/MacStatic/libskia.a)")
+add_library(skia INTERFACE)
+target_include_directories(skia INTERFACE ${SKIA_DIR})
+target_link_directories(skia INTERFACE /opt/homebrew/lib /opt/homebrew/opt/icu4c/lib)
+target_link_libraries(skia INTERFACE
+    ${SKIA_DIR}/out/MacStatic/libskia.a
+    harfbuzz
+    icuuc
+    icudata
+    jpeg
+    png
+    z
+    webp
+    webpdemux
+)
+if(APPLE)
+    target_link_libraries(skia INTERFACE
+        "-framework CoreText"
+        "-framework CoreFoundation"
+        "-framework CoreGraphics"
+        "-framework CoreServices"
+    )
+endif()
+
+# --- render: header-only dbu->pixel transform + Skia SkPicture generation ---
+add_library(render INTERFACE)
+target_include_directories(render INTERFACE src)
+target_link_libraries(render INTERFACE database geometry scene view_style pipeline skia)
+
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp)
 add_dependencies(io lef_lib)
@@ -124,10 +164,11 @@ add_executable(backend_tests
     src/view_style/tests/view_style_test.cpp
     src/scene/tests/scene_test.cpp
     src/pipeline/tests/pipeline_test.cpp
+    src/render/tests/render_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline io GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"
@@ -137,7 +178,7 @@ gtest_discover_tests(backend_tests)
 
 # --- benchmarks ---
 add_executable(pipeline_benchmarks src/pipeline/benchmarks/pipeline_benchmark.cpp)
-target_link_libraries(pipeline_benchmarks PRIVATE database geometry scene pipeline io benchmark::benchmark)
+target_link_libraries(pipeline_benchmarks PRIVATE database geometry scene pipeline render io benchmark::benchmark)
 target_compile_definitions(pipeline_benchmarks PRIVATE
     BENCHMARK_DATA_DIR="${CMAKE_BINARY_DIR}/benchmark_data"
 )
