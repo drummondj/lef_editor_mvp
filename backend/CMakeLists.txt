@@ -138,10 +138,13 @@ if(APPLE)
     )
 endif()
 
-# --- render: header-only dbu->pixel transform + Skia SkPicture generation ---
-add_library(render INTERFACE)
-target_include_directories(render INTERFACE src)
-target_link_libraries(render INTERFACE database geometry scene view_style pipeline skia)
+# --- render: dbu->pixel transform + Skia SkPicture generation. Compiled
+# (not header-only) so render.cpp alone pulls in the CoreText font manager's
+# ApplicationServices.h - see Renderer::default_typeface()'s comment for why
+# that can't be a header-only detail. ---
+add_library(render STATIC src/render/render.cpp)
+target_include_directories(render PUBLIC src)
+target_link_libraries(render PUBLIC database geometry scene view_style pipeline skia)
 
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp)

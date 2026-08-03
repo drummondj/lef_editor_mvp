@@ -247,3 +247,111 @@ before optimizing/threading, not intuition) there's no case for adding a
 background thread yet. Single-threaded stays the right choice until a
 future benchmark - larger data, real font/text rendering, or actual pixel
 rasterization once that's added - shows otherwise.
+
+## 2026-08-03 — Pipeline groups by ViewLayerId (bottom-up draw order) + Terminal text labels
+
+Two features landed together since they touch the same methods:
+
+- `Pipeline::filter_by_layer_visibility` (and `run()`) now return
+  `std::map<ViewLayerId, std::vector<RenderedShape>>` instead of a flat
+  vector - grouped by ViewLayer, checking visibility once per distinct
+  ViewLayerId instead of once per shape, with map iteration order giving
+  correct bottom-up draw order for free (`ViewLayerId`'s `{index,
+  generation}` ordering, via `Id<Tag>`'s new defaulted `operator<=>` in
+  `cmg`'s `ids_hpp_j2.py` template, exactly matches LEF-declared physical
+  layer stacking order - confirmed by tracing `create_layer`'s append-only
+  vector through `ViewLayerSet::build_for_technology`, not assumed).
+  `Renderer` follows suit: `PixelShape` drops its now-redundant
+  `view_layer` field (the map key carries it), and `build_picture`
+  constructs each ViewLayer's fill/stroke `SkPaint` once per group instead
+  of once per shape.
+- `Pipeline::generate_shapes` now attaches one text label per Terminal
+  (its name, placed via `Geometry::get_label_location` on the union of all
+  its Ports' geometry), riding along on a real geometric Shape rather than
+  a standalone text-only one so it survives `filter_by_viewport_and_size`'s
+  bbox check. `Renderer` draws it via Skia's `SkFont`/`drawString`, using a
+  CoreText-backed default typeface on macOS (see the Skia setup note in
+  `CLAUDE.md` - Linux needs an equivalent added later).
+
+| Benchmark | Before | After | Cause |
+|---|---|---|---|
+| `BM_GenerateShapes` (1M shapes) | 52.6 ms | 101 ms | +48.4ms, ~36ms confirmed via isolated micro-benchmark to be `Geometry::get_label_location`'s cost across 100K Terminals (~356ns/call) |
+| `BM_FilterByLayerVisibility` (~250K shapes) | 0.82 ms | 2.28 ms | std::map grouping (tree insert per shape) vs. a flat vector scan |
+| `BM_Run` (cold) | 58.9 ms | 108 ms | dominated by `generate_shapes`'s regression above |
+| `BM_RunReused_PanOnly` (warm) | 5.91 ms | 8.47 ms | dominated by `filter_by_layer_visibility`'s regression above |
+| `BM_RunReused_VisibilityOnly` | 0.587 ms | 2.78 ms | ~entirely `filter_by_layer_visibility`'s regression (the only stage that reruns) |
+| `BM_BuildPicture` (~250K shapes) | 1.43 ms | 2.30 ms | now actually draws each Terminal's label text |
+| `BM_RenderReused_PanOnly` (warm, full chain) | 8.56 ms | 12.3 ms | sum of the `filter_by_layer_visibility` and `build_picture` regressions above |
+
+Comment: every regression here is understood and attributed to a specific,
+real, confirmed cause - not a mystery or an accidental inefficiency left
+unexamined. `Geometry::get_label_location`'s cost was verified directly
+with a standalone 100K-call micro-benchmark (355.9 ns/call, 35.6ms total)
+before accepting it as inherent to the label feature rather than a bug.
+One real inefficiency *was* caught and fixed along the way: the first
+implementation collected each Terminal's Port Shapes into a fresh
+`std::vector<Shape>` per Terminal (a needless extra heap allocation and
+partial copy per Terminal that didn't exist before this feature) before
+computing the label and moving them into the final result; restructured to
+two passes over the same Port/Shape iterators - one accumulating just the
+lightweight geometry primitives (not whole Shapes) into a combined Shape
+for label placement, one copying Port Shapes directly into the final
+vector exactly as before this feature existed - which recovered about 5ms
+of that regression (106ms → 101ms) without touching the inherent
+label-placement cost.
+
+Despite the absolute increase, the warm/interactive path is still well
+within budget: 12.3ms per pan/zoom frame at 1M shapes remains comfortably
+under a 60fps/16.6ms budget, and the [pipeline latency budget]
+memory - cold-start (Abstract switch) can afford up to ~1-2s behind a
+loading spinner - means the ~2x `generate_shapes`/cold-start regression is
+not a problem worth chasing further right now. Not pursued as a follow-up:
+optimizing `get_label_location` for the common single-rect case (skip the
+boost::geometry union/point-in-polygon machinery when there's exactly one
+rect and no other geometry) would recover most of the remaining cost, but
+nothing currently requires it.
+
+Follow-up cleanup: the two-pass structure above (build `combined`, then
+re-iterate the same Ports/Shapes to push them) was simplified to one pass -
+push each Shape immediately, remembering the first one's index, attach the
+label to it after the loop once `combined`'s label point is known. Using
+`combined` itself as the pushed geometry (instead of each Shape
+individually) was considered and rejected: a Terminal's Shapes can
+legitimately span different physical layers, so collapsing them would
+break per-layer visibility toggling and coarsen viewport/sub-pixel culling
+to one shared bbox instead of each piece's own. Re-benchmarked to confirm:
+102ms/110ms (`BM_GenerateShapes`/`BM_Run`), statistically unchanged from
+101ms/108ms - the eliminated re-traversal was never the dominant cost, only
+the allocation fix above was. A code-clarity improvement, not a
+performance one, and confirmed as such rather than assumed.
+
+## 2026-08-03 — One label per distinct layer, not one per Terminal
+
+A Terminal's Shapes can legitimately span multiple physical layers (e.g.
+M1 and M2), and each needs its own label tied to its own `ViewLayerId` -
+one label for the whole Terminal would either pick an arbitrary layer or
+require the rejected single-`combined`-shape design from the entry above.
+`generate_shapes` now buckets a Terminal's Shapes by `layer_name` (a local
+`std::unordered_map<std::string, LabelAccumulator>`, one accumulator -
+combined geometry + first-shape-index - per distinct layer) instead of one
+`Shape combined` per Terminal; single-layer Terminals (the common case)
+still get exactly one label, unchanged.
+
+| Benchmark | Before | After | Cause |
+|---|---|---|---|
+| `BM_GenerateShapes` (1M shapes) | 102 ms | 106 ms | one `unordered_map` construction per Terminal, even single-layer ones |
+| `BM_Run` (cold) | 110 ms | 112-113 ms | dominated by `generate_shapes`'s regression above |
+
+Comment: confirmed real and consistent across two separate runs (cv <1.2%
+both times), not noise - even though the *common* case (one layer per
+Terminal) doesn't functionally need the map, it still pays for the hash
+table's bucket-array allocation on the first insert. A fast path could
+special-case "only one distinct layer_name seen so far" and skip the map
+entirely until a second layer is actually encountered, avoiding that
+allocation for the common case. Not pursued, for the same reason
+`get_label_location`'s own ~36ms cost isn't being chased in the entry
+above: this ~4ms/~4% is small relative to that already-accepted dominant
+cost, and the warm/interactive path (what real usage actually hits) is
+unaffected either way - `generate_shapes` is cached per-`AbstractId` and
+doesn't rerun on pan/zoom/visibility changes. Revisit only if a future
+benchmark shows this path actually matters more than it does today.

@@ -87,6 +87,56 @@ TEST_F(PipelineFixture, GenerateShapesLeavesViewLayerInvalidForUnresolvableLayer
     EXPECT_FALSE(shapes.front().view_layer.valid());
 }
 
+TEST_F(PipelineFixture, GenerateShapesAddsTerminalLabelAtComputedLocation)
+{
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    ASSERT_EQ(shapes.front().shape.texts.size(), 1u);
+    EXPECT_EQ(shapes.front().shape.texts.front().label, "A1");
+    // get_label_location on a single {0,0}-{10,10} rect returns its centroid.
+    EXPECT_EQ(shapes.front().shape.texts.front().location.x, 5);
+    EXPECT_EQ(shapes.front().shape.texts.front().location.y, 5);
+}
+
+TEST_F(PipelineFixture, GenerateShapesLabelsOnlyTheFirstPortsFirstShape)
+{
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "B2"});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}}}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 2u);
+    ASSERT_EQ(shapes[0].shape.texts.size(), 1u);
+    EXPECT_EQ(shapes[0].shape.texts.front().label, "B2");
+    EXPECT_TRUE(shapes[1].shape.texts.empty());
+}
+
+TEST_F(PipelineFixture, GenerateShapesAddsOneLabelPerDistinctLayer)
+{
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "C3"});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M2", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}}}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 2u);
+
+    // M1 shape (index 0) gets its own label at its own centroid.
+    ASSERT_EQ(shapes[0].shape.texts.size(), 1u);
+    EXPECT_EQ(shapes[0].shape.texts.front().label, "C3");
+    EXPECT_EQ(shapes[0].shape.texts.front().location.x, 5);
+    EXPECT_EQ(shapes[0].shape.texts.front().location.y, 5);
+
+    // M2 shape (index 1) gets its own separate label at its own centroid -
+    // not the M1 one, and not left without a label.
+    ASSERT_EQ(shapes[1].shape.texts.size(), 1u);
+    EXPECT_EQ(shapes[1].shape.texts.front().label, "C3");
+    EXPECT_EQ(shapes[1].shape.texts.front().location.x, 25);
+    EXPECT_EQ(shapes[1].shape.texts.front().location.y, 5);
+}
+
 TEST_F(PipelineFixture, GenerateShapesReusesCacheForSameAbstractId)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
@@ -190,8 +240,9 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityDropsHiddenViewLayerKeepsVisible)
     };
 
     const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
-    ASSERT_EQ(result.size(), 1u);
-    EXPECT_EQ(result.front().shape.layer_name, "M1");
+    ASSERT_EQ(result.size(), 1u); // only the M1 group survives - the whole M2 group is dropped
+    ASSERT_TRUE(result.contains(m1_obstruction));
+    EXPECT_EQ(result.at(m1_obstruction).front().shape.layer_name, "M1");
 }
 
 TEST_F(PipelineFixture, FilterByLayerVisibilityKeepsShapesWithInvalidViewLayer)
@@ -202,7 +253,38 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityKeepsShapesWithInvalidViewLayer)
     };
 
     const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
-    EXPECT_EQ(result.size(), 1u);
+    ASSERT_EQ(result.size(), 1u);
+    ASSERT_TRUE(result.contains(ViewLayerId{}));
+    EXPECT_EQ(result.at(ViewLayerId{}).size(), 1u);
+}
+
+TEST_F(PipelineFixture, FilterByLayerVisibilityGroupsInBottomUpLayerOrder)
+{
+    // M1 was declared before M2 in SetUp(), so its ViewLayers got lower
+    // pool indices - map iteration order should put M1 first, M2 second,
+    // BOUNDARY last (see the class comment on why that's bottom-up order).
+    ViewLayerId m1_terminal = view_layers.find(m1, ViewLayerPurpose::TERMINAL);
+    ViewLayerId m2_terminal = view_layers.find(m2, ViewLayerPurpose::TERMINAL);
+    ViewLayerId boundary = view_layers.boundary_view_layer();
+
+    Scene scene;
+    std::vector<RenderedShape> shapes = {
+        RenderedShape{.shape = Shape{.layer_name = "BOUNDARY"}, .view_layer = boundary},
+        RenderedShape{.shape = Shape{.layer_name = "M2"}, .view_layer = m2_terminal},
+        RenderedShape{.shape = Shape{.layer_name = "M1"}, .view_layer = m1_terminal},
+    };
+
+    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
+    ASSERT_EQ(result.size(), 3u);
+
+    std::vector<ViewLayerId> order;
+    for (const auto &[view_layer, group] : result)
+        order.push_back(view_layer);
+
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(order[0], m1_terminal);
+    EXPECT_EQ(order[1], m2_terminal);
+    EXPECT_EQ(order[2], boundary);
 }
 
 TEST_F(PipelineFixture, FilterByLayerVisibilityReusesCacheUntilVisibilityVersionChanges)
@@ -238,9 +320,13 @@ TEST_F(PipelineFixture, RunChainsAllThreeStagesForCurrentAbstract)
     scene.set_layer_visible(view_layers.find(m2, ViewLayerPurpose::OBSTRUCTION), false);
 
     const auto &result = pipeline.run(root, scene, view_layers);
-    ASSERT_EQ(result.size(), 1u);
-    EXPECT_EQ(result.front().shape.layer_name, "M1");
-    EXPECT_EQ(result.front().shape.rects.front().ur.x, 10);
+    ASSERT_EQ(result.size(), 1u); // only the M1/TERMINAL group survives
+    const auto m1_terminal = view_layers.find(m1, ViewLayerPurpose::TERMINAL);
+    ASSERT_TRUE(result.contains(m1_terminal));
+    const auto &group = result.at(m1_terminal);
+    ASSERT_EQ(group.size(), 1u);
+    EXPECT_EQ(group.front().shape.layer_name, "M1");
+    EXPECT_EQ(group.front().shape.rects.front().ur.x, 10);
 }
 
 TEST_F(PipelineFixture, RunOnUnchangedSceneHitsCacheForEveryStage)

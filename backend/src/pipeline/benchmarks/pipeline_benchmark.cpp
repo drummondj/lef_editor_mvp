@@ -218,8 +218,8 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
     {
         Pipeline pipeline;
         const auto &filtered = pipeline.filter_by_layer_visibility(viewport_filtered, scene);
-        const auto *filtered_data = filtered.data();
-        benchmark::DoNotOptimize(filtered_data);
+        const auto *filtered_ptr = &filtered;
+        benchmark::DoNotOptimize(filtered_ptr);
     }
     state.SetItemsProcessed(state.iterations() * viewport_filtered.size());
 }
@@ -237,8 +237,8 @@ static void BM_Run(benchmark::State &state)
     {
         Pipeline pipeline;
         const auto &result = pipeline.run(data.root, scene, data.view_layers);
-        const auto *result_data = result.data();
-        benchmark::DoNotOptimize(result_data);
+        const auto *result_ptr = &result;
+        benchmark::DoNotOptimize(result_ptr);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -260,8 +260,8 @@ static void BM_RunReused_NoChange(benchmark::State &state)
     for (auto _ : state)
     {
         const auto &result = pipeline.run(data.root, scene, data.view_layers);
-        const auto *result_data = result.data();
-        benchmark::DoNotOptimize(result_data);
+        const auto *result_ptr = &result;
+        benchmark::DoNotOptimize(result_ptr);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -282,8 +282,8 @@ static void BM_RunReused_PanOnly(benchmark::State &state)
     {
         scene.set_pan(Point{pan_x++, 0});
         const auto &result = pipeline.run(data.root, scene, data.view_layers);
-        const auto *result_data = result.data();
-        benchmark::DoNotOptimize(result_data);
+        const auto *result_ptr = &result;
+        benchmark::DoNotOptimize(result_ptr);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -306,8 +306,8 @@ static void BM_RunReused_VisibilityOnly(benchmark::State &state)
         scene.set_layer_visible(m1_obstruction, visible);
         visible = !visible;
         const auto &result = pipeline.run(data.root, scene, data.view_layers);
-        const auto *result_data = result.data();
-        benchmark::DoNotOptimize(result_data);
+        const auto *result_ptr = &result;
+        benchmark::DoNotOptimize(result_ptr);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -329,8 +329,8 @@ static void BM_TransformToPixels(benchmark::State &state)
     {
         Renderer renderer;
         const auto &pixel_shapes = renderer.transform_to_pixels(generated, scene);
-        const auto *pixel_shapes_data = pixel_shapes.data();
-        benchmark::DoNotOptimize(pixel_shapes_data);
+        const auto *pixel_shapes_ptr = &pixel_shapes;
+        benchmark::DoNotOptimize(pixel_shapes_ptr);
     }
     state.SetItemsProcessed(state.iterations() * generated.size());
 }

@@ -70,48 +70,89 @@ the full brief and the live plan checklist.
   distinct `resolve_view_layers`) sharing the same `AbstractId` cache key,
   which just meant two full copies of the shape data where one now
   suffices; merged once the caching redesign made that redundancy visible
-  (~39% faster cold start, 96.7ms → 58.9ms at 1M shapes — see
-  `BENCHMARKS.md`). Keyed on `AbstractId` alone. The size filter culls a
-  shape only if **both** bbox dimensions are under 1px at the `Scene`'s
-  scale, so a long thin wire survives even though its width alone is
-  sub-pixel; keyed on `AbstractId` + `Scene::viewport_version()`. The layer
-  filter drops anything on a hidden `ViewLayerId`, keeping shapes whose
-  `ViewLayerId` didn't resolve (e.g. an undeclared/typo'd layer name)
-  rather than dropping them; keyed on `AbstractId` + `viewport_version()` +
-  `Scene::visibility_version()`. Fully covered by `pipeline_test.cpp`.
+  (see `BENCHMARKS.md`). Keyed on `AbstractId` alone. Each Terminal also
+  gets one text label (its name, placed via `Geometry::get_label_location`
+  on the union of all its Ports' geometry) appended to a real geometric
+  Shape's `.texts` rather than emitted as its own shape, so it survives the
+  size filter below (which drops shapes with no bbox, and `Geometry::bbox`
+  doesn't account for `Shape::texts`) for free instead of needing special
+  handling. The size filter culls a shape only if **both** bbox dimensions
+  are under 1px at the `Scene`'s scale, so a long thin wire survives even
+  though its width alone is sub-pixel; keyed on `AbstractId` +
+  `Scene::viewport_version()`.
+  `filter_by_layer_visibility` groups surviving shapes into
+  `std::map<ViewLayerId, std::vector<RenderedShape>>` (not a flat vector),
+  checking visibility once per distinct `ViewLayerId` present instead of
+  once per shape, and dropping whole groups the `Scene` has hidden — a
+  group keyed on an invalid `ViewLayerId` (layer name didn't resolve) is
+  always kept, there's no toggle to check it against. `std::map` (not
+  `unordered_map`) is deliberate: `ViewLayerId`'s `{index, generation}`
+  ordering — via `Id<Tag>`'s defaulted `operator<=>` (added to `cmg`'s
+  `ids_hpp_j2.py` template; `Id<Tag>` previously only had `operator==`) —
+  exactly matches LEF-declared physical layer stacking order (confirmed by
+  tracing `Root::create_layer`'s append-only vector through
+  `ViewLayerSet::build_for_technology`, not assumed), with `BOUNDARY`
+  always last. So iterating the map in key order draws bottom-up with the
+  boundary on top, no separate sort needed. Keyed on `AbstractId` +
+  `viewport_version()` + `Scene::visibility_version()`. Fully covered by
+  `pipeline_test.cpp`.
   Current clean Release numbers (`-DENABLE_COVERAGE=OFF` — see the
-  coverage gotcha below): fresh-instance `run()` (cold) 58.9ms;
-  reused-instance pan-only 5.91ms, visibility-only 0.587ms, no-change
-  ~0ms. See `BENCHMARKS.md` for the full measurement/investigation,
-  including two earlier designs — a separate `PipelineCache` class (merged
-  into `Pipeline` itself: cascading invalidation via manually-set boolean
-  flags scattered across private methods was hard to follow and hard to
-  extend, replaced by each stage owning its own `CachedStage` and chaining
+  coverage gotcha below): fresh-instance `run()` (cold) 112ms;
+  reused-instance pan-only 8.47ms, visibility-only 2.78ms, no-change ~0ms.
+  See `BENCHMARKS.md` for the full measurement/investigation, including
+  two earlier designs — a separate `PipelineCache` class (merged into
+  `Pipeline` itself: cascading invalidation via manually-set boolean flags
+  scattered across private methods was hard to follow and hard to extend,
+  replaced by each stage owning its own `CachedStage` and chaining
   internally) and a separate `resolve_view_layers` stage (merged into
-  `generate_shapes` once the caching redesign made it redundant, as above).
-- `src/render/` — `Renderer`, two more stages on top of `Pipeline`'s output,
-  same `CachedStage`/chaining pattern: `transform_to_pixels` (dbu→pixel via
-  `pixel = (dbu - pan) * scale` — no Y-axis flip; whether one belongs here
-  or at a later screen/texture-blit step is unresolved, not decided by this
-  transform) then `build_picture` (Skia `SkPictureRecorder`/`SkCanvas` draw
-  calls, each shape styled via its `ViewLayerId`'s `ViewLayerStyle` from
-  `view_layers`). Both keyed on `AbstractId` + `viewport_version()` +
-  `visibility_version()`, matching `filter_by_layer_visibility`'s key —
-  covers everything either stage depends on. Takes a `Pipeline&` from the
-  caller rather than owning one, matching how `Pipeline`'s own stages take
-  the previous stage's output explicitly. `PixelShape` (new: `PixelPoint`/
-  `PixelRect`/`PixelPolygon`/`PixelPath`, mirroring `Shape`'s structure
-  with `double` coordinates instead of dbu's `int64_t`) is the pixel-space
-  counterpart of `RenderedShape`; `Shape::texts` isn't transformed yet —
-  same scope boundary as `Pipeline`'s viewport filter. Single-threaded;
-  `BENCHMARKS.md` shows rendering adds only ~2-2.75ms on top of the
-  pipeline (cold or warm) at 1M shapes, comfortably under a 60fps budget,
-  so there's no benchmark-backed case for a background thread yet (see
-  README's Threading open design question — revisit if a future benchmark,
-  e.g. with real text/rasterization, shows otherwise). Fully covered by
-  `render_test.cpp`, including real pixel-color assertions (rasterize the
-  `SkPicture` into an `SkSurface` and read back actual pixels via
-  `SkBitmap`), not just "didn't crash."
+  `generate_shapes` once the caching redesign made it redundant) — and the
+  confirmed, understood cost of `ViewLayerId` grouping and Terminal labels
+  (dominated by `Geometry::get_label_location`, ~356ns/call, ~36ms across
+  100K Terminals at this benchmark's scale — verified with an isolated
+  micro-benchmark, not assumed).
+- `src/render/` — `Renderer`, two more stages on top of `Pipeline`'s
+  grouped output, same `CachedStage`/chaining pattern:
+  `transform_to_pixels` (dbu→pixel via `pixel = (dbu - pan) * scale` — no
+  Y-axis flip; whether one belongs here or at a later screen/texture-blit
+  step is unresolved, not decided by this transform) then `build_picture`
+  (Skia `SkPictureRecorder`/`SkCanvas` draw calls). Both keyed on
+  `AbstractId` + `viewport_version()` + `visibility_version()`, matching
+  `filter_by_layer_visibility`'s key. Takes a `Pipeline&` from the caller
+  rather than owning one, matching how `Pipeline`'s own stages take the
+  previous stage's output explicitly. `transform_to_pixels` preserves the
+  `ViewLayerId` grouping (`std::map<ViewLayerId, std::vector<PixelShape>>`)
+  so `build_picture` can look up each group's `ViewLayerStyle` and
+  construct its fill/stroke `SkPaint` once per group instead of once per
+  shape, and draws in map order (bottom-up, per `filter_by_layer_visibility`
+  above) with no separate sort; `PixelShape` (`PixelPoint`/`PixelRect`/
+  `PixelPolygon`/`PixelPath`/`PixelText`, mirroring `Shape`'s structure
+  with `double` coordinates instead of dbu's `int64_t`) has no
+  `ViewLayerId` field of its own — the map key already carries it.
+  Terminal labels draw via `SkFont`/`drawString`, using a lazily-built
+  default typeface from a **CoreText-backed font manager on macOS** — a
+  Linux build needs an equivalent (e.g. fontconfig/FreeType-backed
+  `SkFontMgr`) added when that target exists, not done yet. That typeface
+  lookup (`Renderer::default_typeface()`) is defined in `render.cpp`, not
+  inline in `render.hpp`: `SkFontMgr_mac_ct.h` pulls in
+  `ApplicationServices.h`, which defines legacy Carbon `Rect`/`Point`/
+  `Polygon` typedefs at global scope that collide with `le::Rect`/
+  `le::Point`/`le::Polygon` wherever a file does `using namespace le`
+  (every test/benchmark file here does) — isolating it to its own
+  translation unit keeps that collision from leaking into `render.hpp`'s
+  consumers, the same reason `io` is a compiled library rather than
+  header-only around its own vendored C headers. `render` is therefore
+  `add_library(render STATIC ...)` in `CMakeLists.txt`, not `INTERFACE`
+  like the other pipeline-adjacent modules.
+  Single-threaded; `BENCHMARKS.md` shows rendering adds a small, bounded
+  cost on top of the pipeline (cold or warm) at 1M shapes, and the warm
+  path stays comfortably under a 60fps budget, so there's no benchmark-backed
+  case for a background thread yet (see README's Threading open design
+  question — revisit if a future benchmark, e.g. with actual pixel
+  rasterization, shows otherwise). Fully covered by `render_test.cpp`,
+  including real pixel-color assertions (rasterize the `SkPicture` into an
+  `SkSurface` and read back actual pixels via `SkBitmap`), not just
+  "didn't crash" — including a text-rendering test that scans for the
+  label's actual opaque ink, not just that `drawString` was called.
   Depends on a **machine-specific Skia checkout, not committed to this
   repo** — see the Skia setup note under Build below.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
@@ -141,7 +182,12 @@ Generated code follows the **INDEXED_POOLS** export style from
 (`SMART_POINTERS`). Every `Klass` in `schema.py` becomes:
 
 - `XxxData` — a plain data struct.
-- `XxxId` — a `{index, generation}` handle (see `generated/ids.hpp`), not a pointer.
+- `XxxId` — a `{index, generation}` handle (see `generated/ids.hpp`), not a
+  pointer. Fully ordered via a defaulted `operator<=>` (lexicographic on
+  `index` then `generation`), so any `XxxId` can be a `std::map` key
+  without a custom comparator — added to cmg's `ids_hpp_j2.py` template
+  (`cmg` is a separate project/repo — see Open gaps below) when
+  `ViewLayerId` needed one; `Id<Tag>` previously only had `operator==`.
 - Storage in a `Pool<XxxData, XxxId>` (`generated/pool.hpp`) — a generational
   slot array, so erased objects can't alias a reused slot.
 - `Root` (`generated/root.hpp`) owns every pool plus an `index_` for

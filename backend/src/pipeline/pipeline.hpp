@@ -4,6 +4,9 @@
 #include "../scene/scene.hpp"
 #include "../view_style/view_style.hpp"
 #include <cstdint>
+#include <map>
+#include <optional>
+#include <unordered_map>
 #include <utility>
 
 namespace le
@@ -79,7 +82,14 @@ namespace le
     /// a design where viewport-filtering ran *between* generate and
     /// resolve, culling to ~25% of shapes before the lookup; that's not
     /// true here, so it doesn't apply to this merge (confirmed by
-    /// benchmark, not assumed - see BENCHMARKS.md).
+    /// benchmark, not assumed - see BENCHMARKS.md). It also attaches one
+    /// text label per Terminal (see its own doc comment for placement/
+    /// survival-through-filtering details).
+    ///
+    /// filter_by_layer_visibility's output is grouped by ViewLayerId (a
+    /// std::map, not a flat vector) rather than PipelineCache-era's
+    /// flat-then-filter - see its own doc comment for why std::map's
+    /// ordering gives correct bottom-up draw order for free.
     class Pipeline
     {
     public:
@@ -93,6 +103,25 @@ namespace le
         /// against yet. An unknown AbstractId (nothing created yet, or a
         /// stale/erased one) yields an empty result rather than an error -
         /// Root's own lookups already degrade gracefully for that.
+        ///
+        /// Each Terminal gets one text label *per distinct layer_name* it
+        /// has geometry on - its name, placed via Geometry::get_label_location
+        /// on the union of that layer's geometry across all the Terminal's
+        /// Ports (not per-Port; several Ports can share a layer, and the
+        /// label represents all of a Terminal's geometry on that layer). A
+        /// single-layer Terminal (the common case) gets exactly one label;
+        /// a Terminal with shapes on e.g. both M1 and M2 gets two, each
+        /// correctly tied to its own layer's ViewLayerId so it only shows
+        /// alongside that layer, not the Terminal as a whole. Each label is
+        /// appended to the .texts of its layer's *first* Port Shape rather
+        /// than emitted as its own text-only Shape: filter_by_viewport_and_size
+        /// drops shapes with no bbox, and Geometry::bbox doesn't account for
+        /// Shape::texts, so a standalone label would be silently culled.
+        /// Riding along on a real geometric shape means it inherits that
+        /// shape's bbox (and ViewLayerId) for free. Known gap: if that
+        /// specific first shape happens to have no geometry of its own
+        /// (unusual but possible), its label is dropped with it - not
+        /// handled specially.
         const std::vector<RenderedShape> &generate_shapes(const Root &root, AbstractId abstract_id, const ViewLayerSet &view_layers)
         {
             return generated_.get(abstract_id, [&]
@@ -109,11 +138,58 @@ namespace le
 
                 for (auto terminal_id : terminals)
                 {
+                    // Single pass over this Terminal's Ports/Shapes: push
+                    // each one into `shapes` immediately (preserving its own
+                    // layer_name/ViewLayerId - combining shapes across
+                    // layers would break per-layer visibility for
+                    // multi-layer Terminals, and coarsen viewport/sub-pixel
+                    // culling to a combined bbox instead of each piece's
+                    // own), while also accumulating just the geometry
+                    // primitives (not whole Shapes) into a per-layer_name
+                    // combined Shape for label placement only. Each layer's
+                    // label is attached after the loop, once its location
+                    // is known, to the first Shape pushed for *that layer*
+                    // (remembered by index - safe across any reallocation
+                    // `shapes.push_back` triggers, since vector indices
+                    // stay valid across growth, only references/iterators
+                    // taken before it don't).
+                    struct LabelAccumulator
+                    {
+                        Shape combined;
+                        size_t first_shape_index = 0;
+                    };
+                    std::unordered_map<std::string, LabelAccumulator> by_layer;
+
                     for (auto port_id : root.get_terminal_ports(terminal_id))
                     {
                         const auto *port = root.get_terminal_port(port_id);
                         for (const auto &shape : port->shapes)
+                        {
+                            auto [it, inserted] = by_layer.try_emplace(shape.layer_name);
+                            if (inserted)
+                                it->second.first_shape_index = shapes.size();
+
+                            Shape &combined = it->second.combined;
+                            combined.rects.insert(combined.rects.end(), shape.rects.begin(), shape.rects.end());
+                            combined.polygons.insert(combined.polygons.end(), shape.polygons.begin(), shape.polygons.end());
+                            combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
+
                             shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL)});
+                        }
+                    }
+
+                    if (by_layer.empty())
+                        continue;
+
+                    if (const TerminalData *terminal = root.get_terminal(terminal_id))
+                    {
+                        for (const auto &[layer_name, acc] : by_layer)
+                        {
+                            shapes[acc.first_shape_index].shape.texts.push_back(Text{
+                                .label = terminal->name,
+                                .location = Geometry::get_label_location(acc.combined),
+                            });
+                        }
                     }
                 }
 
@@ -186,32 +262,46 @@ namespace le
             });
         }
 
-        /// @brief Drop shapes on a ViewLayer the Scene has hidden. A shape
-        /// whose ViewLayerId is invalid (its layer_name didn't resolve to
-        /// a known Layer) is kept - there's no visibility toggle to check
-        /// it against.
-        const std::vector<RenderedShape> &filter_by_layer_visibility(const std::vector<RenderedShape> &shapes, const Scene &scene)
+        /// @brief Group surviving shapes by ViewLayerId, dropping any whose
+        /// ViewLayer the Scene has hidden - a shape whose ViewLayerId is
+        /// invalid (its layer_name didn't resolve to a known Layer) is
+        /// kept, grouped under that invalid id - there's no visibility
+        /// toggle to check it against. Visibility is checked once per
+        /// distinct ViewLayerId actually present, not once per shape.
+        ///
+        /// std::map (not unordered_map) is deliberate: ViewLayerId's
+        /// natural ordering (its {index, generation} via the defaulted
+        /// operator<=>) matches LEF-declared physical layer stacking order
+        /// exactly - ViewLayerSet::build_for_technology creates each
+        /// Layer's TERMINAL then OBSTRUCTION ViewLayer while iterating
+        /// Root::get_technology_layers in LEF declaration order (bottom-up:
+        /// M1, M2, ...), with BOUNDARY created last (highest index). So
+        /// iterating this map in key order - which callers drawing it are
+        /// expected to do - draws bottom-up with the boundary outline on
+        /// top, with no separate sort/ordering step needed.
+        const std::map<ViewLayerId, std::vector<RenderedShape>> &filter_by_layer_visibility(const std::vector<RenderedShape> &shapes, const Scene &scene)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return layer_filtered_.get(key, [&]
             {
-                std::vector<RenderedShape> result;
-                result.reserve(shapes.size());
-
+                std::map<ViewLayerId, std::vector<RenderedShape>> grouped;
                 for (const auto &rs : shapes)
-                {
-                    if (rs.view_layer.valid() && !scene.is_layer_visible(rs.view_layer))
-                        continue;
+                    grouped[rs.view_layer].push_back(rs);
 
-                    result.push_back(rs);
+                for (auto it = grouped.begin(); it != grouped.end();)
+                {
+                    if (it->first.valid() && !scene.is_layer_visible(it->first))
+                        it = grouped.erase(it);
+                    else
+                        ++it;
                 }
 
-                return result;
+                return grouped;
             });
         }
 
         /// @brief Run all three stages for the Scene's current_abstract().
-        const std::vector<RenderedShape> &run(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
+        const std::map<ViewLayerId, std::vector<RenderedShape>> &run(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
         {
             const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
             const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene);
@@ -227,6 +317,6 @@ namespace le
     private:
         CachedStage<AbstractId, std::vector<RenderedShape>> generated_;
         CachedStage<std::pair<AbstractId, uint64_t>, std::vector<RenderedShape>> viewport_filtered_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::vector<RenderedShape>> layer_filtered_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<RenderedShape>>> layer_filtered_;
     };
 }
