@@ -284,19 +284,30 @@ cmake --build build --target pipeline_benchmarks
 ```
 
 Build in `-DCMAKE_BUILD_TYPE=Release` for real numbers — Debug timings aren't
-meaningful. `src/pipeline/benchmarks/pipeline_benchmark.cpp` generates a
+meaningful. `src/pipeline/benchmarks/stress_data.hpp` generates a
 deliberately unrealistic 1M-shape single-macro LEF file (streamed straight to
 `${CMAKE_BINARY_DIR}/benchmark_data/`, ~78MB, never committed — see its
-comment for exactly how shapes/positions/sizes/layers are spread) and times
-each `Pipeline`/`Renderer` stage in isolation (a fresh instance per
-iteration, since stages cache internally), plus the full pipeline+render
-chain under several call patterns (fresh instance/cold start, and a reused
-instance with no change, pan-only, visibility-only). See the
-`src/pipeline/`/`src/render/` entries above for the current headline
-results, and `BENCHMARKS.md` for the full history. Add
-`--benchmark_repetitions=5 --benchmark_report_aggregates_only=true` for
-stable numbers when comparing two approaches, and `--benchmark_filter=<regex>`
-to run a subset.
+comment for exactly how shapes/positions/sizes/layers are spread) and builds
+the `Scene` used to view it; `pipeline_benchmark.cpp` times each
+`Pipeline`/`Renderer` stage in isolation (a fresh instance per iteration,
+since stages cache internally), plus the full pipeline+render chain under
+several call patterns (fresh instance/cold start, and a reused instance with
+no change, pan-only, visibility-only). See the `src/pipeline/`/`src/render/`
+entries above for the current headline results, and `BENCHMARKS.md` for the
+full history. Add `--benchmark_repetitions=5
+--benchmark_report_aggregates_only=true` for stable numbers when comparing
+two approaches, and `--benchmark_filter=<regex>` to run a subset.
+
+`src/pipeline/benchmarks/render_preview.cpp` (target `render_preview`) is a
+dev-only sibling tool, not a benchmark: runs `Pipeline`/`Renderer` against
+the exact same stress data/`Scene` (via the shared `stress_data.hpp`) and
+writes the resulting `SkPicture`, rasterized, as a PNG —
+`./build/render_preview [output.png]` — so what's actually being benchmarked
+can be visually sanity-checked (layer colors, bottom-up z-order, Terminal
+labels) without waiting for Flutter texture wiring. Not run by `ctest` or
+the `coverage` target. The dark-gray background it clears to before drawing
+is a preview-only convenience (`Renderer` itself draws no background), not
+part of the render pipeline.
 
 ## Conventions observed in existing code
 

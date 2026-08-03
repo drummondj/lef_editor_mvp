@@ -192,6 +192,17 @@ target_compile_definitions(pipeline_benchmarks PRIVATE
 # target also passes -fprofile-instr-generate, or the link fails.
 le_enable_coverage_instrumentation(pipeline_benchmarks)
 
+# --- render_preview: dev-only tool, rasterizes the same stress-benchmark
+# data/Scene to a PNG so it can be visually sanity-checked without waiting
+# for Flutter texture wiring. Not a benchmark or a test - not run by ctest
+# or the coverage target. ---
+add_executable(render_preview src/pipeline/benchmarks/render_preview.cpp)
+target_link_libraries(render_preview PRIVATE database geometry scene pipeline render io)
+target_compile_definitions(render_preview PRIVATE
+    BENCHMARK_DATA_DIR="${CMAKE_BINARY_DIR}/benchmark_data"
+)
+le_enable_coverage_instrumentation(render_preview)
+
 # --- coverage: `cmake --build build --target coverage` (requires -DENABLE_COVERAGE=ON at configure time) ---
 if(ENABLE_COVERAGE)
     set(COVERAGE_DIR ${CMAKE_BINARY_DIR}/coverage)
