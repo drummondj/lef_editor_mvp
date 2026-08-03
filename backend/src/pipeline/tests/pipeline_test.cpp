@@ -46,99 +46,58 @@ TEST_F(PipelineFixture, GenerateShapesCollectsPortAndObstructionShapes)
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {20, 20}, .ur = {30, 30}}}});
 
-    const auto &shapes = pipeline.generate_shapes(root, abstract_id);
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     EXPECT_EQ(shapes.size(), 2u);
 }
 
 TEST_F(PipelineFixture, GenerateShapesForUnknownAbstractIsEmpty)
 {
     AbstractId unknown{999, 0};
-    EXPECT_TRUE(pipeline.generate_shapes(root, unknown).empty());
+    EXPECT_TRUE(pipeline.generate_shapes(root, unknown, view_layers).empty());
 }
 
-TEST_F(PipelineFixture, GenerateShapesTagsPurposeByOrigin)
+TEST_F(PipelineFixture, GenerateShapesResolvesViewLayerByOrigin)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}});
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}});
 
-    const auto &shapes = pipeline.generate_shapes(root, abstract_id);
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 2u);
-    EXPECT_EQ(shapes[0].purpose, ViewLayerPurpose::TERMINAL);
-    EXPECT_EQ(shapes[1].purpose, ViewLayerPurpose::OBSTRUCTION);
+    EXPECT_EQ(shapes[0].view_layer, view_layers.find(m1, ViewLayerPurpose::TERMINAL));
+    EXPECT_EQ(shapes[1].view_layer, view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION));
+    EXPECT_NE(shapes[0].view_layer, shapes[1].view_layer);
 }
 
-TEST_F(PipelineFixture, GenerateShapesIncludesAbstractBoundaryTaggedAsBoundaryPurpose)
+TEST_F(PipelineFixture, GenerateShapesIncludesAbstractBoundaryResolvedToBoundaryViewLayer)
 {
     root.get_abstract(abstract_id)->boundary = {Polygon{.points = {{0, 0}, {0, 100}, {100, 100}, {100, 0}, {0, 0}}}};
 
-    const auto &shapes = pipeline.generate_shapes(root, abstract_id);
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
     EXPECT_EQ(shapes.front().shape.layer_name, "BOUNDARY");
-    EXPECT_EQ(shapes.front().purpose, ViewLayerPurpose::BOUNDARY);
+    EXPECT_EQ(shapes.front().view_layer, view_layers.boundary_view_layer());
+}
+
+TEST_F(PipelineFixture, GenerateShapesLeavesViewLayerInvalidForUnresolvableLayerName)
+{
+    add_obstruction_shape(Shape{.layer_name = "DOES_NOT_EXIST", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    EXPECT_FALSE(shapes.front().view_layer.valid());
 }
 
 TEST_F(PipelineFixture, GenerateShapesReusesCacheForSameAbstractId)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
 
-    pipeline.generate_shapes(root, abstract_id);
-    pipeline.generate_shapes(root, abstract_id);
+    pipeline.generate_shapes(root, abstract_id, view_layers);
+    pipeline.generate_shapes(root, abstract_id, view_layers);
     EXPECT_EQ(pipeline.generate_calls(), 1u);
 
     AbstractId other = root.create_abstract(AbstractData{});
-    pipeline.generate_shapes(root, other);
+    pipeline.generate_shapes(root, other, view_layers);
     EXPECT_EQ(pipeline.generate_calls(), 2u);
-}
-
-TEST_F(PipelineFixture, ResolveViewLayersTagsTerminalAndObstructionWithDistinctViewLayers)
-{
-    std::vector<TaggedShape> shapes = {
-        TaggedShape{.shape = Shape{.layer_name = "M1"}, .purpose = ViewLayerPurpose::TERMINAL},
-        TaggedShape{.shape = Shape{.layer_name = "M1"}, .purpose = ViewLayerPurpose::OBSTRUCTION},
-    };
-
-    const auto &rendered = pipeline.resolve_view_layers(shapes, abstract_id, root, view_layers);
-    ASSERT_EQ(rendered.size(), 2u);
-    EXPECT_EQ(rendered[0].view_layer, view_layers.find(m1, ViewLayerPurpose::TERMINAL));
-    EXPECT_EQ(rendered[1].view_layer, view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION));
-    EXPECT_NE(rendered[0].view_layer, rendered[1].view_layer);
-}
-
-TEST_F(PipelineFixture, ResolveViewLayersTagsUnresolvableLayerNameAsInvalid)
-{
-    std::vector<TaggedShape> shapes = {
-        TaggedShape{.shape = Shape{.layer_name = "DOES_NOT_EXIST"}, .purpose = ViewLayerPurpose::OBSTRUCTION},
-    };
-
-    const auto &rendered = pipeline.resolve_view_layers(shapes, abstract_id, root, view_layers);
-    ASSERT_EQ(rendered.size(), 1u);
-    EXPECT_FALSE(rendered.front().view_layer.valid());
-}
-
-TEST_F(PipelineFixture, ResolveViewLayersSkipsLookupForBoundaryPurpose)
-{
-    std::vector<TaggedShape> shapes = {
-        TaggedShape{.shape = Shape{.layer_name = "BOUNDARY"}, .purpose = ViewLayerPurpose::BOUNDARY},
-    };
-
-    const auto &rendered = pipeline.resolve_view_layers(shapes, abstract_id, root, view_layers);
-    ASSERT_EQ(rendered.size(), 1u);
-    EXPECT_EQ(rendered.front().view_layer, view_layers.boundary_view_layer());
-}
-
-TEST_F(PipelineFixture, ResolveViewLayersReusesCacheForSameAbstractId)
-{
-    std::vector<TaggedShape> shapes = {
-        TaggedShape{.shape = Shape{.layer_name = "M1"}, .purpose = ViewLayerPurpose::OBSTRUCTION},
-    };
-
-    pipeline.resolve_view_layers(shapes, abstract_id, root, view_layers);
-    pipeline.resolve_view_layers(shapes, abstract_id, root, view_layers);
-    EXPECT_EQ(pipeline.resolve_calls(), 1u);
-
-    AbstractId other{42, 0}; // any distinct key
-    pipeline.resolve_view_layers(shapes, other, root, view_layers);
-    EXPECT_EQ(pipeline.resolve_calls(), 2u);
 }
 
 TEST_F(PipelineFixture, FilterByViewportAndSizeKeepsShapesInsideViewport)
@@ -262,7 +221,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityReusesCacheUntilVisibilityVersion
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
 
-TEST_F(PipelineFixture, RunChainsAllFourStagesForCurrentAbstract)
+TEST_F(PipelineFixture, RunChainsAllThreeStagesForCurrentAbstract)
 {
     // Kept: on M1 (visible), inside the viewport, well above the sub-pixel threshold.
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
@@ -299,12 +258,11 @@ TEST_F(PipelineFixture, RunOnUnchangedSceneHitsCacheForEveryStage)
     pipeline.run(root, scene, view_layers);
 
     EXPECT_EQ(pipeline.generate_calls(), 1u);
-    EXPECT_EQ(pipeline.resolve_calls(), 1u);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 1u);
     EXPECT_EQ(pipeline.layer_filter_calls(), 1u);
 }
 
-TEST_F(PipelineFixture, RunOnViewportOnlyChangeRecomputesViewportAndLayerFilterButNotGenerateOrResolve)
+TEST_F(PipelineFixture, RunOnViewportOnlyChangeRecomputesViewportAndLayerFilterButNotGenerate)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
 
@@ -319,7 +277,6 @@ TEST_F(PipelineFixture, RunOnViewportOnlyChangeRecomputesViewportAndLayerFilterB
     pipeline.run(root, scene, view_layers);
 
     EXPECT_EQ(pipeline.generate_calls(), 1u);
-    EXPECT_EQ(pipeline.resolve_calls(), 1u);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
@@ -339,12 +296,11 @@ TEST_F(PipelineFixture, RunOnVisibilityOnlyChangeRecomputesOnlyTheLayerFilterSta
     pipeline.run(root, scene, view_layers);
 
     EXPECT_EQ(pipeline.generate_calls(), 1u);
-    EXPECT_EQ(pipeline.resolve_calls(), 1u);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 1u);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
 
-TEST_F(PipelineFixture, RunOnAbstractChangeRecomputesEveryStage)
+TEST_F(PipelineFixture, RunOnAbstractChangeRecomputesAllThreeStages)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
     AbstractId other_abstract_id = root.create_abstract(AbstractData{});
@@ -360,7 +316,6 @@ TEST_F(PipelineFixture, RunOnAbstractChangeRecomputesEveryStage)
     pipeline.run(root, scene, view_layers);
 
     EXPECT_EQ(pipeline.generate_calls(), 2u);
-    EXPECT_EQ(pipeline.resolve_calls(), 2u);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }

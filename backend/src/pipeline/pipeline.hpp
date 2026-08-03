@@ -8,15 +8,6 @@
 
 namespace le
 {
-    /// @brief A Shape tagged with which kind of object it came from - cheap
-    /// to attach at generation time (no lookup), unlike its ViewLayerId
-    /// (see RenderedShape), which needs a Layer-by-name lookup.
-    struct TaggedShape
-    {
-        Shape shape;
-        ViewLayerPurpose purpose;
-    };
-
     /// @brief A Shape resolved to the ViewLayer it belongs to.
     struct RenderedShape
     {
@@ -57,55 +48,64 @@ namespace le
         uint64_t call_count_ = 0;
     };
 
-    /// @brief Generates, resolves, and filters the shapes for a Scene's
-    /// currently displayed Abstract. Each stage owns its own CachedStage
-    /// (see above) and chains to the previous stage internally, so a
-    /// single Pipeline instance transparently reuses whatever hasn't
-    /// changed - construct one per Scene-equivalent lifetime and reuse it
-    /// across repeated calls (e.g. every interactive frame); a fresh
-    /// instance recomputes everything on its first call.
+    /// @brief Generates and filters the shapes for a Scene's currently
+    /// displayed Abstract. Each stage owns its own CachedStage (see above)
+    /// and chains to the previous stage internally, so a single Pipeline
+    /// instance transparently reuses whatever hasn't changed - construct
+    /// one per Scene-equivalent lifetime and reuse it across repeated
+    /// calls (e.g. every interactive frame); a fresh instance recomputes
+    /// everything on its first call.
     ///
     /// Cache key per stage (each includes every upstream trigger it
     /// transitively depends on, so invalidation cascades for free via key
     /// comparison - no manual "invalidate downstream" bookkeeping):
     ///
-    ///   generate_shapes            <- AbstractId
-    ///   resolve_view_layers        <- AbstractId
+    ///   generate_shapes             <- AbstractId
     ///   filter_by_viewport_and_size <- AbstractId, Scene::viewport_version()
     ///   filter_by_layer_visibility  <- AbstractId, viewport_version(), Scene::visibility_version()
     ///
-    /// generate_shapes and resolve_view_layers share the same key
-    /// (AbstractId alone) rather than resolve_view_layers being keyed on
-    /// the viewport filter's output: resolve_view_layers's real inputs
-    /// (root/view_layers) don't change on pan/zoom, so chaining it to the
-    /// viewport filter would mean re-resolving on every interactive frame
-    /// for no reason. The trade: resolve_view_layers runs on the full
-    /// generated set instead of the smaller post-viewport-filter survivor
-    /// set, so a fresh Pipeline's first call costs more than a design
-    /// ordered for a single one-shot call would (~+42ms at 1M shapes) -
-    /// accepted because the real usage pattern is read LEF once -> pick an
-    /// Abstract -> many pan/zoom/selection changes on the same instance,
-    /// and a one-time Abstract switch can show a loading spinner (up to
-    /// ~1-2s is fine). See BENCHMARKS.md for the full measurement,
-    /// including why resolving the full set costs ~40ms and not the ~7ms
-    /// a naive per-shape extrapolation would suggest.
+    /// generate_shapes collects every Shape from the Abstract's Terminals'
+    /// Ports, Obstructions, and boundary polygon, resolving each straight
+    /// to its ViewLayerId (a Layer-by-name + purpose lookup) in the same
+    /// pass - there's no separate "tagged but unresolved" intermediate
+    /// vector/type. This used to be two stages (generate, then a distinct
+    /// resolve_view_layers keyed the same way - see BENCHMARKS.md), merged
+    /// once the caching redesign made resolve_view_layers always run on
+    /// generate_shapes's full output rather than a filtered subset: two
+    /// stages sharing one cache key just meant two full copies of the
+    /// shape data (one per stage) where one now suffices. Keeping the
+    /// lookup *inside* generation like this was tried once before splitting
+    /// these stages apart and found ~46% slower - but that finding was for
+    /// a design where viewport-filtering ran *between* generate and
+    /// resolve, culling to ~25% of shapes before the lookup; that's not
+    /// true here, so it doesn't apply to this merge (confirmed by
+    /// benchmark, not assumed - see BENCHMARKS.md).
     class Pipeline
     {
     public:
         /// @brief Collect every Shape from the Abstract's Terminals' Ports,
-        /// its Obstructions, and its boundary polygons, unfiltered, in
-        /// dbu-space, tagged with which of those three it came from. An
-        /// unknown AbstractId (nothing created yet, or a stale/erased one)
-        /// yields an empty result rather than an error - Root's own
-        /// lookups already degrade gracefully for that.
-        const std::vector<TaggedShape> &generate_shapes(const Root &root, AbstractId abstract_id)
+        /// its Obstructions, and its boundary polygon, each resolved to its
+        /// ViewLayerId, in dbu-space. BOUNDARY shapes skip the lookup
+        /// entirely; they're always view_layers.boundary_view_layer(). A
+        /// shape whose layer_name doesn't resolve to a known Layer (e.g. an
+        /// undeclared/typo'd name) keeps an invalid ViewLayerId rather than
+        /// being dropped - there's no visibility toggle to check it
+        /// against yet. An unknown AbstractId (nothing created yet, or a
+        /// stale/erased one) yields an empty result rather than an error -
+        /// Root's own lookups already degrade gracefully for that.
+        const std::vector<RenderedShape> &generate_shapes(const Root &root, AbstractId abstract_id, const ViewLayerSet &view_layers)
         {
             return generated_.get(abstract_id, [&]
             {
-                std::vector<TaggedShape> shapes;
+                std::vector<RenderedShape> shapes;
                 const auto &terminals = root.get_abstract_terminals(abstract_id);
                 const auto &obstructions = root.get_abstract_obstructions(abstract_id);
                 shapes.reserve(terminals.size() + obstructions.size());
+
+                auto resolve = [&](const Shape &shape, ViewLayerPurpose purpose)
+                {
+                    return view_layers.find(root.get_layer_by_name(shape.layer_name), purpose);
+                };
 
                 for (auto terminal_id : terminals)
                 {
@@ -113,7 +113,7 @@ namespace le
                     {
                         const auto *port = root.get_terminal_port(port_id);
                         for (const auto &shape : port->shapes)
-                            shapes.push_back(TaggedShape{.shape = shape, .purpose = ViewLayerPurpose::TERMINAL});
+                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL)});
                     }
                 }
 
@@ -121,48 +121,18 @@ namespace le
                 {
                     const auto *obstruction = root.get_obstruction(obstruction_id);
                     for (const auto &shape : obstruction->shapes)
-                        shapes.push_back(TaggedShape{.shape = shape, .purpose = ViewLayerPurpose::OBSTRUCTION});
+                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION)});
                 }
 
                 if (const AbstractData *abstract = root.get_abstract(abstract_id); abstract && !abstract->boundary.empty())
                 {
-                    shapes.push_back(TaggedShape{
+                    shapes.push_back(RenderedShape{
                         .shape = Shape{.layer_name = "BOUNDARY", .polygons = abstract->boundary},
-                        .purpose = ViewLayerPurpose::BOUNDARY,
+                        .view_layer = view_layers.boundary_view_layer(),
                     });
                 }
 
                 return shapes;
-            });
-        }
-
-        /// @brief Resolve each shape's ViewLayerId from its layer_name +
-        /// purpose (a Layer-by-name hashmap lookup). BOUNDARY shapes skip
-        /// the lookup entirely; they're always view_layers.boundary_view_layer().
-        /// `abstract_id` is the cache key - callers going through run()
-        /// pass the same AbstractId `shapes` was generated from; direct
-        /// callers (e.g. tests) supplying hand-built `shapes` can pass any
-        /// consistent value, since a fresh Pipeline's first call always
-        /// recomputes regardless of key.
-        const std::vector<RenderedShape> &resolve_view_layers(const std::vector<TaggedShape> &shapes, AbstractId abstract_id, const Root &root, const ViewLayerSet &view_layers)
-        {
-            return resolved_.get(abstract_id, [&]
-            {
-                std::vector<RenderedShape> result;
-                result.reserve(shapes.size());
-
-                for (const auto &ts : shapes)
-                {
-                    ViewLayerId view_layer;
-                    if (ts.purpose == ViewLayerPurpose::BOUNDARY)
-                        view_layer = view_layers.boundary_view_layer();
-                    else
-                        view_layer = view_layers.find(root.get_layer_by_name(ts.shape.layer_name), ts.purpose);
-
-                    result.push_back(RenderedShape{.shape = ts.shape, .view_layer = view_layer});
-                }
-
-                return result;
             });
         }
 
@@ -240,25 +210,22 @@ namespace le
             });
         }
 
-        /// @brief Run all four stages for the Scene's current_abstract().
+        /// @brief Run all three stages for the Scene's current_abstract().
         const std::vector<RenderedShape> &run(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
         {
-            const auto &generated = generate_shapes(root, scene.current_abstract());
-            const auto &resolved = resolve_view_layers(generated, scene.current_abstract(), root, view_layers);
-            const auto &viewport_filtered = filter_by_viewport_and_size(resolved, scene);
+            const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
+            const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene);
             return filter_by_layer_visibility(viewport_filtered, scene);
         }
 
         // Number of times each stage actually recomputed - exposed purely
         // to make cache hits/misses observable in tests.
         uint64_t generate_calls() const { return generated_.call_count(); }
-        uint64_t resolve_calls() const { return resolved_.call_count(); }
         uint64_t viewport_filter_calls() const { return viewport_filtered_.call_count(); }
         uint64_t layer_filter_calls() const { return layer_filtered_.call_count(); }
 
     private:
-        CachedStage<AbstractId, std::vector<TaggedShape>> generated_;
-        CachedStage<AbstractId, std::vector<RenderedShape>> resolved_;
+        CachedStage<AbstractId, std::vector<RenderedShape>> generated_;
         CachedStage<std::pair<AbstractId, uint64_t>, std::vector<RenderedShape>> viewport_filtered_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::vector<RenderedShape>> layer_filtered_;
     };

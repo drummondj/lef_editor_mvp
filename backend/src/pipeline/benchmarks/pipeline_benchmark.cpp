@@ -166,13 +166,16 @@ namespace
 // Pipeline every iteration - otherwise iterations after the first would be
 // cache hits and the benchmark would measure ~nothing instead of real work.
 
+// Now includes the ViewLayerId resolution that used to be a separate
+// resolve_view_layers stage - see pipeline.hpp's class comment for why
+// they were merged.
 static void BM_GenerateShapes(benchmark::State &state)
 {
     const auto &data = stress_data();
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &shapes = pipeline.generate_shapes(data.root, data.abstract_id);
+        const auto &shapes = pipeline.generate_shapes(data.root, data.abstract_id, data.view_layers);
         const auto *shapes_data = shapes.data();
         benchmark::DoNotOptimize(shapes_data);
     }
@@ -180,51 +183,26 @@ static void BM_GenerateShapes(benchmark::State &state)
 }
 BENCHMARK(BM_GenerateShapes)->Unit(benchmark::kMillisecond);
 
-// Benchmarked on the full 1M-shape resolved set, matching how Pipeline::run()
-// actually calls it (viewport-filtering runs after resolving now - see
-// pipeline.hpp's class comment for why).
+// Benchmarked on the full 1M-shape generated (and resolved) set, matching
+// how Pipeline::run() actually calls it.
 static void BM_FilterByViewportAndSize(benchmark::State &state)
 {
     const auto &data = stress_data();
     Scene scene = make_scene(data);
 
     Pipeline setup;
-    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
-    const auto &resolved = setup.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
+    const auto &generated = setup.generate_shapes(data.root, data.abstract_id, data.view_layers);
 
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &filtered = pipeline.filter_by_viewport_and_size(resolved, scene);
+        const auto &filtered = pipeline.filter_by_viewport_and_size(generated, scene);
         const auto *filtered_data = filtered.data();
         benchmark::DoNotOptimize(filtered_data);
     }
-    state.SetItemsProcessed(state.iterations() * resolved.size());
-}
-BENCHMARK(BM_FilterByViewportAndSize)->Unit(benchmark::kMillisecond);
-
-// Benchmarked on the full unfiltered generate_shapes output (all
-// kTotalShapes) - this is what Pipeline::run() actually calls
-// resolve_view_layers with (see pipeline.hpp's class comment for why:
-// decoupling it from the viewport filter's cache means it only pays this
-// cost once per AbstractId, not once per pan/zoom frame).
-static void BM_ResolveViewLayers(benchmark::State &state)
-{
-    const auto &data = stress_data();
-
-    Pipeline setup;
-    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
-
-    for (auto _ : state)
-    {
-        Pipeline pipeline;
-        const auto &rendered = pipeline.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
-        const auto *rendered_data = rendered.data();
-        benchmark::DoNotOptimize(rendered_data);
-    }
     state.SetItemsProcessed(state.iterations() * generated.size());
 }
-BENCHMARK(BM_ResolveViewLayers)->Unit(benchmark::kMillisecond);
+BENCHMARK(BM_FilterByViewportAndSize)->Unit(benchmark::kMillisecond);
 
 static void BM_FilterByLayerVisibility(benchmark::State &state)
 {
@@ -232,9 +210,8 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
     Scene scene = make_scene(data);
 
     Pipeline setup;
-    const auto &generated = setup.generate_shapes(data.root, data.abstract_id);
-    const auto &resolved = setup.resolve_view_layers(generated, data.abstract_id, data.root, data.view_layers);
-    const auto &viewport_filtered = setup.filter_by_viewport_and_size(resolved, scene);
+    const auto &generated = setup.generate_shapes(data.root, data.abstract_id, data.view_layers);
+    const auto &viewport_filtered = setup.filter_by_viewport_and_size(generated, scene);
 
     for (auto _ : state)
     {
@@ -290,10 +267,9 @@ static void BM_RunReused_NoChange(benchmark::State &state)
 BENCHMARK(BM_RunReused_NoChange)->Unit(benchmark::kMillisecond);
 
 // Only pan changes each call, simulating interactive panning - the common
-// case generate_shapes/resolve_view_layers's shared AbstractId cache is
-// meant for. Expect close to the sum of the uncached viewport-filter and
-// layer-filter costs, not the full BM_Run cost, since generate_shapes and
-// resolve_view_layers are both skipped every iteration.
+// case generate_shapes's AbstractId-keyed cache is meant for. Expect close
+// to the uncached viewport-filter and layer-filter costs, not the full
+// BM_Run cost, since generate_shapes is skipped every iteration.
 static void BM_RunReused_PanOnly(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -314,8 +290,8 @@ BENCHMARK(BM_RunReused_PanOnly)->Unit(benchmark::kMillisecond);
 
 // Only a layer's visibility changes each call, simulating toggling a layer
 // on/off in the UI. Expect close to just the uncached layer-filter stage
-// cost, since generate_shapes, resolve_view_layers, and the viewport
-// filter are all still cached.
+// cost, since generate_shapes and the viewport filter are both still
+// cached.
 static void BM_RunReused_VisibilityOnly(benchmark::State &state)
 {
     const auto &data = stress_data();

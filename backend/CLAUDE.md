@@ -49,52 +49,46 @@ the full brief and the live plan checklist.
   view today; extend the variant rather than generalizing to a type-erased
   handle before another kind (e.g. `Instance`, once a Layout/placement view
   exists) needs it.
-- `src/pipeline/` — `Pipeline`, a 4-stage pass over a `Scene`'s
+- `src/pipeline/` — `Pipeline`, a 3-stage pass over a `Scene`'s
   `current_abstract()` (no node/task framework): `generate_shapes` →
-  `resolve_view_layers` → `filter_by_viewport_and_size` →
-  `filter_by_layer_visibility`. Each stage is a non-static instance method
-  owning a small `CachedStage<Key, Value>` member (remembers the last
-  key/result pair, recomputes only when the key changes — not a general
-  reactive framework, just enough to avoid hand-written invalidation flags)
-  and chains to the previous stage internally, so `run()` reads as a flat
-  4-line sequence while still only recomputing what actually changed. One
-  `Pipeline` instance lives per `Scene`-equivalent lifetime and is reused
-  across repeated calls (e.g. every interactive frame) — a fresh instance
-  recomputes everything on its first call.
+  `filter_by_viewport_and_size` → `filter_by_layer_visibility`. Each stage
+  is a non-static instance method owning a small `CachedStage<Key, Value>`
+  member (remembers the last key/result pair, recomputes only when the key
+  changes — not a general reactive framework, just enough to avoid
+  hand-written invalidation flags) and chains to the previous stage
+  internally, so `run()` reads as a flat 3-line sequence while still only
+  recomputing what actually changed. One `Pipeline` instance lives per
+  `Scene`-equivalent lifetime and is reused across repeated calls (e.g.
+  every interactive frame) — a fresh instance recomputes everything on its
+  first call.
   `generate_shapes` collects `Shape`s from Terminals' Ports, Obstructions,
-  and the Abstract's boundary polygon, tagging each with a cheap
-  `ViewLayerPurpose` (no lookup yet), keyed on `AbstractId` alone.
-  `resolve_view_layers` resolves each shape's `Shape::layer_name` + purpose
-  to a `ViewLayerId` (a `Shape` has no `LayerId`/`ViewLayerId` field) —
-  `BOUNDARY`-purpose shapes skip the lookup entirely — and is *also* keyed
-  on `AbstractId` alone (not chained to the viewport filter): its real
-  inputs (`root`/`view_layers`) don't change on pan/zoom, so keying it that
-  way means it's paid once per Abstract selection instead of once per
-  frame. The size filter culls a shape only if **both** bbox dimensions
-  are under 1px at the `Scene`'s scale, so a long thin wire survives even
-  though its width alone is sub-pixel; it's keyed on `AbstractId` +
-  `Scene::viewport_version()`. The layer filter drops anything on a hidden
-  `ViewLayerId`, keeping shapes whose `ViewLayerId` didn't resolve (e.g. an
-  undeclared/typo'd layer name) rather than dropping them; keyed on
-  `AbstractId` + `viewport_version()` + `Scene::visibility_version()`.
-  Fully covered by `pipeline_test.cpp`.
-  Running `resolve_view_layers` right after `generate_shapes` (on the full
-  generated set) instead of after the viewport filter (on the ~25% that
-  survive culling) costs more per Abstract switch (~+42ms at 1M shapes,
-  since resolving 1M shapes measures ~40ms not the ~7ms a naive per-shape
-  extrapolation suggests) but saves ~1.7ms on every subsequent pan/zoom
-  frame — accepted since a one-time Abstract switch can show a loading
-  spinner and affords up to ~1-2s, while pan/zoom is the actual
-  latency-sensitive path. Current clean Release numbers
-  (`-DENABLE_COVERAGE=OFF` — see the coverage gotcha below): fresh-instance
-  `run()` (cold) 96.7ms; reused-instance pan-only 6.30ms, visibility-only
-  0.625ms, no-change ~0ms. See `BENCHMARKS.md` for the full
-  measurement/investigation, including an earlier design (`PipelineCache`,
-  a separate class) that was merged into `Pipeline` itself for
-  readability — cascading invalidation via manually-set boolean flags
-  scattered across private methods was hard to follow and hard to extend;
-  each stage owning its own `CachedStage` and chaining internally replaced
-  that with the same caching behavior, expressed more simply.
+  and the Abstract's boundary polygon, resolving each straight to its
+  `ViewLayerId` (a `Shape::layer_name` + purpose lookup — a `Shape` has no
+  `LayerId`/`ViewLayerId` field) in the same pass; `BOUNDARY`-purpose
+  shapes skip the lookup entirely. There's no intermediate "tagged but
+  unresolved" type — this used to be two stages (`generate_shapes` then a
+  distinct `resolve_view_layers`) sharing the same `AbstractId` cache key,
+  which just meant two full copies of the shape data where one now
+  suffices; merged once the caching redesign made that redundancy visible
+  (~39% faster cold start, 96.7ms → 58.9ms at 1M shapes — see
+  `BENCHMARKS.md`). Keyed on `AbstractId` alone. The size filter culls a
+  shape only if **both** bbox dimensions are under 1px at the `Scene`'s
+  scale, so a long thin wire survives even though its width alone is
+  sub-pixel; keyed on `AbstractId` + `Scene::viewport_version()`. The layer
+  filter drops anything on a hidden `ViewLayerId`, keeping shapes whose
+  `ViewLayerId` didn't resolve (e.g. an undeclared/typo'd layer name)
+  rather than dropping them; keyed on `AbstractId` + `viewport_version()` +
+  `Scene::visibility_version()`. Fully covered by `pipeline_test.cpp`.
+  Current clean Release numbers (`-DENABLE_COVERAGE=OFF` — see the
+  coverage gotcha below): fresh-instance `run()` (cold) 58.9ms;
+  reused-instance pan-only 5.91ms, visibility-only 0.587ms, no-change
+  ~0ms. See `BENCHMARKS.md` for the full measurement/investigation,
+  including two earlier designs — a separate `PipelineCache` class (merged
+  into `Pipeline` itself: cascading invalidation via manually-set boolean
+  flags scattered across private methods was hard to follow and hard to
+  extend, replaced by each stage owning its own `CachedStage` and chaining
+  internally) and a separate `resolve_view_layers` stage (merged into
+  `generate_shapes` once the caching redesign made it redundant, as above).
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Depends on `geometry` for polygon construction/union.

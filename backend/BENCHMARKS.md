@@ -169,3 +169,42 @@ constructed fresh. The old `BM_ResolveViewLayers` (measured on the
 always runs on the full set now) and `BM_RunCached_ColdStart` (now
 identical in meaning to `BM_Run`) were dropped as redundant; their findings
 remain in the entries above.
+
+## 2026-08-03 — resolve_view_layers merged into generate_shapes, TaggedShape removed
+
+Since the `PipelineCache` merge (previous entry), `generate_shapes` and
+`resolve_view_layers` were already keyed on the same cache key
+(`AbstractId` alone) and always recomputed together - they never had
+independent cache lifetimes. The original reason they were split apart
+(resolving during generation cost ~46% more, per the 4-stage-pipeline
+entry near the top of this file) no longer applied: that finding was for
+a design where viewport-filtering ran *between* generate and resolve,
+culling to ~25% of shapes first; the current design already runs resolve
+on the *full* generated set regardless of whether it's a separate stage.
+With both stages always processing the same 1M shapes together, keeping
+them separate just meant two full deep-copies of the shape data (one
+`vector<TaggedShape>` in generate, one `vector<RenderedShape>` in resolve)
+where one now suffices - matching the copy-volume hypothesis from the
+"PipelineCache v2" entry above. Merged: `generate_shapes` now resolves each
+shape's `ViewLayerId` inline as it's built, directly into `RenderedShape`;
+`TaggedShape` is gone entirely, and the pipeline is down to 3 stages
+(generate → viewport-filter → layer-filter) instead of 4.
+
+| Benchmark | Before (separate generate + resolve) | After (merged) |
+|---|---|---|
+| `BM_Run` (cold start, fresh instance) | 96.7 ms | **58.9 ms** |
+| `generate_shapes` alone (1M shapes) | ~52.6 ms (generate) + ~40.3 ms (resolve) ≈ 92.9 ms combined | **52.6 ms** |
+| Reused, pan-only | 6.30 ms | 5.91 ms |
+| Reused, visibility-only | 0.625 ms | 0.587 ms |
+| Reused, no change | ~0.000 ms | ~0.000 ms |
+
+Comment: confirms the prediction from the design discussion - cold-start
+`run()` dropped ~39% (96.7ms → 58.9ms), and the merged `generate_shapes`
+costs far less than the sum of the two stages it replaced (52.6ms vs.
+~92.9ms), consistent with eliminating one full `Shape`-copy pass over 1M
+elements. The warm/interactive path (pan-only, visibility-only, no-change)
+is unchanged or marginally better, as expected - those stages weren't
+touched. This directly resolves the "avoiding the second full `Shape`
+copy" follow-up flagged as a bigger potential win in the "PipelineCache
+v2" entry above, without needing any profiling to confirm it - the
+benchmark speaks for itself.
