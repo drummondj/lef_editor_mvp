@@ -14,6 +14,8 @@ TEST(Scene, DefaultStateIsSensible)
     EXPECT_EQ(scene.viewport_width_px(), 0);
     EXPECT_EQ(scene.viewport_height_px(), 0);
     EXPECT_TRUE(scene.selection().empty());
+    EXPECT_EQ(scene.viewport_version(), 0u);
+    EXPECT_EQ(scene.visibility_version(), 0u);
 }
 
 TEST(Scene, CurrentAbstractRoundTrips)
@@ -49,6 +51,30 @@ TEST(Scene, SetScaleIgnoresNonPositiveValues)
     EXPECT_DOUBLE_EQ(scene.scale(), 2.5); // unchanged
 }
 
+TEST(Scene, ViewportVersionBumpsOnPanScaleAndViewportSizeChangesOnly)
+{
+    Scene scene;
+    EXPECT_EQ(scene.viewport_version(), 0u);
+
+    scene.set_pan(Point{1, 1});
+    EXPECT_EQ(scene.viewport_version(), 1u);
+
+    scene.set_scale(2.0);
+    EXPECT_EQ(scene.viewport_version(), 2u);
+
+    scene.set_viewport_size(100, 100);
+    EXPECT_EQ(scene.viewport_version(), 3u);
+
+    // A rejected (non-positive) scale must not bump the version - nothing
+    // about the viewport actually changed.
+    scene.set_scale(-1.0);
+    EXPECT_EQ(scene.viewport_version(), 3u);
+
+    // Unrelated state (visibility) must not bump it either.
+    scene.set_layer_visible(ViewLayerId{1, 0}, false);
+    EXPECT_EQ(scene.viewport_version(), 3u);
+}
+
 TEST(Scene, LayerVisibilityDefaultsToTrueUntilSet)
 {
     // Scene only stores/queries by ViewLayerId - it doesn't know or care
@@ -67,6 +93,22 @@ TEST(Scene, LayerVisibilityDefaultsToTrueUntilSet)
     // A different, never-toggled ViewLayer is unaffected.
     ViewLayerId other_view_layer{4, 0};
     EXPECT_TRUE(scene.is_layer_visible(other_view_layer));
+}
+
+TEST(Scene, VisibilityVersionBumpsOnlyOnSetLayerVisible)
+{
+    Scene scene;
+    EXPECT_EQ(scene.visibility_version(), 0u);
+
+    scene.set_layer_visible(ViewLayerId{3, 0}, false);
+    EXPECT_EQ(scene.visibility_version(), 1u);
+
+    scene.set_layer_visible(ViewLayerId{3, 0}, true);
+    EXPECT_EQ(scene.visibility_version(), 2u);
+
+    // Unrelated state (viewport) must not bump it.
+    scene.set_pan(Point{5, 5});
+    EXPECT_EQ(scene.visibility_version(), 2u);
 }
 
 TEST(Scene, SelectDeselectAndClear)

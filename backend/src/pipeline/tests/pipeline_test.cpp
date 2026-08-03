@@ -128,7 +128,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLong
     TaggedShape dot{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}}, .purpose = ViewLayerPurpose::OBSTRUCTION};             // 0x0
     TaggedShape thin_long_line{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 105}}}}, .purpose = ViewLayerPurpose::OBSTRUCTION}; // 0 wide, 100 tall
 
-    auto result = Pipeline::filter_by_viewport_and_size({dot, thin_long_line}, scene);
+    auto result = Pipeline::filter_by_viewport_and_size(std::vector<TaggedShape>{dot, thin_long_line}, scene);
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result.front().shape.rects.front().ur.y, 105);
 }

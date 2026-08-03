@@ -32,12 +32,18 @@ namespace le
     /// src/pipeline/benchmarks/): resolve_view_layers is deliberately its
     /// own stage *after* filter_by_viewport_and_size, not folded into
     /// generate_shapes. Tagging every shape with a ViewLayerId at
-    /// generation time was tried first and made the full pipeline ~46%
-    /// slower (40.8ms -> 59.8ms) - it pays a Layer-by-name hashmap lookup
-    /// on all 1M shapes instead of only the ~25% that survive viewport
-    /// culling. Same lesson as the viewport-before-layer-filter finding,
-    /// one level deeper: run the cheap, effective filter before paying for
-    /// expensive per-shape resolution, not after.
+    /// generation time was tried first and made a single *uncached* run
+    /// ~46% slower (40.8ms -> 59.8ms) - it pays a Layer-by-name hashmap
+    /// lookup on all 1M shapes instead of only the ~25% that survive
+    /// viewport culling. Same lesson as the viewport-before-layer-filter
+    /// finding, one level deeper: run the cheap, effective filter before
+    /// paying for expensive per-shape resolution, not after.
+    ///
+    /// That finding assumes every stage runs on every call, which is true
+    /// for this class but not for PipelineCache (src/pipeline/pipeline_cache.hpp):
+    /// it composes these same four static methods in a *different* order
+    /// (resolve before the viewport filter) because caching changes which
+    /// ordering minimizes total cost - see its class comment.
     class Pipeline
     {
     public:
@@ -91,7 +97,13 @@ namespace le
         /// Geometry::bbox doesn't account for Shape::texts) have no bbox
         /// and are dropped for now; text rendering isn't subject to this
         /// kind of culling anyway and needs its own handling later.
-        static std::vector<TaggedShape> filter_by_viewport_and_size(const std::vector<TaggedShape> &shapes, const Scene &scene)
+        ///
+        /// Templated on the element type (TaggedShape or RenderedShape) so
+        /// it can run either before or after resolve_view_layers - it only
+        /// ever touches `.shape`. PipelineCache is the caller that needs it
+        /// on RenderedShape (see its class comment for why).
+        template <typename ShapeT>
+        static std::vector<ShapeT> filter_by_viewport_and_size(const std::vector<ShapeT> &shapes, const Scene &scene)
         {
             const double scale = scene.scale();
             const double min_visible_dbu = 1.0 / scale;
@@ -105,12 +117,12 @@ namespace le
                 },
             };
 
-            std::vector<TaggedShape> result;
+            std::vector<ShapeT> result;
             result.reserve(shapes.size());
 
-            for (const auto &ts : shapes)
+            for (const auto &s : shapes)
             {
-                auto bbox = Geometry::bbox(ts.shape);
+                auto bbox = Geometry::bbox(s.shape);
                 if (!bbox)
                     continue;
 
@@ -122,7 +134,7 @@ namespace le
                 if (width < min_visible_dbu && height < min_visible_dbu)
                     continue;
 
-                result.push_back(ts);
+                result.push_back(s);
             }
 
             return result;

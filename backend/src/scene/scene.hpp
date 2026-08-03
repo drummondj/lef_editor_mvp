@@ -2,6 +2,7 @@
 #include "../database/database.hpp"
 #include "../view_style/view_style.hpp"
 #include <algorithm>
+#include <cstdint>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -26,7 +27,14 @@ namespace le
         AbstractId current_abstract() const { return current_abstract_; }
 
         // --- Viewport transform: pixel = (dbu - pan) * scale ---
-        void set_pan(Point pan) { pan_ = pan; }
+        // pan/scale/viewport_size each bump viewport_version() - a cheap
+        // change signal for callers (e.g. PipelineCache) that would
+        // otherwise need to snapshot and compare these fields by value.
+        void set_pan(Point pan)
+        {
+            pan_ = pan;
+            ++viewport_version_;
+        }
         Point pan() const { return pan_; }
 
         // Ignores non-positive values (keeps the last valid scale) rather
@@ -35,7 +43,10 @@ namespace le
         void set_scale(double pixels_per_dbu)
         {
             if (pixels_per_dbu > 0.0)
+            {
                 scale_ = pixels_per_dbu;
+                ++viewport_version_;
+            }
         }
         double scale() const { return scale_; }
 
@@ -43,15 +54,29 @@ namespace le
         {
             viewport_width_px_ = width_px;
             viewport_height_px_ = height_px;
+            ++viewport_version_;
         }
         int viewport_width_px() const { return viewport_width_px_; }
         int viewport_height_px() const { return viewport_height_px_; }
+
+        // Monotonic counter bumped by any of the three setters above -
+        // cheap for a caller to compare instead of snapshotting pan/scale/
+        // viewport size by value.
+        uint64_t viewport_version() const { return viewport_version_; }
 
         // --- Layer visibility (defaults to visible until toggled) ---
         // Keyed by ViewLayerId (purpose-tagged: e.g. "M1 terminals" and "M1
         // obstructions" toggle independently), not the physical LayerId -
         // see view_style.hpp for why.
-        void set_layer_visible(ViewLayerId id, bool visible) { layer_visible_[id] = visible; }
+        void set_layer_visible(ViewLayerId id, bool visible)
+        {
+            layer_visible_[id] = visible;
+            ++visibility_version_;
+        }
+
+        // Monotonic counter bumped by set_layer_visible - cheap for a
+        // caller to compare instead of comparing the visibility map by value.
+        uint64_t visibility_version() const { return visibility_version_; }
         bool is_layer_visible(ViewLayerId id) const
         {
             auto it = layer_visible_.find(id);
@@ -85,7 +110,9 @@ namespace le
         double scale_ = 1.0;
         int viewport_width_px_ = 0;
         int viewport_height_px_ = 0;
+        uint64_t viewport_version_ = 0;
         std::unordered_map<ViewLayerId, bool> layer_visible_;
+        uint64_t visibility_version_ = 0;
         std::vector<SelectionRef> selection_;
     };
 }

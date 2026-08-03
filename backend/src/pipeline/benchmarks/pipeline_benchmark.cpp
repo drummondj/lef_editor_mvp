@@ -1,5 +1,6 @@
 #include "../../io/lef_reader.hpp"
 #include "../pipeline.hpp"
+#include "../pipeline_cache.hpp"
 #include <benchmark/benchmark.h>
 #include <chrono>
 #include <filesystem>
@@ -208,6 +209,25 @@ static void BM_ResolveViewLayers(benchmark::State &state)
 }
 BENCHMARK(BM_ResolveViewLayers)->Unit(benchmark::kMillisecond);
 
+// Benchmarked on the FULL unfiltered generate_shapes output (all
+// kTotalShapes), not the post-viewport-filter survivors above - this is
+// what PipelineCache actually calls resolve_view_layers with (see its
+// class comment for why: caching makes this the right trade even though
+// it costs more per call than the post-filter version above).
+static void BM_ResolveViewLayersOnFullSet(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    auto shapes = Pipeline::generate_shapes(data.root, data.abstract_id);
+
+    for (auto _ : state)
+    {
+        auto rendered = Pipeline::resolve_view_layers(shapes, data.root, data.view_layers);
+        benchmark::DoNotOptimize(rendered);
+    }
+    state.SetItemsProcessed(state.iterations() * shapes.size());
+}
+BENCHMARK(BM_ResolveViewLayersOnFullSet)->Unit(benchmark::kMillisecond);
+
 static void BM_FilterByLayerVisibility(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -238,5 +258,100 @@ static void BM_Run(benchmark::State &state)
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
 BENCHMARK(BM_Run)->Unit(benchmark::kMillisecond);
+
+// PipelineCache benchmarks - compare against the uncached BM_Run baseline
+// above to measure the actual speedup, per BENCHMARKS.md. Each PipelineCache
+// is constructed once per benchmark (outside the timed loop is impossible
+// with Google Benchmark's `for (auto _ : state)` form without extra
+// bookkeeping, but construction itself is cheap - four empty vectors and a
+// handful of scalars) and reused across iterations, since a real caller
+// would keep one alive for a Scene's whole interactive lifetime.
+
+// Nothing changes between calls - the steady-state "no input this frame"
+// case. Expect near-zero: every stage hits its cache.
+static void BM_RunCached_NoChange(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    PipelineCache cache;
+
+    for (auto _ : state)
+    {
+        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto *result_data = result.data();
+        benchmark::DoNotOptimize(result_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RunCached_NoChange)->Unit(benchmark::kMillisecond);
+
+// Only pan changes each call, simulating interactive panning - the common
+// case generate_shapes's cache is meant for. Expect close to the sum of the
+// uncached filter/resolve/layer-filter stage costs (~7ms), not the full
+// ~56ms run(), since generate_shapes's ~47ms is skipped every iteration.
+static void BM_RunCached_PanOnly(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    PipelineCache cache;
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto *result_data = result.data();
+        benchmark::DoNotOptimize(result_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RunCached_PanOnly)->Unit(benchmark::kMillisecond);
+
+// Only a layer's visibility changes each call, simulating toggling a layer
+// on/off in the UI. Expect close to just the uncached layer-filter stage
+// cost (~0.8ms), since generate_shapes, the viewport filter, and
+// resolve_view_layers are all still cached.
+static void BM_RunCached_VisibilityOnly(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    PipelineCache cache;
+    ViewLayerId m1_obstruction = data.view_layers.find(data.root.get_layer_by_name("M1"), ViewLayerPurpose::OBSTRUCTION);
+
+    bool visible = true;
+    for (auto _ : state)
+    {
+        scene.set_layer_visible(m1_obstruction, visible);
+        visible = !visible;
+        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto *result_data = result.data();
+        benchmark::DoNotOptimize(result_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RunCached_VisibilityOnly)->Unit(benchmark::kMillisecond);
+
+// A fresh PipelineCache every iteration, one run() call each - the "just
+// switched to a different Abstract" cold-start case, where every stage is
+// a cache miss. Measures the real cost of resolve_view_layers running on
+// the full generated set (see BM_ResolveViewLayersOnFullSet above) instead
+// of relying on an extrapolation from the post-viewport-filter cost.
+// Expect somewhat higher than the uncached BM_Run, since resolve now runs
+// on ~4x the shapes it would under Pipeline::run()'s order.
+static void BM_RunCached_ColdStart(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    for (auto _ : state)
+    {
+        PipelineCache cache;
+        const auto &result = cache.run(data.root, scene, data.view_layers);
+        const auto *result_data = result.data();
+        benchmark::DoNotOptimize(result_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RunCached_ColdStart)->Unit(benchmark::kMillisecond);
 
 BENCHMARK_MAIN();
