@@ -21,9 +21,30 @@ the full brief and the live plan checklist.
   truth (a `cmg.Schema` of `Klass`/`Field` definitions); `generated/` is
   produced from it and must never be hand-edited (see Database codegen below).
   `database.hpp` is the single public include (`#include "generated/root.hpp"`).
+- `src/geometry/` — `Geometry`, a Boost.Geometry-backed wrapper (bbox, overlap,
+  transform, polygon union/buffer, label placement) over the database's
+  `Point`/`Rect`/`Polygon`/`Path`/`Shape` types. Ported from the sibling
+  `layout_engine/backend/utils/geometry.hpp`. Fully covered by
+  `geometry_test.cpp`.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
-  generated create/get API.
+  generated create/get API. Depends on `geometry` for polygon construction/union.
+  Tested against `src/lefdef/lef/TEST/complete.5.8.lef` (the vendored parser's
+  own regression fixture) plus small hand-written `.lef` files under
+  `src/io/tests/fixtures/` for cases that fixture doesn't hit (e.g. an `OBS`
+  on the `OVERLAP` layer, malformed input, duplicate names). `LEFReader` only
+  supports a subset of LEF; extend the tests as more constructs get support.
+  `orientation_from_parser`/`routing_direction_from_parser`/
+  `signal_direction_from_parser` are `public` (unlike the rest of
+  `LEFReader`) specifically so they can be unit-tested directly — they're
+  pure and touch no parser/instance state.
+- `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
+  Built by its own `Makefile` via `ExternalProject_Add` in the top-level
+  `CMakeLists.txt`; only `lef/` is wired into the build so far (`def/` is
+  vendored but unbuilt until a DEF reader exists). Never hand-edit — it's
+  third-party source, license in `src/lefdef/{lef,def}/LICENSE.TXT`.
+- Each module's tests live alongside it in a `tests/` subdirectory (e.g.
+  `src/database/tests/database_test.cpp`), hand-written GTest.
 
 ## Database codegen (cmg)
 
@@ -43,18 +64,59 @@ To change the schema: edit `src/database/schema.py`, bump `Schema.version`,
 then regenerate with the `regen-database` skill rather than editing
 `generated/` by hand.
 
-`generated/test_le.cpp` is stale — it targets an older `SMART_POINTERS`-style
-API (`shared_ptr`, `.lock()->getptr()`) that no longer matches the current
-schema output. Don't use it as a reference; `generated/test_layout_engine.cpp`
-is the current generated GTest suite.
+Real test coverage lives in each module's own `tests/` directory, not
+`generated/` — `cmg` doesn't emit test files.
 
 ## Open gaps (tracked in README's Plan checklist)
 
-- No `CMakeLists.txt` yet. `lef_reader.hpp` expects `../lefdef/lef/include`
-  and `../lefdef/def/include` (vendored LEF/DEF 6.0 C parser, not yet added
-  to this repo) plus `spdlog`.
+- `src/lefdef/def` is vendored but not yet wired into `CMakeLists.txt` — add
+  an `ExternalProject_Add(def_lib ...)` (mirroring `lef_lib`) when a DEF
+  reader module is added.
 - `cmg` itself isn't installed in this environment — see the `regen-database`
-  skill for setup.
+  skill for setup (or run it via `poetry run cmg` from the local
+  `/Users/john/Projects/synthosilicon/cmg` checkout, which is what was used
+  to produce the current `generated/` output).
+
+## Build
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+Dependencies: `spdlog`, `fmt`, `Boost` (headers only, for `geometry`) via
+`find_package` — installed on this dev machine via Homebrew; GoogleTest via
+`FetchContent` (no system install needed). `src/lefdef/lef` is built as an
+`ExternalProject_Add` step that shells out to its own vendored `Makefile`.
+
+**Gotcha:** that vendored Makefile's `all: install release` target is not
+safe under a parallel/inherited `make` jobserver — both traversals touch the
+same bison-generated `lef.tab.c`/`liblef.a`, so running it under `-j` races
+and fails (`ranlib: liblef.a is not writable`, `mv: lef.tab.c: No such file`).
+The `lef_lib` `ExternalProject_Add` step already forces this with
+`--unset=MAKEFLAGS make -j1` — don't remove that when touching the build.
+
+### Coverage (line + branch)
+
+Off by default (instrumentation has a real perf cost, and this project's
+own rule is benchmark first). Opt in at configure time:
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
+cmake --build build --target coverage
+```
+
+Rebuilds `io`/`backend_tests` with Clang source-based coverage, runs the
+tests, and prints a `llvm-cov report --show-branch-summary` table (also
+written to `build/coverage/report.txt` and `build/coverage/lcov.info` for
+`genhtml`/VS Code "Coverage Gutters"/Codecov). Excludes `_deps`, vendored
+`src/lefdef`, and `src/database/generated` (cmg boilerplate) from the report.
+
+Requires Clang (uses `-fprofile-instr-generate`, not GCC's `--coverage`
+model) and `llvm-profdata`/`llvm-cov` — resolved via `xcrun` automatically
+on macOS. Reconfigure with `-DENABLE_COVERAGE=OFF` (or a fresh `build/`) to
+get back to a normal, uninstrumented build.
 
 ## Conventions observed in existing code
 
@@ -63,6 +125,11 @@ is the current generated GTest suite.
   this on hand-written public API.
 - No exceptions for expected-missing-data paths — pool lookups return
   nullable pointers (`get(id)` → `T*`) or use `std::optional`/`std::expected`.
+- The vendored LEF parser reuses one scratch struct per callback type across
+  the whole file and does **not** reset fields to a neutral default between
+  calls — always check the matching `has*()` guard (e.g.
+  `lefiLayer::hasDirection()`) before trusting a getter, or a value can leak
+  forward from a previous element that happened to set it.
 
 ## Related prior art
 
@@ -79,3 +146,7 @@ not as code to copy wholesale.
 
 - `regen-database` — regenerate `src/database/generated/` from `schema.py` via `cmg`.
 - `build-test` — configure/build/test the CMake project once one exists.
+- `cpp-review` — review pending changes for missing test coverage, unnecessary
+  allocations/copies/moves, memory safety, and other issues; reports via
+  `ReportFindings`, doesn't apply fixes. Named to avoid colliding with the
+  built-in, billed `/code-review ultra`.

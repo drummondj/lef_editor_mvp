@@ -13,6 +13,13 @@ namespace le
     public:
         int read_lef(std::string filename, Root &root, std::string library_name);
 
+        // Pure LEF-enum -> database-enum conversions. Public (and static, with
+        // no dependency on parser/instance state) so they can be unit tested
+        // directly rather than only incidentally through a full LEF parse.
+        static Orientation orientation_from_parser(int v);
+        static RoutingDirection routing_direction_from_parser(const char *name);
+        static SignalDirection signal_direction_from_parser(const char *name);
+
     private:
         // Callbacks
         static int lefrLayerCbkFn(lefrCallbackType_e typ, lefiLayer *lef_layer, void *user_data);
@@ -24,13 +31,10 @@ namespace le
 
         // Helper functions
         int64_t microns_to_dbu(const double microns);
-        static Orientation orientation_from_parser(int v);
-        static RoutingDirection routing_direction_from_parser(const char *name);
-        static SignalDirection signal_direction_from_parser(const char *name);
         static Polygon polygon_from_parser(LEFReader *reader, int count, double *x, double *y);
         static Rect rect_from_parser(LEFReader *reader, double xl, double yl, double xh, double yh);
         static std::vector<Shape> shapes_from_parser(LEFReader *reader, lefiGeometries *geometries);
-        static int post_process(LEFReader *reader);
+        static void post_process(LEFReader *reader);
 
         // Private variables
         Root *root_;

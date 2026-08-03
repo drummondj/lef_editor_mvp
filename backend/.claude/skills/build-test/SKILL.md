@@ -9,31 +9,39 @@ allowed-tools:
 
 # Build and test the backend
 
-1. **Check a `CMakeLists.txt` exists at the repo root.** As of this writing
-   it doesn't yet (see CLAUDE.md "Open gaps") — that's a separate setup task,
-   not something to improvise inside this skill. If it's missing, stop and
-   tell the user the CMake project needs to be set up first.
-
-2. **Configure and build:**
+1. **Configure and build:**
 
    ```
    cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
    cmake --build build -j
    ```
 
-3. **Run tests via ctest** (GTest-based, per `generated/test_layout_engine.cpp`):
+2. **Run tests via ctest:**
 
    ```
    ctest --test-dir build --output-on-failure
    ```
 
-4. **Dependencies to expect on the build machine**, based on this project's
-   lineage (`../../layout_engine/backend`): `spdlog`, `fmt`, a vendored
-   `lefdef` LEF/DEF C parser under `lefdef/lef` and `lefdef/def` (built via
-   `ExternalProject_Add` + `make`, not a system package), and GTest for the
-   generated test suite. Confirm against the actual `CMakeLists.txt` once it
-   exists rather than assuming this list is exhaustive.
+3. **Dependencies**: `spdlog`, `fmt`, `Boost` via `find_package` (installed
+   via Homebrew on this dev machine); GoogleTest via CMake `FetchContent`
+   (no system install needed); `src/lefdef/lef` (vendored LEF parser C
+   source) built via `ExternalProject_Add` + its own `Makefile`.
+
+4. **If `lef_lib` fails to build** with something like
+   `ranlib: liblef.a is not writable` or `mv: lef.tab.c: No such file or
+   directory`: that vendored Makefile's `install`/`release` targets race
+   under a parallel jobserver. `CMakeLists.txt` already forces the
+   `ExternalProject_Add(lef_lib ...)` step to run with
+   `--unset=MAKEFLAGS make -j1` — if this regresses, check that flag hasn't
+   been dropped rather than reaching for `-j1` on the whole outer build.
 
 5. Report build/test failures concisely — file:line and the actual error,
    not the full compiler log. Per this project's requirements, benchmark
    before changing anything for performance reasons rather than guessing.
+
+6. **Coverage** (line + branch, off by default): reconfigure with
+   `-DENABLE_COVERAGE=ON`, then `cmake --build build --target coverage`.
+   Prints a `llvm-cov report --show-branch-summary` table and writes
+   `build/coverage/lcov.info`. Requires Clang + `llvm-profdata`/`llvm-cov`
+   (auto-resolved via `xcrun` on macOS). See CLAUDE.md's "Coverage" section
+   for the full explanation, including why `io` shows 0% until it has tests.

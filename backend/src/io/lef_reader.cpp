@@ -1,6 +1,6 @@
 #include <fmt/ostream.h>
 #include "lef_reader.hpp"
-#include "../utils/geometry.hpp"
+#include "../geometry/geometry.hpp"
 
 namespace le
 {
@@ -31,8 +31,9 @@ namespace le
         FILE *f;
         if ((f = fopen(filename.c_str(), "r")) == 0)
         {
+            // fopen already failed, so there's no stream to close - fclose(f)
+            // here would call fclose(NULL), which is undefined behavior.
             spdlog::error("Could not open LEF file {}.", filename);
-            fclose(f);
             return 1;
         }
 
@@ -51,7 +52,7 @@ namespace le
     }
 
     /// @brief Build boundary from OVERLAP or SIZE and ORIGIN
-    int LEFReader::post_process(LEFReader *reader)
+    void LEFReader::post_process(LEFReader *reader)
     {
         // Look for OVERLAP obstructions
         std::vector<const Shape *> overlap_shapes;
@@ -94,8 +95,6 @@ namespace le
 
         for (auto const &polygon : reader->abstract_data_.boundary)
             spdlog::debug("boundary polygon {}", fmt::streamed(polygon));
-
-        return 0;
     }
 
     int LEFReader::lefrLayerCbkFn(lefrCallbackType_e typ, lefiLayer *lef_layer, void *user_data)
@@ -109,12 +108,15 @@ namespace le
             return 0;
         }
 
+        // The parser reuses one scratch lefiLayer across every LAYER statement and
+        // never resets direction_ between them, so a layer that omits DIRECTION
+        // would otherwise silently inherit whichever prior layer last set it.
         reader->root_->create_layer(
             LayerData{
                 .technology = reader->technology_id_,
                 .name = layer_name,
                 .type = lef_layer->type(),
-                .direction = routing_direction_from_parser(lef_layer->direction()),
+                .direction = lef_layer->hasDirection() ? routing_direction_from_parser(lef_layer->direction()) : RoutingDirection::NONE,
             });
 
         return 0;
@@ -192,7 +194,11 @@ namespace le
         {
             auto foreign = Foreign{.name = lef_macro->foreignName(i)};
 
-            if (lef_macro->hasForeignOrigin())
+            // Not lef_macro->hasForeignOrigin(i): the vendored parser's
+            // hasForeignOrigin_ is actually populated from the orient code
+            // (see lefiMacro::addForeign), not a real "has a point" flag -
+            // hasForeignPoint(i) is the field that's genuinely wired to it.
+            if (lef_macro->hasForeignPoint(i))
                 foreign.origin = Point{
                     .x = reader->microns_to_dbu(lef_macro->foreignX(i)),
                     .y = reader->microns_to_dbu(lef_macro->foreignY(i)),
@@ -200,7 +206,7 @@ namespace le
             else
                 foreign.origin = Point{0, 0};
 
-            if (lef_macro->hasForeignOrient())
+            if (lef_macro->hasForeignOrient(i))
                 foreign.orient = orientation_from_parser(lef_macro->foreignOrient(i));
             else
                 foreign.orient = Orientation::N;
@@ -232,11 +238,7 @@ namespace le
         }
 
         // Post process
-        if (post_process(reader) != 0)
-        {
-            spdlog::error("Could not post-process abstract.");
-            return 3;
-        }
+        post_process(reader);
 
         // Update stored AbstractData in pool
         // TODO: change this to build AbstractData first, then add child objects by
@@ -307,24 +309,28 @@ namespace le
 
     Orientation LEFReader::orientation_from_parser(int v)
     {
+        // Matches lef.y's `orientation` rule (R0=N, R90=W, R180=S, R270=E,
+        // MY=FN, MYR90=FW, MX=FS, MXR90=FE) - a 90 degree rotation turns a
+        // North-facing shape to face West, not South, so this is NOT the
+        // naive 0=N,1=S,2=E,3=W ordering it's easy to assume instead.
         switch (v)
         {
         case 0:
             return Orientation::N;
         case 1:
-            return Orientation::S;
-        case 2:
-            return Orientation::E;
-        case 3:
             return Orientation::W;
+        case 2:
+            return Orientation::S;
+        case 3:
+            return Orientation::E;
         case 4:
             return Orientation::FN;
         case 5:
-            return Orientation::FS;
-        case 6:
-            return Orientation::FE;
-        case 7:
             return Orientation::FW;
+        case 6:
+            return Orientation::FS;
+        case 7:
+            return Orientation::FE;
         default:
             return Orientation::N;
         }
@@ -389,6 +395,12 @@ namespace le
         };
     }
 
+    // The `!shape.has_value()` guards below (RECT/RECT-ITERATE/PATH/
+    // PATH-ITERATE/POLYGON/POLYGON-ITERATE without a preceding LAYER) are
+    // unreachable in practice - the LEF grammar itself already rejects that
+    // as a parse error before any such item is added to `geometries` - but
+    // kept anyway as defense-in-depth at this file-parsing boundary rather
+    // than removed as dead code.
     std::vector<Shape> LEFReader::shapes_from_parser(LEFReader *reader, lefiGeometries *geometries)
     {
         std::vector<Shape> shapes;
