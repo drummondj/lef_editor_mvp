@@ -1,5 +1,6 @@
 #pragma once
 #include "../database/database.hpp"
+#include <array>
 #include <string>
 #include <vector>
 
@@ -58,14 +59,22 @@ namespace le
         {
             ViewLayerSet set;
 
+            size_t color_index = 0;
             for (LayerId layer_id : root.get_technology_layers(technology_id))
             {
                 const LayerData *layer = root.get_layer(layer_id);
-                set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id);
-                set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id);
+                // One color per physical Layer, shared by every purpose of
+                // that layer (not per-purpose like before) - see
+                // layer_color's own comment for where this palette/scheme
+                // comes from. Purpose has no visual distinction yet beyond
+                // that shared color; a future update adds fill patterns per
+                // purpose instead of splitting the color further.
+                const ViewLayerStyle style = layer_style(layer_color(color_index++));
+                set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, style);
+                set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, style);
             }
 
-            set.boundary_id_ = set.add("BOUNDARY", ViewLayerPurpose::BOUNDARY, LayerId{});
+            set.boundary_id_ = set.add("BOUNDARY", ViewLayerPurpose::BOUNDARY, LayerId{}, boundary_style());
 
             return set;
         }
@@ -95,31 +104,77 @@ namespace le
             ViewLayerId id;
         };
 
-        ViewLayerId add(std::string name, ViewLayerPurpose purpose, LayerId layer)
+        ViewLayerId add(std::string name, ViewLayerPurpose purpose, LayerId layer, ViewLayerStyle style)
         {
             ViewLayerId id = pool_.create(ViewLayerData{
                 .name = std::move(name),
                 .purpose = purpose,
                 .layer = layer,
-                .style = default_style(purpose),
+                .style = style,
             });
             lookup_.push_back(LookupEntry{.layer = layer, .purpose = purpose, .id = id});
             return id;
         }
 
-        // Placeholder palette - real styling is a render/UI concern to
-        // revisit once there's something on screen to look at.
-        static ViewLayerStyle default_style(ViewLayerPurpose purpose)
+        // Default per-layer palette - ported from the sibling project's
+        // `layer_generator_node.hpp` (../../layout_engine/backend/pipeline/
+        // nodes/layer_generator_node.hpp), which cycles through the same 30
+        // colors one per physical Layer. Real styling is still a render/UI
+        // concern to revisit further (this only replaces the old fixed
+        // green-TERMINAL/red-OBSTRUCTION scheme with per-layer color, so
+        // e.g. M1 and M2 are now visually distinguishable at all).
+        static constexpr std::array<Color, 30> kDefaultColors = {{
+            {255, 0, 0, 255},     // red
+            {0, 255, 0, 255},     // green
+            {0, 0, 255, 255},     // blue
+            {255, 255, 0, 255},   // yellow
+            {255, 0, 255, 255},   // magenta
+            {0, 255, 255, 255},   // cyan
+            {128, 0, 0, 255},     // maroon
+            {0, 128, 0, 255},     // dark green
+            {0, 0, 128, 255},     // navy
+            {128, 128, 0, 255},   // olive
+            {128, 0, 128, 255},   // purple
+            {0, 128, 128, 255},   // teal
+            {192, 192, 192, 255}, // silver
+            {128, 128, 128, 255}, // gray
+            {255, 165, 0, 255},   // orange
+            {210, 105, 30, 255},  // chocolate
+            {139, 69, 19, 255},   // saddle brown
+            {255, 20, 147, 255},  // deep pink
+            {50, 205, 50, 255},   // lime green
+            {72, 209, 204, 255},  // medium turquoise
+            {123, 104, 238, 255}, // medium slate blue
+            {255, 215, 0, 255},   // gold
+            {160, 82, 45, 255},   // sienna
+            {32, 178, 170, 255},  // light sea green
+            {218, 112, 214, 255}, // orchid
+            {95, 158, 160, 255},  // cadet blue
+            {255, 99, 71, 255},   // tomato
+            {60, 179, 113, 255},  // medium sea green
+            {106, 90, 205, 255},  // slate blue
+            {238, 130, 238, 255}, // violet
+        }};
+
+        // Wraps (modulo), not clamps or overflows, once there are more
+        // Layers than palette entries - unlike the sibling's own indexing
+        // (`default_colors[++color_idx]`), which has no bounds check and
+        // reads out of range past 30 layers.
+        static Color layer_color(size_t index)
         {
-            switch (purpose)
-            {
-            case ViewLayerPurpose::TERMINAL:
-                return ViewLayerStyle{.outline_color = {0, 200, 0, 255}, .fill_color = {0, 200, 0, 120}};
-            case ViewLayerPurpose::OBSTRUCTION:
-                return ViewLayerStyle{.outline_color = {200, 0, 0, 255}, .fill_color = {200, 0, 0, 60}};
-            case ViewLayerPurpose::BOUNDARY:
-                return ViewLayerStyle{.outline_color = {255, 255, 255, 255}, .fill_color = {0, 0, 0, 0}};
-            }
+            return kDefaultColors[index % kDefaultColors.size()];
+        }
+
+        static ViewLayerStyle layer_style(Color base)
+        {
+            Color fill = base;
+            fill.a = 100;
+            return ViewLayerStyle{.outline_color = base, .fill_color = fill};
+        }
+
+        static ViewLayerStyle boundary_style()
+        {
+            return ViewLayerStyle{.outline_color = {255, 255, 255, 255}, .fill_color = {0, 0, 0, 0}};
         }
 
         Pool<ViewLayerData, ViewLayerId> pool_;

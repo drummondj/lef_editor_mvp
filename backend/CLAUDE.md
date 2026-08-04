@@ -34,10 +34,18 @@ the full brief and the live plan checklist.
   templates directly. `ViewLayerSet::build_for_technology` builds the full
   set for a `Technology` once, shared/global — which `ViewLayer`s exist and
   how they're styled (`ViewLayerStyle`: outline/fill `Color`) isn't a
-  per-`Scene` concern, only which ones are toggled off is. Fully covered by
-  `view_style_test.cpp` (93.75% branch coverage is an accepted, irreducible
-  gap: an exhaustive closed-enum `switch` still gets an instrumented
-  "no case matched" branch region that can't be hit without UB).
+  per-`Scene` concern, only which ones are toggled off is. Color is chosen
+  per physical `Layer`, not per purpose — every physical `Layer` gets one
+  color (cycling through a 30-entry default palette, ported from the
+  sibling project's `layer_generator_node.hpp`) shared by both its
+  `TERMINAL` and `OBSTRUCTION` `ViewLayer`s, so different layers (e.g. M1
+  vs. M2) are visually distinguishable; a `TERMINAL` and an `OBSTRUCTION`
+  of the *same* layer currently look identical (no purpose-based fill
+  pattern yet — a future update, not implemented). `BOUNDARY` keeps its own
+  fixed white-outline/transparent-fill style, outside the per-layer
+  cycling. The palette wraps (modulo) past 30 layers rather than reading
+  out of bounds like the sibling's own indexing does. Fully covered by
+  `view_style_test.cpp`.
 - `src/scene/` — `Scene`, per-handle mutable view state (currently displayed
   `AbstractId`, pan/scale/viewport-size transform, per-`ViewLayer`
   visibility, selection). Distinct from the persistent `Root` database: the
