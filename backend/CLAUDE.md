@@ -1,11 +1,12 @@
 # LEF Layout Editor MVP — Backend
 
 C++23 backend that reads LEF/DEF and SystemVerilog EDA data into an in-memory
-database, then renders it through a multi-threaded, layer-based pipeline into
-Skia commands consumed by a Flutter plugin. This is an MVP/proof-of-concept:
-the goal right now is finding the right architecture for editing hierarchical
-designs with millions of objects, not shipping features. See `README.md` for
-the full brief and the live plan checklist.
+database, then renders it through a layer-based pipeline into Skia commands
+consumed by a Flutter plugin. This is an MVP/proof-of-concept: the goal right
+now is finding the right architecture for editing hierarchical designs with
+millions of objects, not shipping features. See `README.md` for the full
+brief and the live plan checklist; see `BENCHMARKS.md` for benchmark history
+and design-decision writeups — neither is duplicated here.
 
 ## Requirements (non-negotiable)
 
@@ -22,239 +23,83 @@ the full brief and the live plan checklist.
   produced from it and must never be hand-edited (see Database codegen below).
   `database.hpp` is the single public include (`#include "generated/root.hpp"`).
 - `src/geometry/` — `Geometry`, a Boost.Geometry-backed wrapper (bbox, overlap,
-  transform, polygon union/buffer, label placement) over the database's
-  `Point`/`Rect`/`Polygon`/`Path`/`Shape` types. Ported from the sibling
-  `layout_engine/backend/utils/geometry.hpp`. Fully covered by
+  transform, polygon union/buffer, label placement, overlap-merging) over the
+  database's `Point`/`Rect`/`Polygon`/`Path`/`Shape` types. Fully covered by
   `geometry_test.cpp`.
-- `src/view_style/` — `ViewLayerSet`/`ViewLayer`, the rendering-purpose layer
-  concept distinct from the LEF-mirroring `database`: a `TERMINAL` and
+- `src/view_style/` — `ViewLayerSet`/`ViewLayer`: the rendering-purpose layer
+  concept distinct from the LEF-mirroring `database` — a `TERMINAL` and
   `OBSTRUCTION` `ViewLayer` per physical `Layer`, plus one `BOUNDARY`
-  `ViewLayer` not tied to any physical `Layer`. Hand-written (not
-  cmg-generated) but reuses `database`'s generic `Id<Tag>`/`Pool<T,IdT>`
-  templates directly. `ViewLayerSet::build_for_technology` builds the full
-  set for a `Technology` once, shared/global — which `ViewLayer`s exist and
-  how they're styled (`ViewLayerStyle`: outline/fill `Color`) isn't a
-  per-`Scene` concern, only which ones are toggled off is. Color is chosen
-  per physical `Layer`, not per purpose — every physical `Layer` gets one
-  color (cycling through a 30-entry default palette, ported from the
-  sibling project's `layer_generator_node.hpp`) shared by both its
-  `TERMINAL` and `OBSTRUCTION` `ViewLayer`s, so different layers (e.g. M1
-  vs. M2) are visually distinguishable; a `TERMINAL` and an `OBSTRUCTION`
-  of the *same* layer currently look identical (no purpose-based fill
-  pattern yet — a future update, not implemented). `BOUNDARY` keeps its own
-  fixed white-outline/transparent-fill style, outside the per-layer
-  cycling. The palette wraps (modulo) past 30 layers rather than reading
-  out of bounds like the sibling's own indexing does. Fully covered by
-  `view_style_test.cpp`.
+  `ViewLayer` not tied to any physical `Layer`. `ViewLayerSet::build_for_technology`
+  builds the full set for a `Technology` once, shared/global. Each physical
+  `Layer` gets one color from a default palette (shared by its `TERMINAL`/
+  `OBSTRUCTION` `ViewLayer`s — no purpose-based fill pattern yet); see the
+  class's own doc comments for the palette/wraparound details. Fully covered
+  by `view_style_test.cpp`.
 - `src/scene/` — `Scene`, per-handle mutable view state (currently displayed
   `AbstractId`, pan/scale/viewport-size transform, per-`ViewLayer`
-  visibility, selection). Distinct from the persistent `Root` database: the
-  pipeline reads from a `Scene`, events will write into one. Layer
-  visibility is keyed by `ViewLayerId` (see `src/view_style/`), not `LayerId`
-  — a physical layer has independently toggleable `TERMINAL`/`OBSTRUCTION`
-  visibility. Selection is `std::variant<TerminalId, ObstructionId>` — only
-  the object kinds with a rendered geometric representation in an Abstract
-  view today; extend the variant rather than generalizing to a type-erased
-  handle before another kind (e.g. `Instance`, once a Layout/placement view
-  exists) needs it.
-- `src/pipeline/` — `Pipeline`, a 3-stage pass over a `Scene`'s
-  `current_abstract()` (no node/task framework): `generate_shapes` →
-  `filter_by_viewport_and_size` → `filter_by_layer_visibility`. Each stage
-  is a non-static instance method owning a small `CachedStage<Key, Value>`
-  member (remembers the last key/result pair, recomputes only when the key
-  changes — not a general reactive framework, just enough to avoid
-  hand-written invalidation flags) and chains to the previous stage
-  internally, so `run()` reads as a flat 3-line sequence while still only
-  recomputing what actually changed. One `Pipeline` instance lives per
-  `Scene`-equivalent lifetime and is reused across repeated calls (e.g.
-  every interactive frame) — a fresh instance recomputes everything on its
-  first call.
-  `generate_shapes` collects `Shape`s from Terminals' Ports, Obstructions,
-  and the Abstract's boundary polygon, resolving each straight to its
-  `ViewLayerId` (a `Shape::layer_name` + purpose lookup — a `Shape` has no
-  `LayerId`/`ViewLayerId` field) in the same pass; `BOUNDARY`-purpose
-  shapes skip the lookup entirely. There's no intermediate "tagged but
-  unresolved" type — this used to be two stages (`generate_shapes` then a
-  distinct `resolve_view_layers`) sharing the same `AbstractId` cache key,
-  which just meant two full copies of the shape data where one now
-  suffices; merged once the caching redesign made that redundancy visible
-  (see `BENCHMARKS.md`). Keyed on `AbstractId` alone. Each pushed Shape also
-  has its own rects/polygons merged in place via
-  `Geometry::merge_overlapping_fills` (a Terminal Port's or Obstruction's
-  Shape can legitimately contain several rects that overlap each other —
-  e.g. an L/T-shaped pin drawn as two overlapping rects, or LEF's OBS
-  ITERATE/DO/STEP array syntax — and drawing each with a translucent fill
-  otherwise double-blends the overlap into a visibly darker patch);
-  scoped to one Shape at a time, never merged across different
-  Terminals/Obstructions, which would destroy the per-object identity
-  `RenderedShape`/selection relies on. Confirmed cheap on real data and a
-  no-op on the synthetic stress benchmark (every shape there has exactly
-  one rect) — see `BENCHMARKS.md`.
-  Each Terminal also gets one text label *per distinct layer_name* it has
-  geometry on (its name, placed via `Geometry::get_label_location` on the
-  union of that layer's geometry across all the Terminal's Ports — a
-  Terminal with shapes on both M1 and M2 gets two independent labels, each
-  tied to its own layer's `ViewLayerId`) appended to a real geometric
-  Shape's `.texts` rather than emitted as its own shape, so it survives the
-  size filter below (which drops shapes with no bbox, and `Geometry::bbox`
-  doesn't account for `Shape::texts`) for free instead of needing special
-  handling. The size filter culls a shape only if **both** bbox dimensions
-  are under 1px at the `Scene`'s scale, so a long thin wire survives even
-  though its width alone is sub-pixel; keyed on `AbstractId` +
-  `Scene::viewport_version()`.
-  `filter_by_layer_visibility` groups surviving shapes into
-  `std::map<ViewLayerId, std::vector<RenderedShape>>` (not a flat vector),
-  checking visibility once per distinct `ViewLayerId` present instead of
-  once per shape, and dropping whole groups the `Scene` has hidden — a
-  group keyed on an invalid `ViewLayerId` (layer name didn't resolve) is
-  always kept, there's no toggle to check it against. `std::map` (not
-  `unordered_map`) is deliberate: `ViewLayerId`'s `{index, generation}`
-  ordering — via `Id<Tag>`'s defaulted `operator<=>` (added to `cmg`'s
-  `ids_hpp_j2.py` template; `Id<Tag>` previously only had `operator==`) —
-  exactly matches LEF-declared physical layer stacking order (confirmed by
-  tracing `Root::create_layer`'s append-only vector through
-  `ViewLayerSet::build_for_technology`, not assumed), with `BOUNDARY`
-  always last. So iterating the map in key order draws bottom-up with the
-  boundary on top, no separate sort needed. Keyed on `AbstractId` +
-  `viewport_version()` + `Scene::visibility_version()`. Fully covered by
-  `pipeline_test.cpp`.
-  Current clean Release numbers (`-DENABLE_COVERAGE=OFF` — see the
-  coverage gotcha below): fresh-instance `run()` (cold) 112ms;
-  reused-instance pan-only 8.47ms, visibility-only 2.78ms, no-change ~0ms.
-  See `BENCHMARKS.md` for the full measurement/investigation, including
-  two earlier designs — a separate `PipelineCache` class (merged into
-  `Pipeline` itself: cascading invalidation via manually-set boolean flags
-  scattered across private methods was hard to follow and hard to extend,
-  replaced by each stage owning its own `CachedStage` and chaining
-  internally) and a separate `resolve_view_layers` stage (merged into
-  `generate_shapes` once the caching redesign made it redundant) — and the
-  confirmed, understood cost of `ViewLayerId` grouping and Terminal labels
-  (dominated by `Geometry::get_label_location`, ~356ns/call, ~36ms across
-  100K Terminals at this benchmark's scale — verified with an isolated
-  micro-benchmark, not assumed).
-- `src/render/` — `Renderer`, three stages on top of `Pipeline`'s grouped
-  output, same `CachedStage`/chaining pattern: `transform_to_pixels`
-  (dbu→pixel via `pixel = (dbu - pan) * scale` — no Y-axis flip, that
-  happens later, at `rasterize`) → `build_picture` (Skia
-  `SkPictureRecorder`/`SkCanvas` draw calls) → `rasterize` (rasterizes the
-  `SkPicture` into a raw `PixelBuffer`). All three keyed on `AbstractId` +
-  `viewport_version()` + `visibility_version()`, matching
-  `filter_by_layer_visibility`'s key. Takes a `Pipeline&` from the caller
-  rather than owning one, matching how `Pipeline`'s own stages take the
-  previous stage's output explicitly. `transform_to_pixels` preserves the
-  `ViewLayerId` grouping (`std::map<ViewLayerId, std::vector<PixelShape>>`)
-  so `build_picture` can look up each group's `ViewLayerStyle` and
-  construct its fill/stroke `SkPaint` once per group instead of once per
-  shape, and draws in map order (bottom-up, per `filter_by_layer_visibility`
-  above) with no separate sort; `PixelShape` (`PixelPoint`/`PixelRect`/
-  `PixelPolygon`/`PixelPath`/`PixelText`, mirroring `Shape`'s structure
-  with `double` coordinates instead of dbu's `int64_t`) has no
-  `ViewLayerId` field of its own — the map key already carries it.
-  Terminal labels draw via `SkFont`/`drawString`, using a lazily-built
-  default typeface from a **CoreText-backed font manager on macOS** — a
-  Linux build needs an equivalent (e.g. fontconfig/FreeType-backed
-  `SkFontMgr`) added when that target exists, not done yet. That typeface
-  lookup (`Renderer::default_typeface()`) is defined in `render.cpp`, not
-  inline in `render.hpp`: `SkFontMgr_mac_ct.h` pulls in
-  `ApplicationServices.h`, which defines legacy Carbon `Rect`/`Point`/
-  `Polygon` typedefs at global scope that collide with `le::Rect`/
-  `le::Point`/`le::Polygon` wherever a file does `using namespace le`
-  (every test/benchmark file here does) — isolating it to its own
-  translation unit keeps that collision from leaking into `render.hpp`'s
-  consumers, the same reason `io` is a compiled library rather than
-  header-only around its own vendored C headers. `render` is therefore
-  `add_library(render STATIC ...)` in `CMakeLists.txt`, not `INTERFACE`
-  like the other pipeline-adjacent modules.
-  `rasterize` produces a `PixelBuffer` (raw pointer + width + height +
-  row_bytes) using an explicit `kRGBA_8888_SkColorType` raster surface —
-  not `SkImageInfo::MakeN32Premul`'s platform-native `kN32_SkColorType`
-  (BGRA on some platforms, RGBA on others) — so the byte layout is
-  identical between this project's macOS dev machine and its Linux
-  deployment target. It also applies the Y-axis flip that
-  `transform_to_pixels` deliberately doesn't (dbu-space y increases
-  upward; Skia's canvas is y-down): one `translate`+`scale(1,-1)` canvas
-  transform applied once before drawing the whole picture, not per-shape.
-  A whole-canvas flip mirrors glyph rendering too, though — `build_picture`
-  wraps each label's `drawString` in a local `save()`/`translate(anchor)`/
-  `scale(1,-1)`/`drawString(0,0)`/`restore()` that counter-flips around its
-  own anchor so text stays upright, which couples that `SkPicture` to
-  being drawn through `rasterize()`'s specific flip for text to render
-  correctly (documented in both methods, not a hidden dependency) — found
-  by actually looking at rendered output (`render_preview`) after landing
-  the flip, not caught by the existing pixel-level tests (see
-  `BENCHMARKS.md`'s 2026-08-04 entry).
-  Single-threaded; `rasterize()` reopened the previously-settled Threading
-  question (see README's open design questions) — the warm/interactive
-  pan-only path now measures 21.5ms at 1M shapes, the first time this
-  project has exceeded a 60fps/16.6ms budget rather than stayed
-  comfortably under it (see `BENCHMARKS.md`). Not investigated further as
-  part of landing `rasterize()` itself. Fully covered by `render_test.cpp`,
-  including real pixel-color assertions (rasterize the `SkPicture` into an
-  `SkSurface`/read back actual pixels for `build_picture`'s own tests, and
-  reading `rasterize()`'s own `PixelBuffer` bytes directly — including an
-  exact-premultiplied-byte check mirroring Skia's own `SkMulDiv255Round`
-  rounding, and a Y-flip orientation check using two differently-colored
-  layers at different dbu heights), not just "didn't crash" — including a
-  text-rendering test that scans for the label's actual opaque ink, not
-  just that `drawString` was called.
-  Depends on a **machine-specific Skia checkout, not committed to this
-  repo** — see the Skia setup note under Build below.
+  visibility, selection). Distinct from the persistent `Root` database.
+  Layer visibility is keyed by `ViewLayerId`, not `LayerId` — a physical
+  layer has independently toggleable `TERMINAL`/`OBSTRUCTION` visibility.
+  Selection is `std::variant<TerminalId, ObstructionId>` — extend the
+  variant as more selectable kinds need it rather than generalizing early.
+- `src/pipeline/` — `Pipeline`: `generate_shapes` → `filter_by_viewport_and_size`
+  → `filter_by_layer_visibility`, no node/task framework. Each stage is a
+  non-static instance method that self-caches (`CachedStage<Key, Value>`,
+  keyed on whatever it actually depends on) and chains to the previous
+  stage internally — reuse one `Pipeline` instance per `Scene`-equivalent
+  lifetime. `generate_shapes` resolves each `Shape` straight to its
+  `ViewLayerId` in the same pass (no separate resolve stage), merges each
+  Shape's own overlapping rects/polygons via `Geometry::merge_overlapping_fills`,
+  and attaches one text label per distinct layer a Terminal has geometry
+  on. `filter_by_layer_visibility` groups into `std::map<ViewLayerId, ...>`
+  (not `unordered_map`) — deliberate, since `ViewLayerId`'s ordering matches
+  LEF-declared layer stacking order, giving correct bottom-up draw order
+  for free; don't change this to `unordered_map`. See the class's own doc
+  comments for full per-stage rationale, and `BENCHMARKS.md` for current
+  numbers and history. Fully covered by `pipeline_test.cpp`.
+- `src/render/` — `Renderer`, three stages on top of `Pipeline`'s output,
+  same self-caching pattern: `transform_to_pixels` (dbu→pixel, no Y-flip)
+  → `build_picture` (Skia `SkPictureRecorder` draw calls) → `rasterize`
+  (SkPicture → raw `PixelBuffer`). Takes a `Pipeline&` from the caller
+  rather than owning one. `rasterize` uses explicit `kRGBA_8888_SkColorType`
+  (not Skia's platform-native `kN32_SkColorType`) so byte layout matches
+  between the macOS dev machine and the Linux target, and applies the
+  Y-axis flip (`transform_to_pixels` deliberately doesn't) as one
+  whole-canvas transform — `build_picture` counter-flips each text label
+  locally to keep glyphs upright under that flip, so the two are coupled;
+  check both if touching either. `render` is a compiled library
+  (`add_library(render STATIC ...)`), not header-only like its siblings —
+  isolates `SkFontMgr_mac_ct.h`/`ApplicationServices.h` (legacy Carbon
+  `Rect`/`Point`/`Polygon` typedefs collide with `le::` types under `using
+  namespace le`) to `render.cpp`; don't change this back to `INTERFACE`.
+  Single-threaded — see README's Threading open design question and
+  `BENCHMARKS.md` for current warm-path numbers. Fully covered by
+  `render_test.cpp`, including real pixel-byte assertions, not just
+  "didn't crash". Depends on a machine-specific Skia checkout, not
+  committed to this repo — see Open gaps below.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
-  generated create/get API. Depends on `geometry` for polygon construction/union.
-  Tested against `src/lefdef/lef/TEST/complete.5.8.lef` (the vendored parser's
-  own regression fixture) plus small hand-written `.lef` files under
-  `src/io/tests/fixtures/` for cases that fixture doesn't hit (e.g. an `OBS`
-  on the `OVERLAP` layer, malformed input, duplicate names). `LEFReader` only
-  supports a subset of LEF; extend the tests as more constructs get support.
-  `orientation_from_parser`/`routing_direction_from_parser`/
-  `signal_direction_from_parser` are `public` (unlike the rest of
-  `LEFReader`) specifically so they can be unit-tested directly — they're
-  pure and touch no parser/instance state.
+  generated create/get API. Tested against `src/lefdef/lef/TEST/complete.5.8.lef`
+  (the vendored parser's own regression fixture) plus small hand-written
+  `.lef` files under `src/io/tests/fixtures/` for cases that fixture
+  doesn't hit. `LEFReader` only supports a subset of LEF; extend the tests
+  as more constructs get support. `orientation_from_parser`/
+  `routing_direction_from_parser`/`signal_direction_from_parser` are
+  `public` (unlike the rest of `LEFReader`) so they can be unit-tested
+  directly — pure, no parser/instance state.
 - `src/api/` — `api.hpp`/`api.cpp`, the C API surface a Flutter plugin's
-  Dart FFI binds to (README's "minimal `api`" build-order step): an opaque
-  `LeHandle` (`le_create`/`le_destroy`) wrapping one `Root`/`ViewLayerSet`/
-  `Scene`/`Pipeline`/`Renderer` — one `Pipeline`/`Renderer` per handle, not
-  one per call, matching their own "reuse across repeated calls" caching
-  design (see `pipeline.hpp`/`render.hpp`); `le_read_lef` (callable
-  multiple times on one handle — e.g. a tech file then macro file(s),
-  matching `render_preview.cpp`'s own convention — rebuilds `ViewLayerSet`
-  after every successful read so newly-declared layers are picked up);
-  `le_design_count`/`le_design_name`/`le_set_current_design` to enumerate
-  and select which Design's Abstract to view; `le_set_pan`/`le_set_scale`/
-  `le_set_viewport_size` mirroring `Scene`'s own setters directly; and
-  `le_render_pixel_buffer`, running the full `Pipeline`+`Renderer` chain
-  and returning an `LePixelBuffer` (pointer + width + height + row_bytes,
-  fixed-width types — not `int`/`size_t`, whose width isn't guaranteed
-  identical across the macOS dev toolchain and the Linux target one).
-  `api.hpp` is deliberately plain C — no `std::` types, no default
-  arguments, no overloads, in any public declaration — so it parses
-  cleanly for `ffigen`/Dart FFI; `LeHandle`'s real definition (a C++
-  struct) lives only in `api.cpp`, keeping the header C-compatible without
-  losing the C++ implementation underneath (the same opaque-handle-plus-
-  compiled-`.cpp` shape `render`/`io` already use to hide a platform- or
-  vendor-specific dependency from their own public headers). Every
-  function null-checks its handle (and any other pointer/index arguments)
-  and degrades gracefully — e.g. `le_render_pixel_buffer` with no Design
-  selected or a 0x0 viewport returns an empty-but-valid buffer, never
-  crashes — matching this project's "no exceptions, nullable/graceful
-  lookups" convention (see Conventions below) at the one boundary in this
-  codebase where a caller genuinely can't catch a C++ exception anyway.
-  Found and fixed one real crash this way: `Renderer::rasterize()` didn't
-  guard against a zero-sized viewport before calling `SkSurfaces::Raster`
-  (which returns null for non-positive dimensions) — caught by an `api`
-  test, fixed in `render.hpp` itself (not just worked around in `api`),
-  since any caller of `Renderer` directly could hit the same crash.
-  Verified end-to-end with a real LEF file via a throwaway, dependency-free
-  smoke-test program that only ever includes `api.hpp` (no `le::` types),
-  reads a raw `.ppm` straight out of the returned buffer — proving the FFI
-  boundary is genuinely usable from outside this codebase, not just from
-  C++ callers that already link against it. Buffer-based export of
-  structural data (e.g. a library/hierarchy browser) is not part of this
-  minimal slice — deferred alongside `events`/`properties`. Fully covered
-  by `api_test.cpp`, using a small hand-written `.lef` fixture (not the
-  1M-shape stress data or `complete.5.8.lef`) for deterministic pixel-
-  location assertions. Depends on `database`, `geometry`, `scene`,
+  Dart FFI binds to: an opaque `LeHandle` (`le_create`/`le_destroy`)
+  wrapping one `Root`/`ViewLayerSet`/`Scene`/`Pipeline`/`Renderer` per
+  handle (reused across calls, not reconstructed per call); `le_read_lef`
+  (callable multiple times on one handle — e.g. tech file then macro
+  file(s)); `le_design_count`/`le_design_name`/`le_set_current_design`;
+  `le_set_pan`/`le_set_scale`/`le_set_viewport_size`; and
+  `le_render_pixel_buffer`. `api.hpp` must stay plain C — no `std::` types,
+  default arguments, or overloads in any public declaration — so it parses
+  cleanly for `ffigen`/Dart FFI; `LeHandle`'s real definition lives only in
+  `api.cpp`. Every function null-checks its handle and degrades gracefully
+  rather than crashing. Fully covered by `api_test.cpp`, using a small
+  hand-written `.lef` fixture. Depends on `database`, `geometry`, `scene`,
   `view_style`, `pipeline`, `render`, `io`.
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
   Built by its own `Makefile` via `ExternalProject_Add` in the top-level
@@ -272,11 +117,7 @@ Generated code follows the **INDEXED_POOLS** export style from
 
 - `XxxData` — a plain data struct.
 - `XxxId` — a `{index, generation}` handle (see `generated/ids.hpp`), not a
-  pointer. Fully ordered via a defaulted `operator<=>` (lexicographic on
-  `index` then `generation`), so any `XxxId` can be a `std::map` key
-  without a custom comparator — added to cmg's `ids_hpp_j2.py` template
-  (`cmg` is a separate project/repo — see Open gaps below) when
-  `ViewLayerId` needed one; `Id<Tag>` previously only had `operator==`.
+  pointer, fully ordered (usable as a `std::map` key with no custom comparator).
 - Storage in a `Pool<XxxData, XxxId>` (`generated/pool.hpp`) — a generational
   slot array, so erased objects can't alias a reused slot.
 - `Root` (`generated/root.hpp`) owns every pool plus an `index_` for
@@ -285,10 +126,8 @@ Generated code follows the **INDEXED_POOLS** export style from
 
 To change the schema: edit `src/database/schema.py`, bump `Schema.version`,
 then regenerate with the `regen-database` skill rather than editing
-`generated/` by hand.
-
-Real test coverage lives in each module's own `tests/` directory, not
-`generated/` — `cmg` doesn't emit test files.
+`generated/` by hand. Real test coverage lives in each module's own
+`tests/` directory, not `generated/` — `cmg` doesn't emit test files.
 
 ## Open gaps (tracked in README's Plan checklist)
 
@@ -297,24 +136,18 @@ Real test coverage lives in each module's own `tests/` directory, not
   reader module is added.
 - `cmg` itself isn't installed in this environment — see the `regen-database`
   skill for setup (or run it via `poetry run cmg` from the local
-  `/Users/john/Projects/synthosilicon/cmg` checkout, which is what was used
-  to produce the current `generated/` output).
-- Skia isn't vendored/built by this project either — `src/render/`'s
+  `/Users/john/Projects/synthosilicon/cmg` checkout).
+- Skia isn't vendored/built by this project — `src/render/`'s
   `CMakeLists.txt` `skia` target points `SKIA_DIR` at a pre-built checkout
   (default `/Users/john/Projects/synthosilicon/skia/skia`, override with
-  `-DSKIA_DIR=...`). That checkout must have `out/MacStatic/libskia.a` built
-  with `is_component_build=false` (static). Link requirements (include
-  path, `libskia.a`, Homebrew `harfbuzz`/`icu4c`/`jpeg`/`png`/`z`/`webp`/
-  `webpdemux`, and macOS `CoreText`/`CoreFoundation`/`CoreGraphics`/
-  `CoreServices` frameworks) were determined empirically by linking a
-  minimal `SkPictureRecorder`/`SkSurface` program, then iterating on
-  `backend_tests`' actual undefined-symbol errors — Skia's static archive
-  unconditionally pulls in its CoreText font manager and several image
-  codecs (jpeg/png/webp) even for pure vector/raster drawing with no text
-  or image decoding in this project's own code. No GPU (Ganesh/Metal)
-  frameworks needed: only the raster (CPU) surface APIs are used, and
-  static linking never pulls in the unused GPU object files despite
-  `libskia.a` containing Metal-backend code from the checkout's own build.
+  `-DSKIA_DIR=...`). That checkout must have `out/MacStatic/libskia.a`
+  built with `is_component_build=false` (static). Links `libskia.a` +
+  Homebrew `harfbuzz`/`icu4c`/`jpeg`/`png`/`z`/`webp`/`webpdemux` + macOS
+  `CoreText`/`CoreFoundation`/`CoreGraphics`/`CoreServices` frameworks — no
+  GPU (Ganesh/Metal) frameworks needed, only raster (CPU) surface APIs are
+  used.
+- Linux build needs a fontconfig/FreeType-backed `SkFontMgr` — `render`'s
+  default typeface is CoreText-backed (macOS-only) right now.
 
 ## Build
 
@@ -333,8 +166,7 @@ is built as an `ExternalProject_Add` step that shells out to its own vendored
 **Gotcha:** that vendored Makefile's `all: install release` target is not
 safe under a parallel/inherited `make` jobserver — both traversals touch the
 same bison-generated `lef.tab.c`/`liblef.a`, so running it under `-j` races
-and fails (`ranlib: liblef.a is not writable`, `mv: lef.tab.c: No such file`).
-The `lef_lib` `ExternalProject_Add` step already forces this with
+and fails. The `lef_lib` `ExternalProject_Add` step already forces
 `--unset=MAKEFLAGS make -j1` — don't remove that when touching the build.
 
 ### Coverage (line + branch)
@@ -349,21 +181,16 @@ cmake --build build --target coverage
 
 Rebuilds `io`/`backend_tests` with Clang source-based coverage, runs the
 tests, and prints a `llvm-cov report --show-branch-summary` table (also
-written to `build/coverage/report.txt` and `build/coverage/lcov.info` for
-`genhtml`/VS Code "Coverage Gutters"/Codecov). Excludes `_deps`, vendored
-`src/lefdef`, and `src/database/generated` (cmg boilerplate) from the report.
-
-Requires Clang (uses `-fprofile-instr-generate`, not GCC's `--coverage`
-model) and `llvm-profdata`/`llvm-cov` — resolved via `xcrun` automatically
-on macOS.
+written to `build/coverage/report.txt` and `build/coverage/lcov.info`).
+Requires Clang and `llvm-profdata`/`llvm-cov` — resolved via `xcrun`
+automatically on macOS.
 
 **Gotcha:** `ENABLE_COVERAGE` is a *cached* option — reconfiguring with e.g.
 `-DCMAKE_BUILD_TYPE=Release` alone does **not** reset a previously-set-ON
-value back to OFF, and `le_enable_coverage_instrumentation()` forces `-O0`
-regardless of `CMAKE_BUILD_TYPE`. Always pass `-DENABLE_COVERAGE=OFF`
-explicitly (or use a fresh `build/`) to get back to a normal, uninstrumented
-build — this silently produced ~15-20x-inflated (but suspiciously
-low-variance, so not obviously "noisy") benchmark numbers once already.
+value back to OFF, and coverage instrumentation forces `-O0` regardless of
+`CMAKE_BUILD_TYPE`. Always pass `-DENABLE_COVERAGE=OFF` explicitly (or use a
+fresh `build/`) to get back to a normal, uninstrumented build — this
+silently produced ~15-20x-inflated benchmark numbers once already.
 
 ### Benchmarks
 
@@ -372,46 +199,23 @@ cmake --build build --target pipeline_benchmarks
 ./build/pipeline_benchmarks
 ```
 
-Build in `-DCMAKE_BUILD_TYPE=Release` for real numbers — Debug timings aren't
-meaningful. `src/pipeline/benchmarks/stress_data.hpp` generates a
-deliberately unrealistic 1M-shape single-macro LEF file (streamed straight to
-`${CMAKE_BINARY_DIR}/benchmark_data/`, ~78MB, never committed — see its
-comment for exactly how shapes/positions/sizes/layers are spread) and builds
-the `Scene` used to view it; `pipeline_benchmark.cpp` times each
-`Pipeline`/`Renderer` stage in isolation (a fresh instance per iteration,
-since stages cache internally), plus the full pipeline+render chain under
-several call patterns (fresh instance/cold start, and a reused instance with
-no change, pan-only, visibility-only). See the `src/pipeline/`/`src/render/`
-entries above for the current headline results, and `BENCHMARKS.md` for the
-full history. Add `--benchmark_repetitions=5
---benchmark_report_aggregates_only=true` for stable numbers when comparing
-two approaches, and `--benchmark_filter=<regex>` to run a subset.
+Build in `-DCMAKE_BUILD_TYPE=Release` for real numbers — Debug timings
+aren't meaningful. `src/pipeline/benchmarks/stress_data.hpp` generates a
+deliberately unrealistic 1M-shape single-macro LEF file and builds the
+`Scene` used to view it; `pipeline_benchmark.cpp` times each `Pipeline`/
+`Renderer` stage in isolation plus the full chain under several call
+patterns. See `BENCHMARKS.md` for current numbers and full history. Add
+`--benchmark_repetitions=5 --benchmark_report_aggregates_only=true` for
+stable numbers when comparing two approaches, and
+`--benchmark_filter=<regex>` to run a subset.
 
 `src/pipeline/benchmarks/render_preview.cpp` (target `render_preview`) is a
-dev-only sibling tool, not a benchmark: `./build/render_preview a.lef
-[b.lef ...]` reads every given LEF file into one shared `Root`, runs
-`Pipeline`/`Renderer` against every Design's Abstract found across all of
-them, and writes one PNG per Design as
-`preview/<library-name>__<design-name>.png` — so a real LEF file's render
-can be visually sanity-checked (layer colors, bottom-up z-order, Terminal
-labels, orientation) without waiting for Flutter texture wiring. A single
-shared `Root` (not one per file) matters because LEF is commonly split
-across a tech file (`LAYER`s, no macros) and one or more macro/cell files
-(`MACRO`/`PIN`s referencing those layers by name) — `LEFReader::read_lef`
-already supports this (reuses an existing `Technology` instead of creating
-a new one when the `Root` already has one), so pass the tech file first
-when a macro file depends on it. Each Abstract gets its own `Scene`,
-fitted (uniform scale, no stretch, padded, centered) to that Abstract's
-own content bbox — real macros don't share a common scale/pan the way the
-benchmark's synthetic stress data does. Not run by `ctest` or the
-`coverage` target. Encodes `Renderer::rasterize()`'s own `PixelBuffer`
-output directly (`SkPixmap` wrapping the raw bytes, no intermediate
-`SkSurface` of its own) — the same production rasterization path this
-tool exists to sanity-check, including its Y-flip and RGBA8888 byte
-layout, rather than a separate ad hoc rasterization. Background is
-therefore fully transparent wherever nothing was drawn (`Renderer`'s real
-"nothing here" state), not a dark-gray preview convenience like it used to
-clear to before `rasterize()` existed.
+dev-only tool, not a benchmark: `./build/render_preview a.lef [b.lef ...]`
+reads every given LEF file into one shared `Root` and writes one PNG per
+Design (`preview/<library-name>__<design-name>.png`) via the real
+`Renderer::rasterize()` path, so real LEF renders can be visually
+sanity-checked without waiting for Flutter texture wiring. Not run by
+`ctest` or the `coverage` target.
 
 ## Conventions observed in existing code
 
@@ -428,14 +232,11 @@ clear to before `rasterize()` existed.
 
 ## Related prior art
 
-`../../layout_engine/backend` (sibling repo, same author) is an earlier, more
-complete implementation of the same idea — same `le` namespace, same
-pool/schema database pattern, a working `CMakeLists.txt` wiring up the vendored
-`lefdef` libs + spdlog + fmt, and a Taskflow/Boost.Geometry/Skia render
-pipeline. This MVP deliberately restarts the pipeline/rendering architecture
-decisions rather than importing that one — treat it as reference and lessons
-learned (its `BACKEND_REVIEW.md` has a real bug/perf review worth skimming),
-not as code to copy wholesale.
+`../../layout_engine/backend` (sibling repo, same author) is an earlier,
+more complete implementation of the same idea. This MVP deliberately
+restarts the pipeline/rendering architecture decisions rather than
+importing that one — treat it as reference/lessons-learned, not code to
+copy wholesale.
 
 ## Skills
 
