@@ -211,6 +211,51 @@ the full brief and the live plan checklist.
   `signal_direction_from_parser` are `public` (unlike the rest of
   `LEFReader`) specifically so they can be unit-tested directly — they're
   pure and touch no parser/instance state.
+- `src/api/` — `api.hpp`/`api.cpp`, the C API surface a Flutter plugin's
+  Dart FFI binds to (README's "minimal `api`" build-order step): an opaque
+  `LeHandle` (`le_create`/`le_destroy`) wrapping one `Root`/`ViewLayerSet`/
+  `Scene`/`Pipeline`/`Renderer` — one `Pipeline`/`Renderer` per handle, not
+  one per call, matching their own "reuse across repeated calls" caching
+  design (see `pipeline.hpp`/`render.hpp`); `le_read_lef` (callable
+  multiple times on one handle — e.g. a tech file then macro file(s),
+  matching `render_preview.cpp`'s own convention — rebuilds `ViewLayerSet`
+  after every successful read so newly-declared layers are picked up);
+  `le_design_count`/`le_design_name`/`le_set_current_design` to enumerate
+  and select which Design's Abstract to view; `le_set_pan`/`le_set_scale`/
+  `le_set_viewport_size` mirroring `Scene`'s own setters directly; and
+  `le_render_pixel_buffer`, running the full `Pipeline`+`Renderer` chain
+  and returning an `LePixelBuffer` (pointer + width + height + row_bytes,
+  fixed-width types — not `int`/`size_t`, whose width isn't guaranteed
+  identical across the macOS dev toolchain and the Linux target one).
+  `api.hpp` is deliberately plain C — no `std::` types, no default
+  arguments, no overloads, in any public declaration — so it parses
+  cleanly for `ffigen`/Dart FFI; `LeHandle`'s real definition (a C++
+  struct) lives only in `api.cpp`, keeping the header C-compatible without
+  losing the C++ implementation underneath (the same opaque-handle-plus-
+  compiled-`.cpp` shape `render`/`io` already use to hide a platform- or
+  vendor-specific dependency from their own public headers). Every
+  function null-checks its handle (and any other pointer/index arguments)
+  and degrades gracefully — e.g. `le_render_pixel_buffer` with no Design
+  selected or a 0x0 viewport returns an empty-but-valid buffer, never
+  crashes — matching this project's "no exceptions, nullable/graceful
+  lookups" convention (see Conventions below) at the one boundary in this
+  codebase where a caller genuinely can't catch a C++ exception anyway.
+  Found and fixed one real crash this way: `Renderer::rasterize()` didn't
+  guard against a zero-sized viewport before calling `SkSurfaces::Raster`
+  (which returns null for non-positive dimensions) — caught by an `api`
+  test, fixed in `render.hpp` itself (not just worked around in `api`),
+  since any caller of `Renderer` directly could hit the same crash.
+  Verified end-to-end with a real LEF file via a throwaway, dependency-free
+  smoke-test program that only ever includes `api.hpp` (no `le::` types),
+  reads a raw `.ppm` straight out of the returned buffer — proving the FFI
+  boundary is genuinely usable from outside this codebase, not just from
+  C++ callers that already link against it. Buffer-based export of
+  structural data (e.g. a library/hierarchy browser) is not part of this
+  minimal slice — deferred alongside `events`/`properties`. Fully covered
+  by `api_test.cpp`, using a small hand-written `.lef` fixture (not the
+  1M-shape stress data or `complete.5.8.lef`) for deterministic pixel-
+  location assertions. Depends on `database`, `geometry`, `scene`,
+  `view_style`, `pipeline`, `render`, `io`.
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
   Built by its own `Makefile` via `ExternalProject_Add` in the top-level
   `CMakeLists.txt`; only `lef/` is wired into the build so far (`def/` is

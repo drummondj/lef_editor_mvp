@@ -373,6 +373,26 @@ TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)
     EXPECT_EQ(p[3], 0);
 }
 
+TEST_F(RenderFixture, RasterizeWithZeroSizedViewportDoesNotCrashAndReturnsEmptyBuffer)
+{
+    // Scene's default-constructed viewport size (0x0, e.g. before
+    // set_viewport_size() has ever been called) used to crash:
+    // SkSurfaces::Raster returns null for non-positive dimensions, and
+    // the old code dereferenced that null surface unconditionally.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+
+    EXPECT_EQ(buffer.data, nullptr);
+    EXPECT_EQ(buffer.width, 0);
+    EXPECT_EQ(buffer.height, 0);
+    EXPECT_EQ(buffer.row_bytes, 0u);
+}
+
 TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
 {
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});

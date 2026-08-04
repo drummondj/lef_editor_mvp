@@ -266,6 +266,17 @@ namespace le
                 const int width = scene.viewport_width_px();
                 const int height = scene.viewport_height_px();
 
+                // SkSurfaces::Raster returns null for non-positive
+                // dimensions (Scene's default-constructed viewport size,
+                // or simply not having called set_viewport_size() yet) -
+                // an empty (all-null/zero) PixelBuffer rather than a null
+                // surface->getCanvas() dereference, matching this
+                // project's "degrade gracefully rather than crash on
+                // unset/invalid state" convention elsewhere (e.g. an
+                // unknown AbstractId in Pipeline::generate_shapes).
+                if (width <= 0 || height <= 0)
+                    return RasterizedFrame{};
+
                 const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
                 sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
 

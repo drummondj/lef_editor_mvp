@@ -160,6 +160,15 @@ target_link_libraries(io
 )
 le_enable_coverage_instrumentation(io)
 
+# --- api: the C API surface a Flutter plugin's Dart FFI binds to (see
+# README's `api` module entry). Compiled (not header-only): the opaque
+# LeHandle's real definition must stay out of api.hpp, which needs to be a
+# plain-C-parseable header for ffigen/Dart FFI - see api.hpp's own comment. ---
+add_library(api STATIC src/api/api.cpp)
+target_include_directories(api PUBLIC src/api)
+target_link_libraries(api PRIVATE database geometry scene view_style pipeline render io)
+le_enable_coverage_instrumentation(api)
+
 # --- tests ---
 add_executable(backend_tests
     src/database/tests/database_test.cpp
@@ -170,11 +179,13 @@ add_executable(backend_tests
     src/render/tests/render_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
+    src/api/tests/api_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io api GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"
+    API_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures"
 )
 le_enable_coverage_instrumentation(backend_tests)
 gtest_discover_tests(backend_tests)
