@@ -321,15 +321,25 @@ full history. Add `--benchmark_repetitions=5
 two approaches, and `--benchmark_filter=<regex>` to run a subset.
 
 `src/pipeline/benchmarks/render_preview.cpp` (target `render_preview`) is a
-dev-only sibling tool, not a benchmark: runs `Pipeline`/`Renderer` against
-the exact same stress data/`Scene` (via the shared `stress_data.hpp`) and
-writes the resulting `SkPicture`, rasterized, as a PNG —
-`./build/render_preview [output.png]` — so what's actually being benchmarked
+dev-only sibling tool, not a benchmark: `./build/render_preview a.lef
+[b.lef ...]` reads every given LEF file into one shared `Root`, runs
+`Pipeline`/`Renderer` against every Design's Abstract found across all of
+them, and writes one rasterized `SkPicture` per Design as
+`preview/<library-name>__<design-name>.png` — so a real LEF file's render
 can be visually sanity-checked (layer colors, bottom-up z-order, Terminal
-labels) without waiting for Flutter texture wiring. Not run by `ctest` or
-the `coverage` target. The dark-gray background it clears to before drawing
-is a preview-only convenience (`Renderer` itself draws no background), not
-part of the render pipeline.
+labels) without waiting for Flutter texture wiring. A single shared `Root`
+(not one per file) matters because LEF is commonly split across a tech file
+(`LAYER`s, no macros) and one or more macro/cell files (`MACRO`/`PIN`s
+referencing those layers by name) — `LEFReader::read_lef` already supports
+this (reuses an existing `Technology` instead of creating a new one when
+the `Root` already has one), so pass the tech file first when a macro file
+depends on it. Each Abstract gets its own `Scene`, fitted (uniform scale,
+no stretch, padded, centered) to that Abstract's own content bbox — real
+macros don't share a common scale/pan the way the benchmark's synthetic
+stress data does. Not run by `ctest` or the `coverage` target. The
+dark-gray background it clears to before drawing is a preview-only
+convenience (`Renderer` itself draws no background), not part of the
+render pipeline.
 
 ## Conventions observed in existing code
 
