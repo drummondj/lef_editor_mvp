@@ -27,3 +27,4 @@ src/lefdef/**/defwrite/defwrite
 __pycache__/
 lefRWarning.log
 *.profraw
+.cache
