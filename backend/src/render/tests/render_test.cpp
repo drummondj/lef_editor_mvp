@@ -280,3 +280,117 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
     renderer.build_picture(pixel_shapes, scene, view_layers);
     EXPECT_EQ(renderer.picture_calls(), 2u);
 }
+
+TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
+{
+    // M1 (red, palette index 0) sits at low dbu y; M2 (green, palette
+    // index 1) sits at high dbu y - physically "above" M1 in the design.
+    // If rasterize() didn't flip, M2 (the "up" shape) would end up nearer
+    // the bottom of the buffer instead.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+    add_obstruction_shape(Shape{.layer_name = "M2", .rects = {Rect{.ll = {10, 70}, .ur = {30, 90}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    ASSERT_NE(buffer.data, nullptr);
+
+    auto channel_at = [&](int x, int y, int channel)
+    {
+        return buffer.data[static_cast<size_t>(y) * buffer.row_bytes + static_cast<size_t>(x) * 4 + static_cast<size_t>(channel)];
+    };
+
+    // Near the top of the buffer (row 20): M2's green, not M1's red.
+    EXPECT_GT(channel_at(20, 20, 1), 0);
+    EXPECT_EQ(channel_at(20, 20, 0), 0);
+
+    // Near the bottom of the buffer (row 80): M1's red, not M2's green.
+    EXPECT_GT(channel_at(20, 80, 0), 0);
+    EXPECT_EQ(channel_at(20, 80, 1), 0);
+}
+
+TEST_F(RenderFixture, RasterizeBytesArePremultipliedRgba8888RegardlessOfPlatform)
+{
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+
+    const Color &fill = view_layers.get(shapes.begin()->first)->style.fill_color;
+    ASSERT_LT(fill.a, 255); // this test's premultiply math assumes non-opaque fill
+
+    // dbu (25,25) -> pixel (25,25) (pan=0, scale=1) -> device (25, 100-25)
+    // after rasterize()'s Y-flip - well inside the 10..30 rect, away from
+    // any antialiased edge or the label at its centroid.
+    const uint8_t *p = buffer.data + static_cast<size_t>(75) * buffer.row_bytes + static_cast<size_t>(25) * 4;
+
+    // Mirrors SkMulDiv255Round's exact rounding (SkMathPriv.h) rather than
+    // an approximation, so this isn't coincidentally right for one alpha
+    // value and wrong for another.
+    auto premultiply = [](uint8_t c, uint8_t a)
+    {
+        unsigned prod = static_cast<unsigned>(c) * a + 128;
+        return static_cast<uint8_t>((prod + (prod >> 8)) >> 8);
+    };
+
+    EXPECT_EQ(p[0], premultiply(fill.r, fill.a)); // R
+    EXPECT_EQ(p[1], premultiply(fill.g, fill.a)); // G
+    EXPECT_EQ(p[2], premultiply(fill.b, fill.a)); // B
+    EXPECT_EQ(p[3], fill.a);                      // A
+}
+
+TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract, nothing drawn
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+
+    ASSERT_EQ(buffer.width, 100);
+    ASSERT_EQ(buffer.height, 100);
+    const uint8_t *p = buffer.data + static_cast<size_t>(50) * buffer.row_bytes + static_cast<size_t>(50) * 4;
+    EXPECT_EQ(p[3], 0);
+}
+
+TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
+{
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    renderer.rasterize(picture, scene);
+    renderer.rasterize(picture, scene);
+    EXPECT_EQ(renderer.rasterize_calls(), 1u);
+
+    scene.set_pan(Point{1, 1});
+    renderer.rasterize(picture, scene);
+    EXPECT_EQ(renderer.rasterize_calls(), 2u);
+}

@@ -2,10 +2,9 @@
 #include "../../io/lef_reader.hpp"
 #include "../../render/render.hpp"
 #include "../pipeline.hpp"
-#include "include/core/SkColor.h"
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkPixmap.h"
 #include "include/core/SkStream.h"
-#include "include/core/SkSurface.h"
 #include "include/encode/SkPngEncoder.h"
 #include <cstdio>
 #include <filesystem>
@@ -64,22 +63,17 @@ namespace
         return scene;
     }
 
-    bool write_png(const SkPicture &picture, int width, int height, const std::string &output_path)
+    // Encodes Renderer::rasterize()'s own output directly - using the same
+    // production rasterization path (RGBA8888, Y-flip applied) this preview
+    // tool exists to sanity-check, rather than a separate ad hoc
+    // SkSurface/drawPicture of its own. The background is therefore fully
+    // transparent wherever nothing was drawn (Renderer's real "nothing
+    // here" state), not a dark-gray preview convenience like this used to
+    // clear to - most image viewers render PNG transparency fine.
+    bool write_png(const PixelBuffer &buffer, const std::string &output_path)
     {
-        sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
-
-        // The render pipeline itself draws no background (SkPictureRecorder
-        // just records draw calls) - this dark gray is purely a preview
-        // convenience, not something Renderer produces.
-        surface->getCanvas()->clear(SkColorSetRGB(30, 30, 30));
-        surface->getCanvas()->drawPicture(&picture);
-
-        SkPixmap pixmap;
-        if (!surface->peekPixels(&pixmap))
-        {
-            fprintf(stderr, "Failed to access rasterized pixels for '%s'\n", output_path.c_str());
-            return false;
-        }
+        const SkImageInfo info = SkImageInfo::Make(buffer.width, buffer.height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+        SkPixmap pixmap(info, buffer.data, buffer.row_bytes);
 
         SkFILEWStream stream(output_path.c_str());
         if (!stream.isValid())
@@ -94,7 +88,7 @@ namespace
             return false;
         }
 
-        printf("Wrote %dx%d PNG to %s\n", width, height, output_path.c_str());
+        printf("Wrote %dx%d PNG to %s\n", buffer.width, buffer.height, output_path.c_str());
         return true;
     }
 }
@@ -173,6 +167,7 @@ int main(int argc, char **argv)
         const auto &shapes = pipeline.run(root, scene, view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+        const auto &buffer = renderer.rasterize(picture, scene);
 
         // The design's own library name (derived from whichever file's
         // read_lef call actually declared its MACRO - see the file-level
@@ -183,7 +178,7 @@ int main(int argc, char **argv)
         const std::string output_name = prefix + "__" + design->name + ".png";
         const std::filesystem::path output_path = preview_dir / output_name;
 
-        if (!write_png(*picture, scene.viewport_width_px(), scene.viewport_height_px(), output_path.string()))
+        if (!write_png(buffer, output_path.string()))
             all_ok = false;
     }
 

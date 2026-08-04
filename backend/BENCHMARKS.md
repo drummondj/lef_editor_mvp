@@ -430,3 +430,87 @@ design with many more overlapping rects per shape than these two real
 examples happen to have (the isolated micro-benchmark above gives a per-
 shape cost model - roughly `N^1.15`-ish us for N overlapping rects - for
 estimating that case if it comes up).
+
+## 2026-08-04 — Renderer::rasterize(): SkPicture -> raw RGBA8888 PixelBuffer
+
+Added the pixel-buffer rasterization step README's Plan/open-design-
+questions section flagged as the last piece of `render` before an `api`
+module can exist: `Renderer::rasterize()` rasterizes `build_picture`'s
+`SkPicture` into a `PixelBuffer` (raw pointer + width + height + row_bytes),
+a third `CachedStage`-backed stage keyed the same way as the other two.
+Two decisions the README explicitly deferred to this step, now resolved:
+
+- **Explicit `kRGBA_8888_SkColorType`, not `SkImageInfo::MakeN32Premul`**.
+  `kN32_SkColorType` is platform-native - BGRA on some platforms, RGBA on
+  others (`SkColorType.h`). This project develops on macOS but targets
+  Linux servers (a standing constraint, not new to this change) - using
+  the native-native type would silently produce different byte layouts on
+  the two platforms, invisible until eventually compared against Flutter's
+  actual texture ingestion on Linux. Explicit `kRGBA_8888_SkColorType`
+  guarantees identical bytes regardless of build platform.
+- **Y-axis flip, applied once per frame as a canvas transform in
+  `rasterize()`** (`translate` + `scale(1,-1)`), not by changing
+  `transform_to_pixels`'s per-shape math or reversing output rows after
+  the fact. dbu-space y increases upward (physical layout convention);
+  `transform_to_pixels` maps that straight through with no flip (unchanged
+  by this work), so without correction, a design's "up" would render
+  toward the *bottom* of the buffer (Skia's canvas is y-down).
+
+**A real bug found via actual visual testing, not caught by the unit
+tests**: a whole-canvas flip mirrors *glyph rendering* too, not just shape
+position - Terminal labels came out upside-down/mirrored ("VSS" as "SSV")
+in `render_preview` output. None of the existing text tests caught this
+because `BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentFill`
+only scans for *any* opaque pixel in a region - it doesn't check the glyph
+is actually legible. Fixed in `draw_group`'s text-drawing loop: each label
+draw is now wrapped in a local `save()`/`translate(anchor)`/`scale(1,-1)`/
+`drawString(0,0)`/`restore()` that counter-flips around its own anchor
+point, canceling `rasterize()`'s whole-canvas flip for that glyph while
+still letting its *position* follow the flip. This couples
+`build_picture`'s `SkPicture` to being drawn through `rasterize()`'s
+specific flip for text to render upright - documented in both methods'
+comments, not a hidden dependency. Caught by actually looking at rendered
+output (`render_preview`, now itself switched to call the real
+`Renderer::rasterize()` instead of its own ad hoc `SkSurface` code, so it
+exercises and visually validates the exact production path) - a reminder
+that "didn't crash" and even "found an opaque pixel" pixel-level assertions
+don't catch every real-world rendering bug; occasionally looking at the
+actual image still matters.
+
+Benchmarks (1M-shape stress data, clean Release, `-DENABLE_COVERAGE=OFF`,
+5 repetitions, cv < 1.5% throughout unless noted):
+
+| Benchmark | Result | Notes |
+|---|---|---|
+| `BM_Rasterize` (isolated, fresh `Renderer`/call) | 6.21 ms | ~2000x2000px raster surface, 1M shapes' worth of picture |
+| `BM_Render` (cold, full chain incl. rasterize) | 117 ms | was 115ms before this step existed |
+| `BM_RenderReused_NoChange` | ~0 ms | fully cached, as expected |
+| `BM_RenderReused_PanOnly` (warm, full chain incl. rasterize) | **21.5 ms** | was 12.3-12.6ms before - **now exceeds a 60fps/16.6ms frame budget** |
+
+**The `BM_RenderReused_PanOnly` regression is the headline finding here**,
+confirmed with an in-session A/B (temporarily removed the `rasterize()`
+call from that exact benchmark and re-measured in the same run, rather
+than trusting a cross-session comparison against an earlier number):
+12.5ms without `rasterize()`, 21.5ms with it - a genuine +9.0ms, not noise
+(both measurements cv < 1.5%). That's larger than `BM_Rasterize`'s isolated
+6.21ms; investigated one hypothesis (repeatedly allocating a fresh ~16MB
+raster surface every uncached call - each `CachedStage::get()` cache miss
+constructs a new `RasterizedFrame` before the old one is destroyed, so
+there's real allocate/free churn every pan frame) with a standalone
+isolated micro-benchmark of just `SkSurfaces::Raster` + `clear()` at the
+same 2000x2000 size: 0.252ms, cv 0.43% - ruled out, far too small to
+explain a ~2.8ms gap. More likely explanation, not further chased: `BM_
+Rasterize`'s picture is fixed at one pan value (built once, outside its
+timed loop), while `BM_RenderReused_PanOnly`'s picture is rebuilt every
+iteration at a *different*, incrementing pan value, so each iteration's
+viewport-culled shape count (and therefore what `rasterize()` actually has
+to draw) genuinely varies - not a true apples-to-apples comparison of
+identical workloads.
+
+Comment: this is the first time any full-chain benchmark in this project
+has exceeded the 60fps/16.6ms interactive budget - every prior entry in
+this file explicitly noted staying comfortably under it. README's
+Threading open design question ("no case for threading yet") was written
+against pre-rasterize numbers and should be revisited with this - not done
+as part of this change (out of scope for landing the rasterization step
+itself), but flagged here and in README directly so it isn't lost.

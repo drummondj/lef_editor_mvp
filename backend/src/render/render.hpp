@@ -6,10 +6,13 @@
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathBuilder.h"
+#include "include/core/SkImageInfo.h"
 #include "include/core/SkPicture.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkSurface.h"
 #include "include/core/SkTypeface.h"
+#include <cstdint>
 #include <map>
 #include <tuple>
 #include <vector>
@@ -48,13 +51,15 @@ namespace le
     /// @brief A Shape transformed from dbu-space to pixel-space (Scene's
     /// `pixel = (dbu - pan) * scale`), mirroring Shape's own
     /// rects/polygons/paths/texts structure with double coordinates instead
-    /// of Rect/Polygon/Path/Text's integer dbu ones. No Y-axis flip is
-    /// applied here - whether pixel space should be flipped for a
-    /// particular screen/texture convention is a later, unresolved concern
-    /// (e.g. when actually blitting to a Flutter texture), not decided by
-    /// this transform. No ViewLayerId field - callers get that from the
-    /// grouping map key (see Renderer) instead of carrying a redundant copy
-    /// per shape.
+    /// of Rect/Polygon/Path/Text's integer dbu ones. Still no Y-axis flip
+    /// applied here - dbu-space y increases upward (physical layout
+    /// convention) and this maps it straight through, so pixel-space y does
+    /// too, which doesn't match Skia's own y-down canvas convention until
+    /// corrected. That correction happens at `Renderer::rasterize()` (a
+    /// canvas transform applied once per frame, not a per-shape one here) -
+    /// see its own doc comment. No ViewLayerId field - callers get that
+    /// from the grouping map key (see Renderer) instead of carrying a
+    /// redundant copy per shape.
     struct PixelShape
     {
         std::vector<PixelRect> rects;
@@ -63,14 +68,41 @@ namespace le
         std::vector<PixelText> texts;
     };
 
+    /// @brief Raw RGBA8888 pixel data for one rasterized frame, produced by
+    /// `Renderer::rasterize()`. Explicitly `kRGBA_8888_SkColorType` (not
+    /// Skia's platform-native `kN32_SkColorType`, which is BGRA on some
+    /// platforms and RGBA on others - see `SkColorType.h`) so the byte
+    /// layout is identical between this project's macOS dev machine and
+    /// its Linux deployment target; the raw output isn't visually
+    /// inspectable, so a silent per-platform channel-order mismatch here
+    /// would be very easy to miss until it showed up as wrong colors on
+    /// Linux specifically. Premultiplied alpha, row-major, top-to-bottom
+    /// (row 0 is the top on-screen row - see `rasterize()`'s Y-flip). Exact
+    /// row_bytes may exceed `width * 4` (Skia may pad rows for alignment) -
+    /// always index by it, never assume a tight stride. `data` points into
+    /// memory owned by the `Renderer` instance (the cached raster surface
+    /// backing it) - valid only until the next call that invalidates this
+    /// cache entry, same lifetime convention as `build_picture`'s returned
+    /// `sk_sp<SkPicture>&`. The exact format/orientation a real Flutter
+    /// texture needs isn't confirmed against Flutter's own API yet (no
+    /// `api`/plugin module exists in this repo yet) - revisit this comment
+    /// once that integration happens.
+    struct PixelBuffer
+    {
+        const uint8_t *data = nullptr;
+        int width = 0;
+        int height = 0;
+        size_t row_bytes = 0;
+    };
+
     /// @brief Transforms Pipeline's filtered, ViewLayerId-grouped dbu-space
-    /// output into pixel space, then records it into an SkPicture via Skia
-    /// draw calls. Two more CachedStage-backed stages (see pipeline.hpp),
-    /// keyed the same way Pipeline::filter_by_layer_visibility's output
-    /// already is - AbstractId + Scene::viewport_version() +
-    /// Scene::visibility_version() already cover everything the pixel
-    /// transform depends on (pan/scale/viewport-size all bump
-    /// viewport_version()).
+    /// output into pixel space, records it into an SkPicture via Skia draw
+    /// calls, then rasterizes that picture into a raw RGBA8888 PixelBuffer.
+    /// Three CachedStage-backed stages (see pipeline.hpp), keyed the same
+    /// way Pipeline::filter_by_layer_visibility's output already is -
+    /// AbstractId + Scene::viewport_version() + Scene::visibility_version()
+    /// already cover everything all three depend on (pan/scale/viewport-
+    /// size all bump viewport_version()).
     ///
     /// Grouping is preserved through the transform (std::map<ViewLayerId,
     /// vector<PixelShape>>, not a flat vector) so build_picture can look up
@@ -187,10 +219,82 @@ namespace le
             });
         }
 
+        /// @brief Rasterize `picture` into a raw RGBA8888 PixelBuffer sized
+        /// to the Scene's viewport - the step this project's README's open
+        /// design questions flagged the Y-axis-flip decision as belonging
+        /// to (not `transform_to_pixels`, which stays a pure, unflipped
+        /// dbu->pixel map either way). dbu-space y increases upward
+        /// (physical layout convention); PixelShape's own transform maps
+        /// that straight through with no flip, so without correction here,
+        /// increasing dbu y would end up increasing *pixel row index* -
+        /// i.e. the design's "up" would render toward the bottom of the
+        /// buffer, since Skia's own canvas is y-down. Corrected with one
+        /// canvas-level flip (`translate` + `scale(1,-1)`) applied once
+        /// before drawing the whole picture, not by changing
+        /// `transform_to_pixels`'s per-shape math or reversing output rows
+        /// after the fact - cheapest place to do it, and keeps that
+        /// already-tested transform simple. A whole-canvas flip mirrors
+        /// glyph rendering too, though (Skia has no notion that text is
+        /// directionally special) - `draw_group`'s text-drawing loop
+        /// counter-flips locally around each label's own anchor so glyphs
+        /// stay upright under this; see its own comment for why that
+        /// couples `build_picture`'s `SkPicture` to being drawn through
+        /// this specific flip to render text right-side-up.
+        ///
+        /// Uses an explicit `kRGBA_8888_SkColorType` raster surface, not
+        /// `SkImageInfo::MakeN32Premul` (which picks Skia's *platform*-
+        /// native `kN32_SkColorType` - BGRA on some platforms, RGBA on
+        /// others): this project develops on macOS but targets Linux
+        /// servers, and a pixel buffer meant to eventually cross into
+        /// Flutter needs the same byte layout on both, not whatever the
+        /// build machine's native order happens to be. Clears to fully
+        /// transparent first - the real "nothing drawn here" state for
+        /// content meant to be composited into a Flutter texture.
+        ///
+        /// The returned PixelBuffer's `data` points into the backing
+        /// raster surface kept alive inside this cache entry (no extra
+        /// copy) - valid until the next call that invalidates it, same
+        /// convention as `build_picture`'s returned `sk_sp<SkPicture>&`.
+        /// `peekPixels` is unchecked here (unlike e.g. render_preview.cpp's
+        /// defensive check): it's documented to always succeed for a
+        /// surface this function itself just created via `SkSurfaces::Raster`.
+        const PixelBuffer &rasterize(const sk_sp<SkPicture> &picture, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            return rasterized_.get(key, [&]
+            {
+                const int width = scene.viewport_width_px();
+                const int height = scene.viewport_height_px();
+
+                const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+
+                SkCanvas *canvas = surface->getCanvas();
+                canvas->clear(SK_ColorTRANSPARENT);
+                canvas->translate(0, static_cast<SkScalar>(height));
+                canvas->scale(1, -1);
+                canvas->drawPicture(picture);
+
+                SkPixmap pixmap;
+                surface->peekPixels(&pixmap);
+
+                return RasterizedFrame{
+                    .surface = std::move(surface),
+                    .buffer = PixelBuffer{
+                        .data = static_cast<const uint8_t *>(pixmap.addr()),
+                        .width = width,
+                        .height = height,
+                        .row_bytes = pixmap.rowBytes(),
+                    },
+                };
+            }).buffer;
+        }
+
         // Number of times each stage actually recomputed - exposed purely
         // to make cache hits/misses observable in tests.
         uint64_t transform_calls() const { return pixel_shapes_.call_count(); }
         uint64_t picture_calls() const { return picture_.call_count(); }
+        uint64_t rasterize_calls() const { return rasterized_.call_count(); }
 
     private:
         static SkColor to_sk_color(Color c) { return SkColorSetARGB(c.a, c.r, c.g, c.b); }
@@ -296,13 +400,45 @@ namespace le
 
                 if (has_outline)
                 {
+                    // rasterize() applies a whole-canvas Y-flip on top of
+                    // this picture (see its own comment) so shape geometry
+                    // ends up correctly oriented - but that same flip would
+                    // also mirror glyph rendering upside-down, since Skia
+                    // has no notion that text is directionally special.
+                    // Counter-flip locally around each label's own anchor
+                    // point so the two cancel out and glyphs stay upright;
+                    // the label's position still moves with the whole-canvas
+                    // flip (translate happens first, at the untouched
+                    // anchor coordinates), only its own rendering doesn't.
+                    // This does mean this SkPicture's text only renders
+                    // right-side-up when drawn through rasterize()'s flip -
+                    // fine today since that's the only consumer, but a
+                    // future direct-to-canvas consumer would need the same
+                    // whole-canvas flip applied for text to still be upright.
                     for (const auto &t : shape.texts)
-                        canvas.drawString(t.label.c_str(), static_cast<SkScalar>(t.location.x), static_cast<SkScalar>(t.location.y), font, text_paint);
+                    {
+                        canvas.save();
+                        canvas.translate(static_cast<SkScalar>(t.location.x), static_cast<SkScalar>(t.location.y));
+                        canvas.scale(1, -1);
+                        canvas.drawString(t.label.c_str(), 0, 0, font, text_paint);
+                        canvas.restore();
+                    }
                 }
             }
         }
 
+        // Bundles the PixelBuffer view together with the raster surface
+        // that owns its backing memory, so the CachedStage below keeps
+        // that memory alive for as long as the cache entry is valid -
+        // PixelBuffer itself holds no ownership, just a view into this.
+        struct RasterizedFrame
+        {
+            sk_sp<SkSurface> surface;
+            PixelBuffer buffer;
+        };
+
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
     };
 }

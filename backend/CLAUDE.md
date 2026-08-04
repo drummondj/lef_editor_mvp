@@ -132,13 +132,13 @@ the full brief and the live plan checklist.
   (dominated by `Geometry::get_label_location`, ~356ns/call, ~36ms across
   100K Terminals at this benchmark's scale — verified with an isolated
   micro-benchmark, not assumed).
-- `src/render/` — `Renderer`, two more stages on top of `Pipeline`'s
-  grouped output, same `CachedStage`/chaining pattern:
-  `transform_to_pixels` (dbu→pixel via `pixel = (dbu - pan) * scale` — no
-  Y-axis flip; whether one belongs here or at a later screen/texture-blit
-  step is unresolved, not decided by this transform) then `build_picture`
-  (Skia `SkPictureRecorder`/`SkCanvas` draw calls). Both keyed on
-  `AbstractId` + `viewport_version()` + `visibility_version()`, matching
+- `src/render/` — `Renderer`, three stages on top of `Pipeline`'s grouped
+  output, same `CachedStage`/chaining pattern: `transform_to_pixels`
+  (dbu→pixel via `pixel = (dbu - pan) * scale` — no Y-axis flip, that
+  happens later, at `rasterize`) → `build_picture` (Skia
+  `SkPictureRecorder`/`SkCanvas` draw calls) → `rasterize` (rasterizes the
+  `SkPicture` into a raw `PixelBuffer`). All three keyed on `AbstractId` +
+  `viewport_version()` + `visibility_version()`, matching
   `filter_by_layer_visibility`'s key. Takes a `Pipeline&` from the caller
   rather than owning one, matching how `Pipeline`'s own stages take the
   previous stage's output explicitly. `transform_to_pixels` preserves the
@@ -165,16 +165,38 @@ the full brief and the live plan checklist.
   header-only around its own vendored C headers. `render` is therefore
   `add_library(render STATIC ...)` in `CMakeLists.txt`, not `INTERFACE`
   like the other pipeline-adjacent modules.
-  Single-threaded; `BENCHMARKS.md` shows rendering adds a small, bounded
-  cost on top of the pipeline (cold or warm) at 1M shapes, and the warm
-  path stays comfortably under a 60fps budget, so there's no benchmark-backed
-  case for a background thread yet (see README's Threading open design
-  question — revisit if a future benchmark, e.g. with actual pixel
-  rasterization, shows otherwise). Fully covered by `render_test.cpp`,
+  `rasterize` produces a `PixelBuffer` (raw pointer + width + height +
+  row_bytes) using an explicit `kRGBA_8888_SkColorType` raster surface —
+  not `SkImageInfo::MakeN32Premul`'s platform-native `kN32_SkColorType`
+  (BGRA on some platforms, RGBA on others) — so the byte layout is
+  identical between this project's macOS dev machine and its Linux
+  deployment target. It also applies the Y-axis flip that
+  `transform_to_pixels` deliberately doesn't (dbu-space y increases
+  upward; Skia's canvas is y-down): one `translate`+`scale(1,-1)` canvas
+  transform applied once before drawing the whole picture, not per-shape.
+  A whole-canvas flip mirrors glyph rendering too, though — `build_picture`
+  wraps each label's `drawString` in a local `save()`/`translate(anchor)`/
+  `scale(1,-1)`/`drawString(0,0)`/`restore()` that counter-flips around its
+  own anchor so text stays upright, which couples that `SkPicture` to
+  being drawn through `rasterize()`'s specific flip for text to render
+  correctly (documented in both methods, not a hidden dependency) — found
+  by actually looking at rendered output (`render_preview`) after landing
+  the flip, not caught by the existing pixel-level tests (see
+  `BENCHMARKS.md`'s 2026-08-04 entry).
+  Single-threaded; `rasterize()` reopened the previously-settled Threading
+  question (see README's open design questions) — the warm/interactive
+  pan-only path now measures 21.5ms at 1M shapes, the first time this
+  project has exceeded a 60fps/16.6ms budget rather than stayed
+  comfortably under it (see `BENCHMARKS.md`). Not investigated further as
+  part of landing `rasterize()` itself. Fully covered by `render_test.cpp`,
   including real pixel-color assertions (rasterize the `SkPicture` into an
-  `SkSurface` and read back actual pixels via `SkBitmap`), not just
-  "didn't crash" — including a text-rendering test that scans for the
-  label's actual opaque ink, not just that `drawString` was called.
+  `SkSurface`/read back actual pixels for `build_picture`'s own tests, and
+  reading `rasterize()`'s own `PixelBuffer` bytes directly — including an
+  exact-premultiplied-byte check mirroring Skia's own `SkMulDiv255Round`
+  rounding, and a Y-flip orientation check using two differently-colored
+  layers at different dbu heights), not just "didn't crash" — including a
+  text-rendering test that scans for the label's actual opaque ink, not
+  just that `drawString` was called.
   Depends on a **machine-specific Skia checkout, not committed to this
   repo** — see the Skia setup note under Build below.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
@@ -324,22 +346,27 @@ two approaches, and `--benchmark_filter=<regex>` to run a subset.
 dev-only sibling tool, not a benchmark: `./build/render_preview a.lef
 [b.lef ...]` reads every given LEF file into one shared `Root`, runs
 `Pipeline`/`Renderer` against every Design's Abstract found across all of
-them, and writes one rasterized `SkPicture` per Design as
+them, and writes one PNG per Design as
 `preview/<library-name>__<design-name>.png` — so a real LEF file's render
 can be visually sanity-checked (layer colors, bottom-up z-order, Terminal
-labels) without waiting for Flutter texture wiring. A single shared `Root`
-(not one per file) matters because LEF is commonly split across a tech file
-(`LAYER`s, no macros) and one or more macro/cell files (`MACRO`/`PIN`s
-referencing those layers by name) — `LEFReader::read_lef` already supports
-this (reuses an existing `Technology` instead of creating a new one when
-the `Root` already has one), so pass the tech file first when a macro file
-depends on it. Each Abstract gets its own `Scene`, fitted (uniform scale,
-no stretch, padded, centered) to that Abstract's own content bbox — real
-macros don't share a common scale/pan the way the benchmark's synthetic
-stress data does. Not run by `ctest` or the `coverage` target. The
-dark-gray background it clears to before drawing is a preview-only
-convenience (`Renderer` itself draws no background), not part of the
-render pipeline.
+labels, orientation) without waiting for Flutter texture wiring. A single
+shared `Root` (not one per file) matters because LEF is commonly split
+across a tech file (`LAYER`s, no macros) and one or more macro/cell files
+(`MACRO`/`PIN`s referencing those layers by name) — `LEFReader::read_lef`
+already supports this (reuses an existing `Technology` instead of creating
+a new one when the `Root` already has one), so pass the tech file first
+when a macro file depends on it. Each Abstract gets its own `Scene`,
+fitted (uniform scale, no stretch, padded, centered) to that Abstract's
+own content bbox — real macros don't share a common scale/pan the way the
+benchmark's synthetic stress data does. Not run by `ctest` or the
+`coverage` target. Encodes `Renderer::rasterize()`'s own `PixelBuffer`
+output directly (`SkPixmap` wrapping the raw bytes, no intermediate
+`SkSurface` of its own) — the same production rasterization path this
+tool exists to sanity-check, including its Y-flip and RGBA8888 byte
+layout, rather than a separate ad hoc rasterization. Background is
+therefore fully transparent wherever nothing was drawn (`Renderer`'s real
+"nothing here" state), not a dark-gray preview convenience like it used to
+clear to before `rasterize()` existed.
 
 ## Conventions observed in existing code
 

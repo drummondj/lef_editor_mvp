@@ -199,10 +199,32 @@ static void BM_BuildPicture(benchmark::State &state)
 }
 BENCHMARK(BM_BuildPicture)->Unit(benchmark::kMillisecond);
 
+static void BM_Rasterize(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    Pipeline setup_pipeline;
+    const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
+    Renderer setup_renderer;
+    const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
+    const auto &picture = setup_renderer.build_picture(pixel_shapes, scene, data.view_layers);
+
+    for (auto _ : state)
+    {
+        Renderer renderer;
+        const auto &buffer = renderer.rasterize(picture, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
+    }
+    state.SetItemsProcessed(state.iterations() * pixel_shapes.size());
+}
+BENCHMARK(BM_Rasterize)->Unit(benchmark::kMillisecond);
+
 // A fresh Pipeline + Renderer every iteration, running the full
-// generate -> filter -> filter -> transform -> picture chain once each -
-// the "just switched to a different Abstract" cold-start case, now
-// including the render stages.
+// generate -> filter -> filter -> transform -> picture -> rasterize chain
+// once each - the "just switched to a different Abstract" cold-start case,
+// now including all three render stages.
 static void BM_Render(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -215,7 +237,9 @@ static void BM_Render(benchmark::State &state)
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
-        benchmark::DoNotOptimize(picture.get());
+        const auto &buffer = renderer.rasterize(picture, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -224,8 +248,9 @@ BENCHMARK(BM_Render)->Unit(benchmark::kMillisecond);
 // Reused Pipeline + Renderer across iterations, mirroring the
 // BM_RunReused_* scenarios above but through the full render chain -
 // real numbers for the threading question (README's open design
-// question): is Skia picture generation actually a bottleneck on the
-// interactive path, or does it stay cheap because it's caching-aware too?
+// question): is Skia picture generation/rasterization actually a
+// bottleneck on the interactive path, or does it stay cheap because it's
+// caching-aware too?
 
 static void BM_RenderReused_NoChange(benchmark::State &state)
 {
@@ -239,7 +264,9 @@ static void BM_RenderReused_NoChange(benchmark::State &state)
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
-        benchmark::DoNotOptimize(picture.get());
+        const auto &buffer = renderer.rasterize(picture, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
@@ -259,7 +286,9 @@ static void BM_RenderReused_PanOnly(benchmark::State &state)
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
-        benchmark::DoNotOptimize(picture.get());
+        const auto &buffer = renderer.rasterize(picture, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
     }
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
