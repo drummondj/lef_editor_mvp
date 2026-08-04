@@ -92,6 +92,16 @@ extern "C"
     /// Scene::set_viewport_size directly.
     void le_set_viewport_size(LeHandle *handle, int32_t width_px, int32_t height_px);
 
+    /// @brief Fit the viewport's pan/scale to the currently selected
+    /// Design's content bbox: uniform scale (no stretch) so the content
+    /// fills the viewport set via le_set_viewport_size() with `padding_px`
+    /// of margin on every side, pan centering it. Mirrors
+    /// Scene::fit_to_content, using Pipeline::generate_shapes' output for
+    /// the bbox (same shapes le_render_pixel_buffer() would draw). A no-op
+    /// if handle is null; degrades to scale 1.0 / pan (0, 0) if no Design
+    /// is selected or its Abstract has no shapes, rather than crashing.
+    void le_fit_scene(LeHandle *handle, int32_t padding_px);
+
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently
     /// selected Design and viewport, returning the resulting pixel

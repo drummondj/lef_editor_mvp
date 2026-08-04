@@ -16,11 +16,9 @@ namespace
     constexpr int kOutputSize = 1000;
     constexpr int kPaddingPx = 20;
 
-    // Fits abstract_id's content bbox into a kOutputSize x kOutputSize image:
-    // uniform scale (no stretch) with kPaddingPx of margin on every side, and
-    // pan set to center the content. Falls back to a fixed default scale/pan
-    // if the abstract has no shapes (empty bbox), rather than dividing by
-    // zero width/height.
+    // Fits abstract_id's content bbox into a kOutputSize x kOutputSize image
+    // with kPaddingPx of margin on every side - see Scene::fit_to_content
+    // (also used by api.cpp's le_fit_scene) for the actual scale/pan math.
     Scene fit_scene(const Root &root, AbstractId abstract_id, Pipeline &pipeline, const ViewLayerSet &view_layers)
     {
         Scene scene;
@@ -34,32 +32,7 @@ namespace
         for (const auto &rs : generated)
             shape_ptrs.push_back(&rs.shape);
 
-        const std::optional<Rect> bbox = Geometry::bbox(shape_ptrs);
-        if (!bbox)
-        {
-            scene.set_scale(1.0);
-            scene.set_pan(Point{0, 0});
-            return scene;
-        }
-
-        const double content_width = static_cast<double>(bbox->ur.x - bbox->ll.x);
-        const double content_height = static_cast<double>(bbox->ur.y - bbox->ll.y);
-        const double usable_px = kOutputSize - 2 * kPaddingPx;
-
-        double scale = 1.0;
-        if (content_width > 0 || content_height > 0)
-            scale = usable_px / std::max(content_width, content_height);
-
-        // Renderer's pixel transform maps (dbu - pan) * scale to pixel space,
-        // i.e. pan is the dbu point that lands at pixel (0, 0) - not the
-        // viewport center (see render.hpp's PixelShape comment). To center
-        // the content, pan is offset from the bbox's own lower-left corner
-        // by half of the leftover (non-content) space on each axis.
-        const int64_t pan_x = bbox->ll.x - static_cast<int64_t>((kOutputSize / scale - content_width) / 2.0);
-        const int64_t pan_y = bbox->ll.y - static_cast<int64_t>((kOutputSize / scale - content_height) / 2.0);
-
-        scene.set_scale(scale);
-        scene.set_pan(Point{pan_x, pan_y});
+        scene.fit_to_content(Geometry::bbox(shape_ptrs), kPaddingPx);
         return scene;
     }
 

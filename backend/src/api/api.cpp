@@ -1,5 +1,6 @@
 #include "api.hpp"
 #include "../database/database.hpp"
+#include "../geometry/geometry.hpp"
 #include "../io/lef_reader.hpp"
 #include "../pipeline/pipeline.hpp"
 #include "../render/render.hpp"
@@ -108,6 +109,21 @@ extern "C"
         if (!handle)
             return;
         handle->scene.set_viewport_size(width_px, height_px);
+    }
+
+    void le_fit_scene(LeHandle *handle, int32_t padding_px)
+    {
+        if (!handle)
+            return;
+
+        const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
+
+        std::vector<const le::Shape *> shape_ptrs;
+        shape_ptrs.reserve(generated.size());
+        for (const auto &rs : generated)
+            shape_ptrs.push_back(&rs.shape);
+
+        handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
     }
 
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)

@@ -2,7 +2,10 @@
 #include "../database/database.hpp"
 #include "../view_style/view_style.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -63,6 +66,51 @@ namespace le
         // cheap for a caller to compare instead of snapshotting pan/scale/
         // viewport size by value.
         uint64_t viewport_version() const { return viewport_version_; }
+
+        // Fits `bbox` into the current viewport (already set via
+        // set_viewport_size) with `padding_px` of margin on every side:
+        // uniform scale (no stretch, bounded by whichever axis is tighter)
+        // and pan centering the content. Falls back to scale 1.0 / pan
+        // (0, 0) if bbox is nullopt (nothing to fit, e.g. an empty
+        // Abstract) or the viewport has non-positive size, rather than
+        // dividing by zero.
+        void fit_to_content(std::optional<Rect> bbox, int64_t padding_px)
+        {
+            if (!bbox || viewport_width_px_ <= 0 || viewport_height_px_ <= 0)
+            {
+                set_scale(1.0);
+                set_pan(Point{0, 0});
+                return;
+            }
+
+            const double content_width = static_cast<double>(bbox->ur.x - bbox->ll.x);
+            const double content_height = static_cast<double>(bbox->ur.y - bbox->ll.y);
+            const double usable_width_px = viewport_width_px_ - 2 * padding_px;
+            const double usable_height_px = viewport_height_px_ - 2 * padding_px;
+
+            // Each axis's own limit on scale, skipped (treated as
+            // unbounded) when that axis's content span is zero - a
+            // degenerate single-line/point bbox shouldn't force scale to
+            // infinity via a divide-by-zero.
+            const double scale_x = content_width > 0 ? usable_width_px / content_width : std::numeric_limits<double>::infinity();
+            const double scale_y = content_height > 0 ? usable_height_px / content_height : std::numeric_limits<double>::infinity();
+            double scale = std::min(scale_x, scale_y);
+            if (!std::isfinite(scale) || scale <= 0.0)
+                scale = 1.0;
+
+            // Renderer's pixel transform maps (dbu - pan) * scale to pixel
+            // space, i.e. pan is the dbu point that lands at pixel (0, 0) -
+            // not the viewport center. To center the content, pan is offset
+            // from the bbox's own lower-left corner by half of the leftover
+            // (non-content) space on each axis - using the full viewport
+            // size here (not the padding-reduced usable size), since
+            // padding is symmetric and cancels out of the centering offset.
+            const int64_t pan_x = bbox->ll.x - static_cast<int64_t>((viewport_width_px_ / scale - content_width) / 2.0);
+            const int64_t pan_y = bbox->ll.y - static_cast<int64_t>((viewport_height_px_ / scale - content_height) / 2.0);
+
+            set_scale(scale);
+            set_pan(Point{pan_x, pan_y});
+        }
 
         // --- Layer visibility (defaults to visible until toggled) ---
         // Keyed by ViewLayerId (purpose-tagged: e.g. "M1 terminals" and "M1

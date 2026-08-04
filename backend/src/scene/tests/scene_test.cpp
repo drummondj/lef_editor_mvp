@@ -136,6 +136,63 @@ TEST(Scene, SelectDeselectAndClear)
     EXPECT_TRUE(scene.selection().empty());
 }
 
+TEST(Scene, FitToContentCentersAndScalesToFillTheTighterAxis)
+{
+    Scene scene;
+    scene.set_viewport_size(1000, 1000);
+
+    // 100x50 dbu content, 20px padding on each side -> usable 960px, scale
+    // bound by the wider (x) axis: 960 / 100 = 9.6.
+    Rect bbox{.ll = Point{0, 0}, .ur = Point{100, 50}};
+    scene.fit_to_content(bbox, 20);
+
+    EXPECT_DOUBLE_EQ(scene.scale(), 9.6);
+
+    // Content is centered: leftover space on y is (1000/9.6 - 50) ~= 54.17,
+    // half of that offsets pan below the bbox's own ll.y.
+    const double expected_pan_y = 0 - (1000.0 / 9.6 - 50.0) / 2.0;
+    EXPECT_EQ(scene.pan().x, 0 - static_cast<int64_t>((1000.0 / 9.6 - 100.0) / 2.0));
+    EXPECT_EQ(scene.pan().y, static_cast<int64_t>(expected_pan_y));
+}
+
+TEST(Scene, FitToContentWithNoBboxFallsBackToDefaultScaleAndPan)
+{
+    Scene scene;
+    scene.set_viewport_size(500, 500);
+    scene.set_scale(3.0);
+    scene.set_pan(Point{10, 10});
+
+    scene.fit_to_content(std::nullopt, 10);
+
+    EXPECT_DOUBLE_EQ(scene.scale(), 1.0);
+    EXPECT_EQ(scene.pan().x, 0);
+    EXPECT_EQ(scene.pan().y, 0);
+}
+
+TEST(Scene, FitToContentWithZeroSizedViewportFallsBackToDefault)
+{
+    Scene scene;
+    Rect bbox{.ll = Point{0, 0}, .ur = Point{100, 100}};
+    scene.fit_to_content(bbox, 10);
+
+    EXPECT_DOUBLE_EQ(scene.scale(), 1.0);
+    EXPECT_EQ(scene.pan().x, 0);
+    EXPECT_EQ(scene.pan().y, 0);
+}
+
+TEST(Scene, FitToContentWithDegenerateZeroWidthBboxDoesNotDivideByZero)
+{
+    Scene scene;
+    scene.set_viewport_size(200, 200);
+
+    // Zero-width content (e.g. a single vertical line) - scale must be
+    // bounded by the y axis only, not blow up via a 1/0 on x.
+    Rect bbox{.ll = Point{5, 0}, .ur = Point{5, 100}};
+    scene.fit_to_content(bbox, 0);
+
+    EXPECT_DOUBLE_EQ(scene.scale(), 2.0); // 200 / 100
+}
+
 TEST(Scene, SelectionDistinguishesObjectKindsWithTheSameRawId)
 {
     // TerminalId{5,0} and ObstructionId{5,0} share the same {index,

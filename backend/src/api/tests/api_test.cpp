@@ -122,6 +122,39 @@ TEST_F(ApiFixture, RenderPixelBufferProducesTheRequestedDimensions)
     EXPECT_EQ(buffer.height, 200);
 }
 
+TEST_F(ApiFixture, FitSceneWithNullHandleDoesNotCrash)
+{
+    le_fit_scene(nullptr, 10);
+}
+
+TEST_F(ApiFixture, FitSceneWithNoDesignSelectedFallsBackToDefaultScaleAndPan)
+{
+    le_set_viewport_size(handle, 100, 100);
+    le_fit_scene(handle, 10);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    EXPECT_EQ(buffer.width, 100);
+    EXPECT_EQ(buffer.height, 100);
+}
+
+TEST_F(ApiFixture, FitSceneFillsTheViewportWithThePinVisible)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 200, 200);
+    le_fit_scene(handle, 10);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+
+    // The macro's content should now fill most of the 200x200 viewport -
+    // sample the center pixel, which sits inside both the 10x10 micron
+    // macro boundary and PIN A's (2,2)-(8,8) micron RECT.
+    const uint8_t *center = buffer.data + static_cast<size_t>(100) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(100) * 4;
+    EXPECT_GT(center[3], 0);
+}
+
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
