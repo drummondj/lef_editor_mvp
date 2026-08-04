@@ -168,6 +168,25 @@ class LefEditorPluginBindings {
   late final _le_set_viewport_size = _le_set_viewport_sizePtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
 
+  /// @brief Fit the viewport's pan/scale to the currently selected
+  /// Design's content bbox: uniform scale (no stretch) so the content
+  /// fills the viewport set via le_set_viewport_size() with `padding_px`
+  /// of margin on every side, pan centering it. Mirrors
+  /// Scene::fit_to_content, using Pipeline::generate_shapes' output for
+  /// the bbox (same shapes le_render_pixel_buffer() would draw). A no-op
+  /// if handle is null; degrades to scale 1.0 / pan (0, 0) if no Design
+  /// is selected or its Abstract has no shapes, rather than crashing.
+  void le_fit_scene(ffi.Pointer<LeHandle> handle, int padding_px) {
+    return _le_fit_scene(handle, padding_px);
+  }
+
+  late final _le_fit_scenePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_fit_scene');
+  late final _le_fit_scene = _le_fit_scenePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
+
   /// @brief Run the full pipeline+render chain (generate -> filter ->
   /// filter -> transform -> picture -> rasterize) for the currently
   /// selected Design and viewport, returning the resulting pixel

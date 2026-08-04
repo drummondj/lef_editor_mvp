@@ -48,15 +48,9 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
-    // testcell.lef's TESTCELL macro is 10x10 microns; UNITS DATABASE
-    // MICRONS 1000 makes that 10000x10000 dbu. Fixed viewport/pan/scale
-    // for this demo (not a real fit-to-content computation, unlike
-    // backend/src/pipeline/benchmarks/render_preview.cpp's own fitting -
-    // this is close enough to comfortably frame a cell this small).
     _editor
       ..setViewportSize(_viewportPx, _viewportPx)
-      ..setScale(0.03)
-      ..setPan(-500, -500);
+      ..fitScene(16);
 
     final texture = await _editor.createTexture();
     await texture.markFrameAvailable();

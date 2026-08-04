@@ -23,9 +23,10 @@ Two separate paths call into the C API — not one:
   ffigen-generated `lib/lef_editor_plugin_bindings_generated.dart`) for
   everything except pixel delivery: `le_create`/`le_destroy`, `le_read_lef`,
   design enumeration/selection, `le_set_pan`/`le_set_scale`/
-  `le_set_viewport_size`, plus a `renderPixelBuffer()` that copies a frame
-  into Dart memory for previewing/testing without a texture. Cheap, called
-  directly from Dart.
+  `le_set_viewport_size`, `le_fit_scene` (`LeEditor.fitScene()` — fits pan/
+  scale to the selected Design's content bbox, see Scene::fit_to_content),
+  plus a `renderPixelBuffer()` that copies a frame into Dart memory for
+  previewing/testing without a texture. Cheap, called directly from Dart.
 - **Native platform texture code** (macOS: `LeApiBridge`/`LeTexture` in
   `macos/Classes/`, implementing `FlutterTexture`; Linux: `FlLeTexture` in
   `linux/lef_texture.cc`, implementing `FlPixelBufferTexture`) calls
@@ -57,11 +58,11 @@ Two separate paths call into the C API — not one:
 - **Lifetime and thread safety are real, open constraints, not just
   disclaimers** — see the doc comment on `LeTexture` in
   `lib/lef_editor_plugin.dart`: a `LeTexture` must be disposed before the
-  `LeEditor` it came from, and a `LeEditor` setter racing a pending,
-  not-yet-rendered `markFrameAvailable` on the engine's raster thread is a
-  genuine data race (backend's Scene/Pipeline/Renderer aren't documented as
-  thread-safe). Not solved at the plugin layer — a real fix needs a lock
-  inside the C API itself.
+  `LeEditor` it came from, and a `LeEditor` setter (including `fitScene`)
+  racing a pending, not-yet-rendered `markFrameAvailable` on the engine's
+  raster thread is a genuine data race (backend's Scene/Pipeline/Renderer
+  aren't documented as thread-safe). Not solved at the plugin layer — a
+  real fix needs a lock inside the C API itself.
 
 ## Open design questions
 
@@ -85,12 +86,6 @@ Two separate paths call into the C API — not one:
   macOS podspec/Linux CMake both hardcode this machine's paths as defaults.
   Not a blocker for local dev; is a blocker before this plugin could ship
   to a machine that isn't this one.
-- **Viewport fitting.** `example/lib/main.dart` uses fixed, hand-picked
-  pan/scale/viewport values sized for `testcell.lef`'s known 10x10 micron
-  cell — there's no general "fit this Design to this viewport" helper yet
-  (unlike backend's own dev-only `render_preview.cpp`, which computes this
-  from the Abstract's real content bbox). Fine for a demo; a real app needs
-  either that logic ported into `LeEditor` or left to the caller.
 
 ## Native linking (macOS — done and verified; Linux — gated, unverified)
 

@@ -139,6 +139,18 @@ class LeEditor {
     _bindings.le_set_viewport_size(_handle, widthPx, heightPx);
   }
 
+  /// Fits the viewport's pan/scale to the currently selected Design's
+  /// content bbox: uniform scale (no stretch) so the content fills the
+  /// viewport set via [setViewportSize] with [paddingPx] of margin on every
+  /// side, pan centering it. Degrades to scale 1.0 / pan (0, 0) if no
+  /// Design is selected or its Abstract has no shapes, rather than
+  /// throwing. Call [setViewportSize] first - this fits to that viewport's
+  /// current size, not a size set afterward.
+  void fitScene(int paddingPx) {
+    _checkNotDisposed();
+    _bindings.le_fit_scene(_handle, paddingPx);
+  }
+
   /// Runs the full pipeline+render chain for the currently selected Design
   /// and viewport, returning the resulting frame copied into Dart-owned
   /// memory. The native `LePixelBuffer.data` this copies from is only valid
