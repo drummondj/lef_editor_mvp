@@ -87,6 +87,52 @@ TEST_F(PipelineFixture, GenerateShapesLeavesViewLayerInvalidForUnresolvableLayer
     EXPECT_FALSE(shapes.front().view_layer.valid());
 }
 
+TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinATerminalPortShape)
+{
+    add_terminal_shape(Shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {0, 0}, .ur = {10, 10}},
+            Rect{.ll = {5, 5}, .ur = {15, 15}},
+        },
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    EXPECT_TRUE(shapes.front().shape.rects.empty());
+    ASSERT_EQ(shapes.front().shape.polygons.size(), 1u); // overlapping -> merged into one polygon
+}
+
+TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinAnObstructionShape)
+{
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {0, 0}, .ur = {10, 10}},
+            Rect{.ll = {5, 5}, .ur = {15, 15}},
+        },
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    EXPECT_TRUE(shapes.front().shape.rects.empty());
+    ASSERT_EQ(shapes.front().shape.polygons.size(), 1u); // overlapping -> merged into one polygon
+}
+
+TEST_F(PipelineFixture, GenerateShapesDoesNotMergeRectsAcrossDifferentPortsOrObstructions)
+{
+    // Two disjoint rects, but each its own separate Shape (own port) -
+    // merging is scoped per-Shape, not across a Terminal's whole geometry.
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "D4"});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {15, 15}}}}}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 2u);
+    EXPECT_EQ(shapes[0].shape.rects.size(), 1u);
+    EXPECT_EQ(shapes[1].shape.rects.size(), 1u);
+}
+
 TEST_F(PipelineFixture, GenerateShapesAddsTerminalLabelAtComputedLocation)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});

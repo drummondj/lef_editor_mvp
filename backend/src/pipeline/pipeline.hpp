@@ -175,6 +175,13 @@ namespace le
                             combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
 
                             shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL)});
+                            // Merges the pushed copy's own rects/polygons in
+                            // place (after combined's accumulated from the
+                            // pre-merge shape above - get_label_location
+                            // unions its own input either way, so which one
+                            // it sees doesn't change the label location) -
+                            // see Geometry::merge_overlapping_fills for why.
+                            Geometry::merge_overlapping_fills(shapes.back().shape);
                         }
                     }
 
@@ -197,7 +204,10 @@ namespace le
                 {
                     const auto *obstruction = root.get_obstruction(obstruction_id);
                     for (const auto &shape : obstruction->shapes)
+                    {
                         shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION)});
+                        Geometry::merge_overlapping_fills(shapes.back().shape);
+                    }
                 }
 
                 if (const AbstractData *abstract = root.get_abstract(abstract_id); abstract && !abstract->boundary.empty())

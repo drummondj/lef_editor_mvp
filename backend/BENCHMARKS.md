@@ -355,3 +355,78 @@ cost, and the warm/interactive path (what real usage actually hits) is
 unaffected either way - `generate_shapes` is cached per-`AbstractId` and
 doesn't rerun on pan/zoom/visibility changes. Revisit only if a future
 benchmark shows this path actually matters more than it does today.
+
+## 2026-08-04 — Merge overlapping rects/polygons within a Shape
+
+Found visually against real LEF data (`render_preview` against
+`Nangate45_stdcell.lef`, not the synthetic stress data): a Terminal Port's
+or Obstruction's Shape can legitimately contain several rects that overlap
+*each other* (e.g. an L/T-shaped pin drawn as two overlapping rects), and
+`build_picture` draws each with a translucent fill - so the overlapping
+region got painted twice, showing up as a visibly darker patch at the
+corner. `Geometry::merge_overlapping_fills(Shape&)` (new) unions a Shape's
+own rects+polygons into a minimal non-overlapping set via boost::geometry,
+replacing both in place; paths are left untouched (they carry width/stroke
+semantics a fill-polygon union would lose, and weren't the source of this
+artifact). Called once per pushed Shape in `generate_shapes`, scoped to
+that Shape alone - not across different Terminals/Obstructions, which
+would destroy the per-object identity `RenderedShape`/selection relies on.
+
+**Existing 1M-shape stress benchmark: no measurable regression**, confirmed
+rather than assumed - every shape in `stress_data.hpp`'s generated LEF has
+exactly one geometry item (a fresh `LAYER ;` before each one forces a new
+Shape), so `merge_overlapping_fills`'s `<=1`-part fast path is a no-op for
+all of it:
+
+| Benchmark | Before | After |
+|---|---|---|
+| `BM_GenerateShapes` (1M shapes) | 106 ms | 105 ms |
+| `BM_Run` (cold) | 112-113 ms | 112 ms |
+| `BM_RunReused_PanOnly` | 8.47 ms | 8.63 ms |
+| `BM_RunReused_VisibilityOnly` | 2.78 ms | 2.66 ms |
+| `BM_Render` (cold, full chain) | - | 115 ms |
+| `BM_RenderReused_PanOnly` | 12.3 ms | 12.6 ms |
+
+All deltas are within each other's run-to-run noise (cv 0.3%-1.6% across 5
+repetitions) - not a real change, as expected given the fast path.
+
+Because the stress data can't exercise the actual union work, added a
+dedicated isolated micro-benchmark (`BM_MergeOverlappingFills`, N
+half-overlapping unit-height rects, `BM_ShapeCopyBaseline` as a control for
+the Shape-copy cost `generate_shapes` already pays regardless of this
+change):
+
+| N rects | Copy alone | Copy + merge |
+|---|---|---|
+| 2 | 0.016 us | 3.48 us |
+| 5 | 0.017 us | 13.6 us |
+| 10 | 0.024 us | 30.1 us |
+| 50 | 0.033 us | 176 us |
+
+The copy cost is negligible throughout - essentially all of the added time
+is `boost::geometry` union work, and it grows slightly worse than linearly
+(1.74us/rect at N=2 vs. 3.52us/rect at N=50): each of the N-1 iterative
+`bg::union_` calls operates on a result that's grown from the previous
+ones, so per-union cost isn't constant.
+
+Real-world check against the two actual cases that motivated this (both
+via a temporary `std::chrono` timing added to `render_preview.cpp` around
+`generate_shapes`, then reverted - not a permanent instrumentation): the
+full `Nangate45_stdcell.lef` standard-cell library (135 designs) went from
+11.1ms to 30.5ms total `generate_shapes` time across every design combined
+(worst single design under 1ms both ways) - real cells' pin/OBS geometry
+does have some genuinely overlapping rects, but not many per shape. The
+dense `fakeram45_1024x32` SRAM macro (the "solid red block" from the
+render-preview conversation) was unaffected either way (~0.6ms both with
+and without) - its visual density comes from many separate shapes packed
+edge-to-edge, not from many overlapping rects *within* one shape, so this
+fix doesn't apply there and correctly does ~nothing.
+
+Comment: `generate_shapes` is cached per-`AbstractId`, so this entire cost
+is paid once per Abstract switch, not per frame - a full standard-cell
+library's ~19ms combined increase (spread across 135 designs, each loaded
+independently as its own Abstract) is not a concern. Not measured: a
+design with many more overlapping rects per shape than these two real
+examples happen to have (the isolated micro-benchmark above gives a per-
+shape cost model - roughly `N^1.15`-ish us for N overlapping rects - for
+estimating that case if it comes up).

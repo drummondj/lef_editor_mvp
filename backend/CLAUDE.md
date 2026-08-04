@@ -78,9 +78,23 @@ the full brief and the live plan checklist.
   distinct `resolve_view_layers`) sharing the same `AbstractId` cache key,
   which just meant two full copies of the shape data where one now
   suffices; merged once the caching redesign made that redundancy visible
-  (see `BENCHMARKS.md`). Keyed on `AbstractId` alone. Each Terminal also
-  gets one text label (its name, placed via `Geometry::get_label_location`
-  on the union of all its Ports' geometry) appended to a real geometric
+  (see `BENCHMARKS.md`). Keyed on `AbstractId` alone. Each pushed Shape also
+  has its own rects/polygons merged in place via
+  `Geometry::merge_overlapping_fills` (a Terminal Port's or Obstruction's
+  Shape can legitimately contain several rects that overlap each other —
+  e.g. an L/T-shaped pin drawn as two overlapping rects, or LEF's OBS
+  ITERATE/DO/STEP array syntax — and drawing each with a translucent fill
+  otherwise double-blends the overlap into a visibly darker patch);
+  scoped to one Shape at a time, never merged across different
+  Terminals/Obstructions, which would destroy the per-object identity
+  `RenderedShape`/selection relies on. Confirmed cheap on real data and a
+  no-op on the synthetic stress benchmark (every shape there has exactly
+  one rect) — see `BENCHMARKS.md`.
+  Each Terminal also gets one text label *per distinct layer_name* it has
+  geometry on (its name, placed via `Geometry::get_label_location` on the
+  union of that layer's geometry across all the Terminal's Ports — a
+  Terminal with shapes on both M1 and M2 gets two independent labels, each
+  tied to its own layer's `ViewLayerId`) appended to a real geometric
   Shape's `.texts` rather than emitted as its own shape, so it survives the
   size filter below (which drops shapes with no bbox, and `Geometry::bbox`
   doesn't account for `Shape::texts`) for free instead of needing special

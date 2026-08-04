@@ -265,4 +265,57 @@ static void BM_RenderReused_PanOnly(benchmark::State &state)
 }
 BENCHMARK(BM_RenderReused_PanOnly)->Unit(benchmark::kMillisecond);
 
+// Isolated micro-benchmark for Geometry::merge_overlapping_fills's own
+// cost. The 1M-shape stress data above can't measure this: every shape
+// there has exactly one geometry item (a fresh "LAYER ;" before each one
+// forces a new Shape - see stress_data.hpp), so the merge always takes its
+// <=1-part no-op fast path. Real multi-rect-per-shape geometry - e.g. LEF's
+// OBS ITERATE/DO/STEP array syntax, or a dense SRAM macro's fabric - is
+// what actually exercises the union, so this benchmarks that directly
+// instead of assuming it's cheap.
+namespace
+{
+    // N unit-height rects spaced 5 dbu apart but 10 dbu wide, so
+    // consecutive rects overlap by half - real merging work for
+    // boost::geometry to do, not N already-disjoint parts unioned into N
+    // separate output polygons.
+    Shape overlapping_rects_shape(int n)
+    {
+        Shape shape{.layer_name = "M1"};
+        shape.rects.reserve(n);
+        for (int i = 0; i < n; ++i)
+            shape.rects.push_back(Rect{.ll = {i * 5, 0}, .ur = {i * 5 + 10, 10}});
+        return shape;
+    }
+}
+
+// Baseline: the Shape copy alone (same copy Pipeline::generate_shapes
+// already pays when pushing into its output vector, merge or not), so
+// BM_MergeOverlappingFills's numbers below can be read as "on top of a
+// cost already being paid" rather than all-new.
+static void BM_ShapeCopyBaseline(benchmark::State &state)
+{
+    const Shape template_shape = overlapping_rects_shape(static_cast<int>(state.range(0)));
+    for (auto _ : state)
+    {
+        Shape copy = template_shape;
+        benchmark::DoNotOptimize(copy);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_ShapeCopyBaseline)->Arg(2)->Arg(5)->Arg(10)->Arg(50)->Unit(benchmark::kMicrosecond);
+
+static void BM_MergeOverlappingFills(benchmark::State &state)
+{
+    const Shape template_shape = overlapping_rects_shape(static_cast<int>(state.range(0)));
+    for (auto _ : state)
+    {
+        Shape copy = template_shape;
+        Geometry::merge_overlapping_fills(copy);
+        benchmark::DoNotOptimize(copy);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_MergeOverlappingFills)->Arg(2)->Arg(5)->Arg(10)->Arg(50)->Unit(benchmark::kMicrosecond);
+
 BENCHMARK_MAIN();
