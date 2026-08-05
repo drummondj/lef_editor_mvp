@@ -115,6 +115,80 @@ TEST_F(ViewStyleFixture, BoundaryColorIsUnaffectedByThePerLayerPalette)
     EXPECT_EQ(boundary->style.fill_color.a, 0);
 }
 
+TEST(ViewStylePalette, CutLayerAboveARoutingLayerSharesItsColor)
+{
+    // LEF LAYER declaration order is bottom-up physical stacking order -
+    // M1 (ROUTING) then V1 (CUT) means V1 sits directly above M1.
+    Root root;
+    TechnologyId technology_id = root.create_technology(TechnologyData{.database_units_microns = 1000.0});
+    LayerId m1 = root.create_layer(LayerData{.technology = technology_id, .name = "M1", .type = "ROUTING"});
+    LayerId v1 = root.create_layer(LayerData{.technology = technology_id, .name = "V1", .type = "CUT"});
+    LayerId m2 = root.create_layer(LayerData{.technology = technology_id, .name = "M2", .type = "ROUTING"});
+
+    ViewLayerSet view_layers = ViewLayerSet::build_for_technology(root, technology_id);
+
+    const Color &m1_color = view_layers.get(view_layers.find(m1, ViewLayerPurpose::TERMINAL))->style.outline_color;
+    const Color &v1_color = view_layers.get(view_layers.find(v1, ViewLayerPurpose::TERMINAL))->style.outline_color;
+    const Color &m2_color = view_layers.get(view_layers.find(m2, ViewLayerPurpose::TERMINAL))->style.outline_color;
+
+    EXPECT_EQ(v1_color.r, m1_color.r);
+    EXPECT_EQ(v1_color.g, m1_color.g);
+    EXPECT_EQ(v1_color.b, m1_color.b);
+
+    // M2 still gets its own distinct color, not V1's/M1's.
+    EXPECT_FALSE(m2_color.r == m1_color.r && m2_color.g == m1_color.g && m2_color.b == m1_color.b);
+}
+
+TEST(ViewStylePalette, CutLayerWithNoRoutingLayerBelowFallsBackToItsOwnBrightColor)
+{
+    Root root;
+    TechnologyId technology_id = root.create_technology(TechnologyData{.database_units_microns = 1000.0});
+    // A CUT layer declared before any ROUTING layer - no "layer below" to
+    // inherit from.
+    LayerId v0 = root.create_layer(LayerData{.technology = technology_id, .name = "V0", .type = "CUT"});
+
+    ViewLayerSet view_layers = ViewLayerSet::build_for_technology(root, technology_id);
+
+    const Color &v0_color = view_layers.get(view_layers.find(v0, ViewLayerPurpose::TERMINAL))->style.outline_color;
+
+    // First slot of the bright ROUTING/CUT palette is red (255, 0, 0).
+    EXPECT_EQ(v0_color.r, 255);
+    EXPECT_EQ(v0_color.g, 0);
+    EXPECT_EQ(v0_color.b, 0);
+}
+
+TEST(ViewStylePalette, NonRoutingNonCutLayersUseTheMutedPaletteNotTheBrightOne)
+{
+    Root root;
+    TechnologyId technology_id = root.create_technology(TechnologyData{.database_units_microns = 1000.0});
+    LayerId m1 = root.create_layer(LayerData{.technology = technology_id, .name = "M1", .type = "ROUTING"});
+    LayerId slice = root.create_layer(LayerData{.technology = technology_id, .name = "SLICE", .type = "MASTERSLICE"});
+
+    ViewLayerSet view_layers = ViewLayerSet::build_for_technology(root, technology_id);
+
+    const Color &m1_color = view_layers.get(view_layers.find(m1, ViewLayerPurpose::TERMINAL))->style.outline_color;
+    const Color &slice_color = view_layers.get(view_layers.find(slice, ViewLayerPurpose::TERMINAL))->style.outline_color;
+
+    // Both are the first entry of their own palette - if they were the
+    // same list, these would be identical (both red). They must differ.
+    EXPECT_FALSE(slice_color.r == m1_color.r && slice_color.g == m1_color.g && slice_color.b == m1_color.b);
+}
+
+TEST(ViewStylePalette, DifferentOtherTypeLayersGetDifferentMutedColors)
+{
+    Root root;
+    TechnologyId technology_id = root.create_technology(TechnologyData{.database_units_microns = 1000.0});
+    LayerId a = root.create_layer(LayerData{.technology = technology_id, .name = "A", .type = "IMPLANT"});
+    LayerId b = root.create_layer(LayerData{.technology = technology_id, .name = "B", .type = "IMPLANT"});
+
+    ViewLayerSet view_layers = ViewLayerSet::build_for_technology(root, technology_id);
+
+    const Color &a_color = view_layers.get(view_layers.find(a, ViewLayerPurpose::TERMINAL))->style.outline_color;
+    const Color &b_color = view_layers.get(view_layers.find(b, ViewLayerPurpose::TERMINAL))->style.outline_color;
+
+    EXPECT_FALSE(a_color.r == b_color.r && a_color.g == b_color.g && a_color.b == b_color.b);
+}
+
 TEST(ViewStylePalette, ColorCyclesWithMoreLayersThanPaletteEntries)
 {
     // 31 layers - one more than the 30-color palette - should wrap back to

@@ -1,6 +1,7 @@
 #pragma once
 #include "../database/database.hpp"
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,17 +60,50 @@ namespace le
         {
             ViewLayerSet set;
 
-            size_t color_index = 0;
+            // Two independent palette cursors (see kRoutingCutColors/
+            // kOtherColors below) plus the most recently assigned ROUTING
+            // color, so a CUT layer can inherit it - see the CUT branch
+            // below for why. One color per physical Layer, shared by every
+            // purpose of that layer; purpose has no visual distinction yet
+            // beyond that shared color.
+            size_t routing_cut_index = 0;
+            size_t other_index = 0;
+            std::optional<Color> last_routing_color;
+
             for (LayerId layer_id : root.get_technology_layers(technology_id))
             {
                 const LayerData *layer = root.get_layer(layer_id);
-                // One color per physical Layer, shared by every purpose of
-                // that layer (not per-purpose like before) - see
-                // layer_color's own comment for where this palette/scheme
-                // comes from. Purpose has no visual distinction yet beyond
-                // that shared color; a future update adds fill patterns per
-                // purpose instead of splitting the color further.
-                const ViewLayerStyle style = layer_style(layer_color(color_index++));
+
+                Color color;
+                if (layer->type == "ROUTING")
+                {
+                    color = routing_cut_color(routing_cut_index++);
+                    last_routing_color = color;
+                }
+                else if (layer->type == "CUT" && last_routing_color)
+                {
+                    // LEF's LAYER declaration order is bottom-up physical
+                    // stacking order (see CLAUDE.md's Pipeline note on
+                    // ViewLayerId ordering) - so the most recent ROUTING
+                    // color seen so far is the ROUTING layer directly
+                    // below this CUT, i.e. exactly the "CUT layer above a
+                    // ROUTING layer" this color-sharing rule is about.
+                    color = *last_routing_color;
+                }
+                else if (layer->type == "CUT")
+                {
+                    // No ROUTING layer below (e.g. this CUT is declared
+                    // before any ROUTING layer) - still a CUT, so it still
+                    // draws from the bright/high-contrast palette, just
+                    // its own next slot rather than a borrowed color.
+                    color = routing_cut_color(routing_cut_index++);
+                }
+                else
+                {
+                    color = other_color(other_index++);
+                }
+
+                const ViewLayerStyle style = layer_style(color);
                 set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, style);
                 set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, style);
             }
@@ -116,14 +150,12 @@ namespace le
             return id;
         }
 
-        // Default per-layer palette - ported from the sibling project's
-        // `layer_generator_node.hpp` (../../layout_engine/backend/pipeline/
-        // nodes/layer_generator_node.hpp), which cycles through the same 30
-        // colors one per physical Layer. Real styling is still a render/UI
-        // concern to revisit further (this only replaces the old fixed
-        // green-TERMINAL/red-OBSTRUCTION scheme with per-layer color, so
-        // e.g. M1 and M2 are now visually distinguishable at all).
-        static constexpr std::array<Color, 30> kDefaultColors = {{
+        // Bright, high-contrast palette for ROUTING/CUT layers - the
+        // layers users actually route/edit on, so they need to stand out.
+        // Ported from the sibling project's `layer_generator_node.hpp`
+        // (../../layout_engine/backend/pipeline/nodes/layer_generator_node.hpp),
+        // which cycles through the same 30 colors one per physical Layer.
+        static constexpr std::array<Color, 30> kRoutingCutColors = {{
             {255, 0, 0, 255},     // red
             {0, 255, 0, 255},     // green
             {0, 0, 255, 255},     // blue
@@ -156,13 +188,41 @@ namespace le
             {238, 130, 238, 255}, // violet
         }};
 
-        // Wraps (modulo), not clamps or overflows, once there are more
+        // Muted palette for every other layer type (MASTERSLICE, IMPLANT,
+        // OVERLAP, WELL, ...) - present for context but not something a
+        // user routes/edits, so kept visually recessive relative to
+        // kRoutingCutColors's bright hues rather than competing with them.
+        static constexpr std::array<Color, 16> kOtherColors = {{
+            {180, 180, 180, 255}, // light gray
+            {200, 180, 160, 255}, // tan
+            {170, 190, 170, 255}, // sage green
+            {190, 170, 190, 255}, // mauve
+            {160, 180, 200, 255}, // dusty blue
+            {210, 200, 170, 255}, // khaki
+            {180, 160, 160, 255}, // dusty rose
+            {170, 170, 190, 255}, // lavender gray
+            {190, 190, 150, 255}, // olive gray
+            {160, 190, 190, 255}, // teal gray
+            {200, 170, 180, 255}, // pink gray
+            {170, 180, 160, 255}, // moss gray
+            {190, 180, 200, 255}, // lilac gray
+            {180, 170, 150, 255}, // taupe
+            {160, 170, 180, 255}, // slate gray
+            {200, 190, 190, 255}, // rosy gray
+        }};
+
+        // Both wrap (modulo), not clamp or overflow, once there are more
         // Layers than palette entries - unlike the sibling's own indexing
         // (`default_colors[++color_idx]`), which has no bounds check and
         // reads out of range past 30 layers.
-        static Color layer_color(size_t index)
+        static Color routing_cut_color(size_t index)
         {
-            return kDefaultColors[index % kDefaultColors.size()];
+            return kRoutingCutColors[index % kRoutingCutColors.size()];
+        }
+
+        static Color other_color(size_t index)
+        {
+            return kOtherColors[index % kOtherColors.size()];
         }
 
         static ViewLayerStyle layer_style(Color base)
