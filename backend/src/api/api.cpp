@@ -90,18 +90,48 @@ extern "C"
         return 0;
     }
 
-    void le_set_pan(LeHandle *handle, int64_t x, int64_t y)
+    void le_zoom(LeHandle *handle, double factor, int32_t x, int32_t y)
     {
         if (!handle)
             return;
-        handle->scene.set_pan(le::Point{.x = x, .y = y});
+
+        const double old_scale = handle->scene.scale();
+        const double new_scale = old_scale * (1.0 + factor);
+        if (new_scale <= 0.0)
+            return;
+
+        const le::Point old_pan = handle->scene.pan();
+        const double viewport_height = handle->scene.viewport_height_px();
+
+        // Undo rasterize()'s Y-flip to get from the caller's image-pixel
+        // (x, y) - top-left origin, y down - to the dbu point it currently
+        // shows, using the *old* scale/pan (see render.hpp's PixelShape /
+        // Renderer::rasterize comments for why pan/scale describe the
+        // pre-flip transform while (x, y) here is post-flip).
+        const double dbu_x = static_cast<double>(old_pan.x) + static_cast<double>(x) / old_scale;
+        const double dbu_y = static_cast<double>(old_pan.y) + (viewport_height - static_cast<double>(y)) / old_scale;
+
+        // Re-solve pan so that same dbu point still lands under (x, y) at
+        // the new scale, keeping the zoom visually anchored there.
+        const int64_t pan_x = static_cast<int64_t>(dbu_x - static_cast<double>(x) / new_scale);
+        const int64_t pan_y = static_cast<int64_t>(dbu_y - (viewport_height - static_cast<double>(y)) / new_scale);
+
+        handle->scene.set_scale(new_scale);
+        handle->scene.set_pan(le::Point{.x = pan_x, .y = pan_y});
     }
 
-    void le_set_scale(LeHandle *handle, double pixels_per_dbu)
+    void le_pan(LeHandle *handle, double x_factor, double y_factor)
     {
         if (!handle)
             return;
-        handle->scene.set_scale(pixels_per_dbu);
+
+        const double scale = handle->scene.scale();
+        const le::Point pan = handle->scene.pan();
+
+        const int64_t dx = static_cast<int64_t>(x_factor * handle->scene.viewport_width_px() / scale);
+        const int64_t dy = static_cast<int64_t>(y_factor * handle->scene.viewport_height_px() / scale);
+
+        handle->scene.set_pan(le::Point{.x = pan.x + dx, .y = pan.y + dy});
     }
 
     void le_set_viewport_size(LeHandle *handle, int32_t width_px, int32_t height_px)

@@ -113,9 +113,13 @@ TEST_F(ApiFixture, RenderPixelBufferProducesTheRequestedDimensions)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     ASSERT_EQ(le_set_current_design(handle, 0), 0);
 
-    le_set_pan(handle, 0, 0);
-    le_set_scale(handle, 10.0); // 10 px/dbu-micron-ish, matches DATABASE MICRONS 1000 -> 1000 dbu/micron
     le_set_viewport_size(handle, 200, 200);
+
+    // Scene starts at scale 1.0 / pan (0, 0) - le_zoom to scale 10.0 (10
+    // px/dbu-micron-ish, matches DATABASE MICRONS 1000 -> 1000 dbu/micron)
+    // anchored at image pixel (0, 200) (bottom-left corner, i.e. dbu (0,
+    // 0) at the starting pan/scale) keeps pan pinned at (0, 0) exactly.
+    le_zoom(handle, 9.0, 0, 200);
 
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
     EXPECT_EQ(buffer.width, 200);
@@ -155,6 +159,83 @@ TEST_F(ApiFixture, FitSceneFillsTheViewportWithThePinVisible)
     EXPECT_GT(center[3], 0);
 }
 
+TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)
+{
+    le_zoom(nullptr, 0.5, 10, 10);
+}
+
+TEST_F(ApiFixture, ZoomWithDegenerateFactorLeavesScaleAndPanUnchanged)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0)
+
+    // A factor <= -1.0 would make new_scale non-positive - must be
+    // ignored entirely (same guard as Scene::set_scale), not clamp to
+    // some fallback value.
+    le_zoom(handle, -1.0, 50, 50);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    const uint8_t *inside = buffer.data + static_cast<size_t>(50) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_GT(inside[3], 0); // pin rect still visible exactly where it was
+}
+
+TEST_F(ApiFixture, ZoomKeepsTheAnchorPixelFixedOnScreen)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0)
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    const uint8_t *before_pixel = before.data + static_cast<size_t>(50) * static_cast<size_t>(before.row_bytes) + static_cast<size_t>(50) * 4;
+    ASSERT_GT(before_pixel[3], 0); // baseline: pin rect visible at (50, 50)
+
+    // Zoom in 2x anchored at the same pixel being sampled - the dbu point
+    // under (50, 50) must still be under (50, 50) afterward, so it should
+    // still show the same pin rect content.
+    le_zoom(handle, 1.0, 50, 50);
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    const uint8_t *after_pixel = after.data + static_cast<size_t>(50) * static_cast<size_t>(after.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_GT(after_pixel[3], 0);
+}
+
+TEST_F(ApiFixture, PanWithNullHandleDoesNotCrash)
+{
+    le_pan(nullptr, 1.0, 1.0);
+}
+
+TEST_F(ApiFixture, PanShiftsContentOutOfView)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0)
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    const uint8_t *before_pixel = before.data + static_cast<size_t>(50) * static_cast<size_t>(before.row_bytes) + static_cast<size_t>(50) * 4;
+    ASSERT_GT(before_pixel[3], 0); // baseline: pin rect visible at (50, 50)
+
+    // Pan by 2 full viewport widths in dbu x - the whole 10000-dbu-wide
+    // macro (well under one viewport width at this scale) ends up entirely
+    // out of view.
+    le_pan(handle, 2.0, 0.0);
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    const uint8_t *after_pixel = after.data + static_cast<size_t>(50) * static_cast<size_t>(after.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_EQ(after_pixel[3], 0);
+}
+
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
@@ -163,9 +244,11 @@ TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
     // MACRO SIZE is 10x10 microns, PIN A's RECT is (2,2)-(8,8) microns.
     // DATABASE MICRONS 1000 -> 1 micron = 1000 dbu. Scale chosen so the
     // whole 10x10 micron (10000x10000 dbu) macro fills a 100x100px buffer.
-    le_set_pan(handle, 0, 0);
-    le_set_scale(handle, 100.0 / 10000.0);
+    // Scene starts at scale 1.0 / pan (0, 0) - le_zoom to that scale
+    // anchored at image pixel (0, 100) (dbu (0, 0) at the starting
+    // pan/scale) keeps pan pinned at (0, 0) exactly.
     le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
 
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
     ASSERT_NE(buffer.data, nullptr);
