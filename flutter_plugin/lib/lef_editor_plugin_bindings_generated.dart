@@ -119,34 +119,54 @@ class LefEditorPluginBindings {
   late final _le_set_current_design = _le_set_current_designPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
 
-  /// @brief Set the viewport pan: the dbu point that lands at pixel
-  /// (0, 0) - see render.hpp's PixelShape comment - not the viewport's
-  /// center. Mirrors Scene::set_pan directly.
-  void le_set_pan(ffi.Pointer<LeHandle> handle, int x, int y) {
-    return _le_set_pan(handle, x, y);
+  /// @brief Zoom the viewport, keeping the dbu point under screen pixel
+  /// (x, y) fixed on screen. `factor` is a signed fractional step applied
+  /// to the current scale (new_scale = scale * (1 + factor)) - positive
+  /// zooms in, negative zooms out (e.g. 0.1 zooms in 10%, -0.1 zooms out
+  /// 10%); a factor <= -1.0 (which would make new_scale non-positive) is
+  /// ignored, same guard as Scene::set_scale. `x`/`y` are in the same
+  /// pixel space as le_render_pixel_buffer()'s output image - top-left
+  /// origin, y increasing downward (see api.hpp's LePixelBuffer) - not
+  /// Renderer's own pre-Y-flip pixel space, since this is meant to be fed
+  /// straight from a pointer/tap event on the rendered image. A no-op if
+  /// handle is null. Backend now owns pan/scale entirely - there is no
+  /// direct pan/scale setter; use le_fit_scene() to reset to a known view.
+  void le_zoom(ffi.Pointer<LeHandle> handle, double factor, int x, int y) {
+    return _le_zoom(handle, factor, x, y);
   }
 
-  late final _le_set_panPtr =
+  late final _le_zoomPtr =
       _lookup<
         ffi.NativeFunction<
-          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int64, ffi.Int64)
+          ffi.Void Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+          )
         >
-      >('le_set_pan');
-  late final _le_set_pan = _le_set_panPtr
-      .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
+      >('le_zoom');
+  late final _le_zoom = _le_zoomPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, double, int, int)>();
 
-  /// @brief Set the viewport scale in pixels per dbu. Mirrors
-  /// Scene::set_scale directly.
-  void le_set_scale(ffi.Pointer<LeHandle> handle, double pixels_per_dbu) {
-    return _le_set_scale(handle, pixels_per_dbu);
+  /// @brief Pan the viewport by a fraction of its own size, in dbu-space
+  /// directions (positive x_factor/y_factor move the view toward
+  /// increasing dbu x/y - the same "up is positive" convention as the
+  /// database itself, not screen space): pan += (x_factor, y_factor) *
+  /// viewport_size / scale. E.g. x_factor = 1.0 pans right by exactly one
+  /// full viewport width of content. A no-op if handle is null.
+  void le_pan(ffi.Pointer<LeHandle> handle, double x_factor, double y_factor) {
+    return _le_pan(handle, x_factor, y_factor);
   }
 
-  late final _le_set_scalePtr =
+  late final _le_panPtr =
       _lookup<
-        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Double)>
-      >('le_set_scale');
-  late final _le_set_scale = _le_set_scalePtr
-      .asFunction<void Function(ffi.Pointer<LeHandle>, double)>();
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Double, ffi.Double)
+        >
+      >('le_pan');
+  late final _le_pan = _le_panPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, double, double)>();
 
   /// @brief Set the viewport size in pixels - also the size of the
   /// buffer le_render_pixel_buffer() produces. Mirrors

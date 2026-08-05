@@ -119,17 +119,27 @@ class LeEditor {
     return _bindings.le_set_current_design(_handle, index) == 0;
   }
 
-  /// Sets the viewport pan: the dbu point that lands at pixel (0, 0) - not
-  /// the viewport's center.
-  void setPan(int x, int y) {
+  /// Zooms the viewport, keeping the dbu point under screen pixel (x, y)
+  /// fixed on screen. [factor] is a signed fractional step applied to the
+  /// current scale (new_scale = scale * (1 + factor)) - positive zooms in,
+  /// negative zooms out (e.g. 0.1 zooms in 10%, -0.1 zooms out 10%); a
+  /// factor <= -1.0 is ignored. [x]/[y] are in the same pixel space as
+  /// [renderPixelBuffer]'s output (top-left origin, y increasing downward)
+  /// - safe to feed straight from a pointer/tap event on the rendered
+  /// image. The backend owns pan/scale entirely - there is no direct
+  /// setter; use [fitScene] to reset to a known view.
+  void zoom(double factor, int x, int y) {
     _checkNotDisposed();
-    _bindings.le_set_pan(_handle, x, y);
+    _bindings.le_zoom(_handle, factor, x, y);
   }
 
-  /// Sets the viewport scale in pixels per dbu.
-  void setScale(double pixelsPerDbu) {
+  /// Pans the viewport by a fraction of its own size, in dbu-space
+  /// directions (positive [xFactor]/[yFactor] move the view toward
+  /// increasing dbu x/y, not screen space). E.g. `xFactor: 1.0` pans right
+  /// by exactly one full viewport width of content.
+  void pan(double xFactor, double yFactor) {
     _checkNotDisposed();
-    _bindings.le_set_scale(_handle, pixelsPerDbu);
+    _bindings.le_pan(_handle, xFactor, yFactor);
   }
 
   /// Sets the viewport size in pixels - also the size of the buffer
@@ -221,7 +231,7 @@ class LeEditor {
 /// Flutter engine's raster thread, asynchronously relative to whatever
 /// thread calls into [LeEditor] from Dart. Backend's Scene/Pipeline/
 /// Renderer aren't documented as thread-safe (see backend/CLAUDE.md), so a
-/// [LeEditor] setter (`setPan`/`setScale`/`setViewportSize`/
+/// [LeEditor] setter (`zoom`/`pan`/`setViewportSize`/`fitScene`/
 /// `setCurrentDesign`/`readLef`) racing a pending, not-yet-rendered
 /// [markFrameAvailable] is a genuine data race, not just a hypothetical
 /// one. Not solved at this layer - a real fix needs a lock inside the C
