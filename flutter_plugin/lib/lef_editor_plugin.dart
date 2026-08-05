@@ -53,6 +53,75 @@ class LeFrame {
   final int rowBytes;
 }
 
+/// A stable identity for one Library, Design, or Abstract (mirrors the
+/// database's own `Id<Tag>` handles at the FFI boundary - see api.hpp's
+/// `LeLibraryId`/`LeDesignId`/`LeAbstractId`). Unlike [LeFrame]'s pixel
+/// data, these carry no native pointer and no validity window - safe to
+/// hold onto indefinitely and pass back into e.g. [LeEditor.setCurrentDesignById]
+/// later, but only ever a value read from this API, never hand-built.
+abstract class _LeRef {
+  const _LeRef(this.index, this.generation);
+
+  final int index;
+  final int generation;
+
+  /// False for a ref read off an invalid/out-of-range row (`index` is the
+  /// database's own sentinel, `Id<Tag>::valid()`'s complement).
+  bool get isValid => index != 0xFFFFFFFF;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _LeRef &&
+      other.runtimeType == runtimeType &&
+      other.index == index &&
+      other.generation == generation;
+
+  @override
+  int get hashCode => Object.hash(runtimeType, index, generation);
+}
+
+/// Identifies one Library (one [LeEditor.readLef] call's worth of Designs).
+class LeLibraryRef extends _LeRef {
+  const LeLibraryRef(super.index, super.generation);
+}
+
+/// Identifies one Design within a Library.
+class LeDesignRef extends _LeRef {
+  const LeDesignRef(super.index, super.generation);
+}
+
+/// Identifies one Design's Abstract (placement) view.
+class LeAbstractRef extends _LeRef {
+  const LeAbstractRef(super.index, super.generation);
+}
+
+/// One row of [LeEditor.library]: a Library's identity and name.
+class LeLibrary {
+  const LeLibrary({required this.id, required this.name});
+
+  final LeLibraryRef id;
+  final String name;
+}
+
+/// One row of [LeEditor.libraryDesign]: a Design's identity (plus its
+/// parent Library's) and name.
+class LeDesignEntry {
+  const LeDesignEntry({
+    required this.libraryId,
+    required this.id,
+    required this.abstractId,
+    required this.name,
+  });
+
+  final LeLibraryRef libraryId;
+  final LeDesignRef id;
+
+  /// Null if this Design has no Abstract view yet (see api.hpp's
+  /// `LeDesignInfo::abstract_id`).
+  final LeAbstractRef? abstractId;
+  final String name;
+}
+
 /// One editor instance: owns a native `LeHandle*` (a Root/ViewLayerSet/
 /// Scene/Pipeline/Renderer, see api.hpp) that's reused across calls,
 /// matching the backend's own "one instance per Scene-equivalent lifetime"
@@ -117,6 +186,76 @@ class LeEditor {
   bool setCurrentDesign(int index) {
     _checkNotDisposed();
     return _bindings.le_set_current_design(_handle, index) == 0;
+  }
+
+  /// Number of Libraries currently loaded - one per [readLef] call so far.
+  /// The top level of a Library -> Design -> Abstract browser widget; see
+  /// [libraryDesignCount]/[libraryDesign] for the next level.
+  int get libraryCount {
+    _checkNotDisposed();
+    return _bindings.le_library_count(_handle);
+  }
+
+  /// The Library at [index] (0..[libraryCount] - 1), or null if [index] is
+  /// out of range.
+  LeLibrary? library(int index) {
+    _checkNotDisposed();
+    final info = _bindings.le_library_at(_handle, index);
+    if (info.name == ffi.nullptr) return null;
+    return LeLibrary(
+      id: LeLibraryRef(info.id.index, info.id.generation),
+      name: info.name.cast<pkg_ffi.Utf8>().toDartString(),
+    );
+  }
+
+  /// Number of Designs belonging to the Library at [libraryIndex] (into the
+  /// same enumeration [library] uses).
+  int libraryDesignCount(int libraryIndex) {
+    _checkNotDisposed();
+    return _bindings.le_library_design_count(_handle, libraryIndex);
+  }
+
+  /// The Design at [designIndex] within the Library at [libraryIndex]
+  /// (0..[libraryDesignCount] - 1), or null if either index is out of
+  /// range.
+  LeDesignEntry? libraryDesign(int libraryIndex, int designIndex) {
+    _checkNotDisposed();
+    final info = _bindings.le_library_design_at(
+      _handle,
+      libraryIndex,
+      designIndex,
+    );
+    if (info.name == ffi.nullptr) return null;
+    final abstractId = info.abstract_id.index == 0xFFFFFFFF
+        ? null
+        : LeAbstractRef(info.abstract_id.index, info.abstract_id.generation);
+    return LeDesignEntry(
+      libraryId: LeLibraryRef(
+        info.library_id.index,
+        info.library_id.generation,
+      ),
+      id: LeDesignRef(info.id.index, info.id.generation),
+      abstractId: abstractId,
+      name: info.name.cast<pkg_ffi.Utf8>().toDartString(),
+    );
+  }
+
+  /// Selects a Design by its stable [LeDesignRef] (e.g. one read from
+  /// [libraryDesign]'s [LeDesignEntry.id]) as the one [renderPixelBuffer]
+  /// renders - same effect as [setCurrentDesign] but addressed by identity
+  /// instead of a position in the flat [designCount] list, the natural fit
+  /// for a browser widget's row click. Returns true on success; the
+  /// current selection is left unchanged on failure.
+  bool setCurrentDesignById(LeDesignRef designId) {
+    _checkNotDisposed();
+    final idPtr = pkg_ffi.calloc<LeDesignId>();
+    try {
+      idPtr.ref.index = designId.index;
+      idPtr.ref.generation = designId.generation;
+      return _bindings.le_set_current_design_by_id(_handle, idPtr.ref) == 0;
+    } finally {
+      pkg_ffi.calloc.free(idPtr);
+    }
   }
 
   /// Zooms the viewport, keeping the dbu point under screen pixel (x, y)

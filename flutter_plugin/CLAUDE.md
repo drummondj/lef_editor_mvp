@@ -22,9 +22,17 @@ Two separate paths call into the C API — not one:
 - **Dart FFI** (`lib/lef_editor_plugin.dart`'s `LeEditor` class, wrapping
   ffigen-generated `lib/lef_editor_plugin_bindings_generated.dart`) for
   everything except pixel delivery: `le_create`/`le_destroy`, `le_read_lef`,
-  design enumeration/selection, `le_set_viewport_size`, `le_zoom`/`le_pan`
-  (`LeEditor.zoom()`/`pan()` — the backend owns pan/scale entirely; there is
-  no direct setter for either, only these relative nudges), `le_fit_scene`
+  flat design enumeration/selection (`le_design_count`/`le_design_name`/
+  `le_set_current_design`), the hierarchical Library → Design browser
+  (`le_library_count`/`le_library_at`/`le_library_design_count`/
+  `le_library_design_at`/`le_set_current_design_by_id` — `LeEditor.library()`/
+  `libraryDesign()`/`setCurrentDesignById()`; `LeLibraryId`/`LeDesignId`/
+  `LeAbstractId` cross the FFI boundary as `LeLibraryRef`/`LeDesignRef`/
+  `LeAbstractRef` — plain index+generation value types, safe to hold
+  indefinitely unlike `LeFrame`'s pixel data, since they carry no native
+  pointer), `le_set_viewport_size`, `le_zoom`/`le_pan` (`LeEditor.zoom()`/
+  `pan()` — the backend owns pan/scale entirely; there is no direct setter
+  for either, only these relative nudges), `le_fit_scene`
   (`LeEditor.fitScene()` — fits pan/scale to the selected Design's content
   bbox, see Scene::fit_to_content, and is the only way to reset to a known
   view), plus a `renderPixelBuffer()` that copies a frame into Dart memory

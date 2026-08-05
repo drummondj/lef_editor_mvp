@@ -119,6 +119,97 @@ class LefEditorPluginBindings {
   late final _le_set_current_design = _le_set_current_designPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
 
+  /// @brief Number of Libraries currently loaded - one per le_read_lef()
+  /// call so far (see its own comment: each derives a fresh Library from
+  /// its file's stem). 0 if handle is null. The top level of a
+  /// Library -> Design -> Abstract browser widget; see
+  /// le_library_design_count()/le_library_design_at() for the next level.
+  int le_library_count(ffi.Pointer<LeHandle> handle) {
+    return _le_library_count(handle);
+  }
+
+  late final _le_library_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_library_count',
+      );
+  late final _le_library_count = _le_library_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief The Library at `index` (0..le_library_count()-1). An
+  /// all-invalid/null row (id.index == UINT32_MAX, name == null) if
+  /// handle is null or index is out of range, rather than crashing.
+  LeLibraryInfo le_library_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_library_at(handle, index);
+  }
+
+  late final _le_library_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryInfo Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_library_at');
+  late final _le_library_at = _le_library_atPtr
+      .asFunction<LeLibraryInfo Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Number of Designs belonging to the Library at
+  /// `library_index` (into the same enumeration le_library_at() uses).
+  /// 0 if handle is null or library_index is out of range.
+  int le_library_design_count(ffi.Pointer<LeHandle> handle, int library_index) {
+    return _le_library_design_count(handle, library_index);
+  }
+
+  late final _le_library_design_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_library_design_count');
+  late final _le_library_design_count = _le_library_design_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief The Design at `design_index` within the Library at
+  /// `library_index` (0..le_library_design_count(library_index)-1). An
+  /// all-invalid/null row if handle is null or either index is out of
+  /// range, rather than crashing.
+  LeDesignInfo le_library_design_at(
+    ffi.Pointer<LeHandle> handle,
+    int library_index,
+    int design_index,
+  ) {
+    return _le_library_design_at(handle, library_index, design_index);
+  }
+
+  late final _le_library_design_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignInfo Function(ffi.Pointer<LeHandle>, ffi.Int32, ffi.Int32)
+        >
+      >('le_library_design_at');
+  late final _le_library_design_at = _le_library_design_atPtr
+      .asFunction<LeDesignInfo Function(ffi.Pointer<LeHandle>, int, int)>();
+
+  /// @brief Select a Design by its stable LeDesignId (e.g. one read from
+  /// le_library_design_at()'s LeDesignInfo::id) as the one
+  /// le_render_pixel_buffer() renders, same effect as
+  /// le_set_current_design() but addressed by identity instead of a
+  /// position in the flat le_design_count() list - the natural fit for a
+  /// browser widget's row click, which already has the Design's
+  /// LeDesignId on hand and shouldn't need to re-derive a flat index for
+  /// it. Returns 0 on success, nonzero if handle is null or design_id
+  /// doesn't name a Design currently loaded on this handle - the current
+  /// selection is left unchanged on failure.
+  int le_set_current_design_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId design_id,
+  ) {
+    return _le_set_current_design_by_id(handle, design_id);
+  }
+
+  late final _le_set_current_design_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Pointer<LeHandle>, LeDesignId)>
+      >('le_set_current_design_by_id');
+  late final _le_set_current_design_by_id = _le_set_current_design_by_idPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeDesignId)>();
+
   /// @brief Zoom the viewport, keeping the dbu point under screen pixel
   /// (x, y) fixed on screen. `factor` is a signed fractional step applied
   /// to the current scale (new_scale = scale * (1 + factor)) - positive
@@ -480,4 +571,68 @@ final class LePixelBuffer extends ffi.Struct {
 
   @ffi.Int64()
   external int row_bytes;
+}
+
+/// @brief Mirrors the database's LibraryId handle (generated/ids.hpp's
+/// `Id<LibraryTag>`) for the FFI boundary: a stable identity for one
+/// Library, safe to hold onto and pass back into e.g.
+/// le_set_current_design_by_id() later without re-deriving it from a
+/// position in le_library_at()'s enumeration. `index ==
+/// UINT32_MAX` (matching `Id<Tag>::valid()`) marks it invalid - never
+/// construct one by hand, only copy one returned by this API.
+final class LeLibraryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's DesignId handle - see LeLibraryId's
+/// comment for the general contract.
+final class LeDesignId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's AbstractId handle - see LeLibraryId's
+/// comment for the general contract.
+final class LeAbstractId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief One row of le_library_at(): a Library's identity and name.
+final class LeLibraryInfo extends ffi.Struct {
+  external LeLibraryId id;
+
+  /// Owned by the handle's Root - valid until the handle is
+  /// destroyed, never owned by the caller. Null if this row is
+  /// invalid (out-of-range index or null handle).
+  external ffi.Pointer<ffi.Char> name;
+}
+
+/// @brief One row of le_library_design_at(): a Design's identity
+/// (plus its parent Library's) and name.
+final class LeDesignInfo extends ffi.Struct {
+  external LeLibraryId library_id;
+
+  external LeDesignId id;
+
+  /// Invalid (index == UINT32_MAX) if this Design has no Abstract
+  /// view yet - no DEF/placement-driven Design exists in this
+  /// project yet, so every Design read via le_read_lef() has one,
+  /// but the field degrades gracefully rather than assume that.
+  external LeAbstractId abstract_id;
+
+  /// Owned by the handle's Root - valid until the handle is
+  /// destroyed, never owned by the caller. Null if this row is
+  /// invalid (out-of-range index or null handle).
+  external ffi.Pointer<ffi.Char> name;
 }
