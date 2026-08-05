@@ -159,6 +159,99 @@ TEST_F(ApiFixture, FitSceneFillsTheViewportWithThePinVisible)
     EXPECT_GT(center[3], 0);
 }
 
+TEST_F(ApiFixture, LibraryCountAndAtAreZeroOrInvalidForNullHandle)
+{
+    EXPECT_EQ(le_library_count(nullptr), 0);
+
+    const LeLibraryInfo info = le_library_at(nullptr, 0);
+    EXPECT_EQ(info.id.index, UINT32_MAX);
+    EXPECT_EQ(info.name, nullptr);
+}
+
+TEST_F(ApiFixture, LibraryAtOutOfRangeReturnsInvalidRow)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    const LeLibraryInfo info = le_library_at(handle, 1);
+    EXPECT_EQ(info.id.index, UINT32_MAX);
+    EXPECT_EQ(info.name, nullptr);
+}
+
+TEST_F(ApiFixture, EachLefReadCreatesItsOwnLibrary)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_read_lef(handle, fixture_path("othercell.lef").c_str()), 0);
+
+    ASSERT_EQ(le_library_count(handle), 2);
+
+    const LeLibraryInfo lib0 = le_library_at(handle, 0);
+    ASSERT_NE(lib0.name, nullptr);
+    EXPECT_STREQ(lib0.name, "testcell");
+    EXPECT_TRUE(lib0.id.index != UINT32_MAX);
+
+    const LeLibraryInfo lib1 = le_library_at(handle, 1);
+    ASSERT_NE(lib1.name, nullptr);
+    EXPECT_STREQ(lib1.name, "othercell");
+    EXPECT_NE(lib1.id.index, lib0.id.index);
+}
+
+TEST_F(ApiFixture, LibraryDesignCountAndAtAreZeroOrInvalidForNullHandleOrBadIndex)
+{
+    EXPECT_EQ(le_library_design_count(nullptr, 0), 0);
+
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    EXPECT_EQ(le_library_design_count(handle, 1), 0);  // out-of-range library
+    EXPECT_EQ(le_library_design_count(handle, -1), 0); // negative
+
+    const LeDesignInfo info = le_library_design_at(handle, 1, 0);
+    EXPECT_EQ(info.id.index, UINT32_MAX);
+    EXPECT_EQ(info.library_id.index, UINT32_MAX);
+    EXPECT_EQ(info.abstract_id.index, UINT32_MAX);
+    EXPECT_EQ(info.name, nullptr);
+}
+
+TEST_F(ApiFixture, LibraryDesignAtReturnsTheDesignAndItsAbstractId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    ASSERT_EQ(le_library_design_count(handle, 0), 1);
+
+    const LeLibraryInfo library = le_library_at(handle, 0);
+    const LeDesignInfo design = le_library_design_at(handle, 0, 0);
+
+    ASSERT_NE(design.name, nullptr);
+    EXPECT_STREQ(design.name, "TESTCELL");
+    EXPECT_EQ(design.library_id.index, library.id.index);
+    EXPECT_EQ(design.library_id.generation, library.id.generation);
+    EXPECT_NE(design.id.index, UINT32_MAX);
+    EXPECT_NE(design.abstract_id.index, UINT32_MAX); // every read Design gets an Abstract view
+}
+
+TEST_F(ApiFixture, SetCurrentDesignByIdWithNullHandleOrUnknownIdReturnsNonzero)
+{
+    EXPECT_NE(le_set_current_design_by_id(nullptr, LeDesignId{0, 0}), 0);
+
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    EXPECT_NE(le_set_current_design_by_id(handle, LeDesignId{UINT32_MAX, 0}), 0);
+    EXPECT_NE(le_set_current_design_by_id(handle, LeDesignId{99, 0}), 0);
+}
+
+TEST_F(ApiFixture, SetCurrentDesignByIdSelectsTheSameDesignAsSetCurrentDesign)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    const LeDesignInfo design = le_library_design_at(handle, 0, 0);
+    ASSERT_EQ(le_set_current_design_by_id(handle, design.id), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // pan (0,0), scale 0.01 - see other zoom-setup tests
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    const uint8_t *inside = buffer.data + static_cast<size_t>(50) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_GT(inside[3], 0); // pin rect visible, same as le_set_current_design(handle, 0) would give
+}
+
 TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)
 {
     le_zoom(nullptr, 0.5, 10, 10);

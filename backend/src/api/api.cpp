@@ -22,6 +22,15 @@ struct LeHandle
     le::Renderer renderer;
 };
 
+namespace
+{
+    LeLibraryId to_c(le::LibraryId id) { return LeLibraryId{.index = id.index, .generation = id.generation}; }
+    LeDesignId to_c(le::DesignId id) { return LeDesignId{.index = id.index, .generation = id.generation}; }
+    LeAbstractId to_c(le::AbstractId id) { return LeAbstractId{.index = id.index, .generation = id.generation}; }
+
+    le::DesignId from_c(LeDesignId id) { return le::DesignId{.index = id.index, .generation = id.generation}; }
+}
+
 extern "C"
 {
     LeHandle *le_create(void)
@@ -87,6 +96,78 @@ extern "C"
             return 1;
 
         handle->scene.set_current_abstract(handle->root.get_design_abstract(design_ids[static_cast<size_t>(index)]));
+        return 0;
+    }
+
+    int32_t le_library_count(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        return static_cast<int32_t>(handle->root.get_library_size());
+    }
+
+    LeLibraryInfo le_library_at(LeHandle *handle, int32_t index)
+    {
+        const LeLibraryInfo invalid{.id = {UINT32_MAX, 0}, .name = nullptr};
+        if (!handle || index < 0)
+            return invalid;
+
+        const auto library_ids = handle->root.get_library_ids();
+        if (static_cast<size_t>(index) >= library_ids.size())
+            return invalid;
+
+        const le::LibraryId id = library_ids[static_cast<size_t>(index)];
+        const le::LibraryData *library = handle->root.get_library(id);
+        return LeLibraryInfo{.id = to_c(id), .name = library ? library->name.c_str() : nullptr};
+    }
+
+    int32_t le_library_design_count(LeHandle *handle, int32_t library_index)
+    {
+        if (!handle || library_index < 0)
+            return 0;
+
+        const auto library_ids = handle->root.get_library_ids();
+        if (static_cast<size_t>(library_index) >= library_ids.size())
+            return 0;
+
+        return static_cast<int32_t>(handle->root.get_library_designs(library_ids[static_cast<size_t>(library_index)]).size());
+    }
+
+    LeDesignInfo le_library_design_at(LeHandle *handle, int32_t library_index, int32_t design_index)
+    {
+        const LeDesignInfo invalid{.library_id = {UINT32_MAX, 0}, .id = {UINT32_MAX, 0}, .abstract_id = {UINT32_MAX, 0}, .name = nullptr};
+        if (!handle || library_index < 0 || design_index < 0)
+            return invalid;
+
+        const auto library_ids = handle->root.get_library_ids();
+        if (static_cast<size_t>(library_index) >= library_ids.size())
+            return invalid;
+
+        const le::LibraryId library_id = library_ids[static_cast<size_t>(library_index)];
+        const auto &design_ids = handle->root.get_library_designs(library_id);
+        if (static_cast<size_t>(design_index) >= design_ids.size())
+            return invalid;
+
+        const le::DesignId design_id = design_ids[static_cast<size_t>(design_index)];
+        const le::DesignData *design = handle->root.get_design(design_id);
+        return LeDesignInfo{
+            .library_id = to_c(library_id),
+            .id = to_c(design_id),
+            .abstract_id = to_c(handle->root.get_design_abstract(design_id)),
+            .name = design ? design->name.c_str() : nullptr,
+        };
+    }
+
+    int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id)
+    {
+        if (!handle)
+            return 1;
+
+        const le::DesignId id = from_c(design_id);
+        if (!handle->root.get_design(id))
+            return 1;
+
+        handle->scene.set_current_abstract(handle->root.get_design_abstract(id));
         return 0;
     }
 

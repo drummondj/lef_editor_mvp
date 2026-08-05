@@ -42,6 +42,62 @@ extern "C"
         int64_t row_bytes;
     } LePixelBuffer;
 
+    /// @brief Mirrors the database's LibraryId handle (generated/ids.hpp's
+    /// `Id<LibraryTag>`) for the FFI boundary: a stable identity for one
+    /// Library, safe to hold onto and pass back into e.g.
+    /// le_set_current_design_by_id() later without re-deriving it from a
+    /// position in le_library_at()'s enumeration. `index ==
+    /// UINT32_MAX` (matching `Id<Tag>::valid()`) marks it invalid - never
+    /// construct one by hand, only copy one returned by this API.
+    typedef struct LeLibraryId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeLibraryId;
+
+    /// @brief Mirrors the database's DesignId handle - see LeLibraryId's
+    /// comment for the general contract.
+    typedef struct LeDesignId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeDesignId;
+
+    /// @brief Mirrors the database's AbstractId handle - see LeLibraryId's
+    /// comment for the general contract.
+    typedef struct LeAbstractId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeAbstractId;
+
+    /// @brief One row of le_library_at(): a Library's identity and name.
+    typedef struct LeLibraryInfo
+    {
+        LeLibraryId id;
+        /// Owned by the handle's Root - valid until the handle is
+        /// destroyed, never owned by the caller. Null if this row is
+        /// invalid (out-of-range index or null handle).
+        const char *name;
+    } LeLibraryInfo;
+
+    /// @brief One row of le_library_design_at(): a Design's identity
+    /// (plus its parent Library's) and name.
+    typedef struct LeDesignInfo
+    {
+        LeLibraryId library_id;
+        LeDesignId id;
+        /// Invalid (index == UINT32_MAX) if this Design has no Abstract
+        /// view yet - no DEF/placement-driven Design exists in this
+        /// project yet, so every Design read via le_read_lef() has one,
+        /// but the field degrades gracefully rather than assume that.
+        LeAbstractId abstract_id;
+        /// Owned by the handle's Root - valid until the handle is
+        /// destroyed, never owned by the caller. Null if this row is
+        /// invalid (out-of-range index or null handle).
+        const char *name;
+    } LeDesignInfo;
+
     /// @brief Allocate a new, empty editor instance (no LEF loaded, no
     /// Design selected, 0x0 viewport). Never returns null.
     LeHandle *le_create(void);
@@ -77,6 +133,41 @@ extern "C"
     /// handle is null or index is out of range - the current selection is
     /// left unchanged on failure.
     int le_set_current_design(LeHandle *handle, int32_t index);
+
+    /// @brief Number of Libraries currently loaded - one per le_read_lef()
+    /// call so far (see its own comment: each derives a fresh Library from
+    /// its file's stem). 0 if handle is null. The top level of a
+    /// Library -> Design -> Abstract browser widget; see
+    /// le_library_design_count()/le_library_design_at() for the next level.
+    int32_t le_library_count(LeHandle *handle);
+
+    /// @brief The Library at `index` (0..le_library_count()-1). An
+    /// all-invalid/null row (id.index == UINT32_MAX, name == null) if
+    /// handle is null or index is out of range, rather than crashing.
+    LeLibraryInfo le_library_at(LeHandle *handle, int32_t index);
+
+    /// @brief Number of Designs belonging to the Library at
+    /// `library_index` (into the same enumeration le_library_at() uses).
+    /// 0 if handle is null or library_index is out of range.
+    int32_t le_library_design_count(LeHandle *handle, int32_t library_index);
+
+    /// @brief The Design at `design_index` within the Library at
+    /// `library_index` (0..le_library_design_count(library_index)-1). An
+    /// all-invalid/null row if handle is null or either index is out of
+    /// range, rather than crashing.
+    LeDesignInfo le_library_design_at(LeHandle *handle, int32_t library_index, int32_t design_index);
+
+    /// @brief Select a Design by its stable LeDesignId (e.g. one read from
+    /// le_library_design_at()'s LeDesignInfo::id) as the one
+    /// le_render_pixel_buffer() renders, same effect as
+    /// le_set_current_design() but addressed by identity instead of a
+    /// position in the flat le_design_count() list - the natural fit for a
+    /// browser widget's row click, which already has the Design's
+    /// LeDesignId on hand and shouldn't need to re-derive a flat index for
+    /// it. Returns 0 on success, nonzero if handle is null or design_id
+    /// doesn't name a Design currently loaded on this handle - the current
+    /// selection is left unchanged on failure.
+    int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id);
 
     /// @brief Zoom the viewport, keeping the dbu point under screen pixel
     /// (x, y) fixed on screen. `factor` is a signed fractional step applied
