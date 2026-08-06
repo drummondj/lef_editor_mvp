@@ -537,12 +537,113 @@ class LefEditorPluginBindings {
   late final _le_fit_scene = _le_fit_scenePtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
 
+  /// @brief Spacing (dbu) between minor grid dots, drawn behind the
+  /// design by le_render_pixel_buffer() - see Renderer::draw_grid.
+  /// Mirrors Scene::minor_grid_spacing directly. Defaults to 5 (dbu),
+  /// matching a 5nm minor grid under the common "1 dbu = 1nm" Technology
+  /// convention. Returns 0 if handle is null.
+  int le_minor_grid_spacing(ffi.Pointer<LeHandle> handle) {
+    return _le_minor_grid_spacing(handle);
+  }
+
+  late final _le_minor_grid_spacingPtr =
+      _lookup<ffi.NativeFunction<ffi.Int64 Function(ffi.Pointer<LeHandle>)>>(
+        'le_minor_grid_spacing',
+      );
+  late final _le_minor_grid_spacing = _le_minor_grid_spacingPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Set the minor grid dot spacing (dbu). Mirrors
+  /// Scene::set_minor_grid_spacing directly (affects rendering) - values
+  /// <= 0 are ignored, same guard as le_set_scale. A no-op if handle is
+  /// null.
+  void le_set_minor_grid_spacing(ffi.Pointer<LeHandle> handle, int dbu) {
+    return _le_set_minor_grid_spacing(handle, dbu);
+  }
+
+  late final _le_set_minor_grid_spacingPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int64)>
+      >('le_set_minor_grid_spacing');
+  late final _le_set_minor_grid_spacing = _le_set_minor_grid_spacingPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Spacing (dbu) between major grid dots (drawn bolder than
+  /// minor ones - see Renderer::draw_grid). Mirrors
+  /// Scene::major_grid_spacing directly. Defaults to 50 (dbu), matching
+  /// a 50nm major grid under the common "1 dbu = 1nm" Technology
+  /// convention. Returns 0 if handle is null.
+  int le_major_grid_spacing(ffi.Pointer<LeHandle> handle) {
+    return _le_major_grid_spacing(handle);
+  }
+
+  late final _le_major_grid_spacingPtr =
+      _lookup<ffi.NativeFunction<ffi.Int64 Function(ffi.Pointer<LeHandle>)>>(
+        'le_major_grid_spacing',
+      );
+  late final _le_major_grid_spacing = _le_major_grid_spacingPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Set the major grid dot spacing (dbu). Mirrors
+  /// Scene::set_major_grid_spacing directly (affects rendering) - values
+  /// <= 0 are ignored. A no-op if handle is null.
+  void le_set_major_grid_spacing(ffi.Pointer<LeHandle> handle, int dbu) {
+    return _le_set_major_grid_spacing(handle, dbu);
+  }
+
+  late final _le_set_major_grid_spacingPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int64)>
+      >('le_set_major_grid_spacing');
+  late final _le_set_major_grid_spacing = _le_set_major_grid_spacingPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Set the current mouse position, in the same pixel space as
+  /// le_render_pixel_buffer()'s output image (top-left origin, y
+  /// increasing downward) and le_zoom()'s x/y - meant to be fed straight
+  /// from a pointer-move event. Drives the grid-snap indicator box drawn
+  /// by le_render_pixel_buffer() (see Renderer::draw_cursor) - a no-op
+  /// if handle is null. Cheap to call on every pointer-move event: it
+  /// does not invalidate the (potentially design-sized) rasterized
+  /// design cache, only the small cursor overlay - see
+  /// Renderer::compose_with_cursor.
+  void le_set_mouse_position(ffi.Pointer<LeHandle> handle, int x, int y) {
+    return _le_set_mouse_position(handle, x, y);
+  }
+
+  late final _le_set_mouse_positionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32, ffi.Int32)
+        >
+      >('le_set_mouse_position');
+  late final _le_set_mouse_position = _le_set_mouse_positionPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
+
+  /// @brief Clear the current mouse position (e.g. on a pointer-leave
+  /// event) so the grid-snap indicator box stops showing at the last
+  /// known position. A no-op if handle is null.
+  void le_clear_mouse_position(ffi.Pointer<LeHandle> handle) {
+    return _le_clear_mouse_position(handle);
+  }
+
+  late final _le_clear_mouse_positionPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_clear_mouse_position',
+      );
+  late final _le_clear_mouse_position = _le_clear_mouse_positionPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
   /// @brief Run the full pipeline+render chain (generate -> filter ->
   /// filter -> transform -> picture -> rasterize) for the currently
   /// selected Design and viewport, returning the resulting pixel
-  /// buffer. Each stage is cached internally (see Pipeline/Renderer) -
-  /// calling this again with nothing changed since the last call is
-  /// close to free; only viewport/selection changes actually recompute.
+  /// buffer - including the grid-snap indicator box at the current
+  /// mouse position, if one has been set (see le_set_mouse_position).
+  /// Each stage is cached internally (see Pipeline/Renderer) - calling
+  /// this again with nothing changed since the last call is close to
+  /// free; only viewport/selection/mouse-position changes actually
+  /// recompute, and a mouse-position-only change is itself cheap (see
+  /// Renderer::compose_with_cursor), not proportional to design size.
   /// Returns an all-zero/null LePixelBuffer if handle is null. No
   /// Design selected (le_set_current_design was never called) degrades
   /// gracefully to an empty (but correctly-sized, non-null) buffer

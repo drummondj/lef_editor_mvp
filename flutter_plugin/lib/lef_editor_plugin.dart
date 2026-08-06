@@ -469,6 +469,55 @@ class LeEditor {
     _bindings.le_fit_scene(_handle, paddingPx);
   }
 
+  /// Spacing (dbu) between minor grid dots, drawn behind the design by
+  /// [renderPixelBuffer]. Defaults to 5 (dbu), matching a 5nm minor grid
+  /// under the common "1 dbu = 1nm" Technology convention.
+  int get minorGridSpacing {
+    _checkNotDisposed();
+    return _bindings.le_minor_grid_spacing(_handle);
+  }
+
+  /// Sets the minor grid dot spacing (dbu). Affects rendering; values <= 0
+  /// are ignored, same guard as [zoom]'s scale.
+  set minorGridSpacing(int dbu) {
+    _checkNotDisposed();
+    _bindings.le_set_minor_grid_spacing(_handle, dbu);
+  }
+
+  /// Spacing (dbu) between major grid dots (drawn bolder than minor ones).
+  /// Defaults to 50 (dbu), matching a 50nm major grid under the common
+  /// "1 dbu = 1nm" Technology convention.
+  int get majorGridSpacing {
+    _checkNotDisposed();
+    return _bindings.le_major_grid_spacing(_handle);
+  }
+
+  /// Sets the major grid dot spacing (dbu). Affects rendering; values <= 0
+  /// are ignored.
+  set majorGridSpacing(int dbu) {
+    _checkNotDisposed();
+    _bindings.le_set_major_grid_spacing(_handle, dbu);
+  }
+
+  /// Sets the current mouse position, in the same pixel space as
+  /// [renderPixelBuffer]'s output (top-left origin, y increasing downward)
+  /// and [zoom]'s x/y - feed straight from a pointer-move event. Drives
+  /// the grid-snap indicator box [renderPixelBuffer] draws. Cheap to call
+  /// on every pointer-move event - it does not invalidate the
+  /// (potentially design-sized) rasterized design cache, only the small
+  /// cursor overlay.
+  void setMousePosition(int x, int y) {
+    _checkNotDisposed();
+    _bindings.le_set_mouse_position(_handle, x, y);
+  }
+
+  /// Clears the current mouse position (e.g. on a pointer-leave event) so
+  /// the grid-snap indicator box stops showing at the last known position.
+  void clearMousePosition() {
+    _checkNotDisposed();
+    _bindings.le_clear_mouse_position(_handle);
+  }
+
   /// Runs the full pipeline+render chain for the currently selected Design
   /// and viewport, returning the resulting frame copied into Dart-owned
   /// memory. The native `LePixelBuffer.data` this copies from is only valid
@@ -540,7 +589,9 @@ class LeEditor {
 /// thread calls into [LeEditor] from Dart. Backend's Scene/Pipeline/
 /// Renderer aren't documented as thread-safe (see backend/CLAUDE.md), so a
 /// [LeEditor] setter (`zoom`/`pan`/`setViewportSize`/`fitScene`/
-/// `setCurrentDesign`/`readLef`) racing a pending, not-yet-rendered
+/// `minorGridSpacing`/`majorGridSpacing`/`setMousePosition`/
+/// `clearMousePosition`/`setCurrentDesign`/`readLef`) racing a pending,
+/// not-yet-rendered
 /// [markFrameAvailable] is a genuine data race, not just a hypothetical
 /// one. Not solved at this layer - a real fix needs a lock inside the C
 /// API itself, guarding every `le_*` call on a handle regardless of which

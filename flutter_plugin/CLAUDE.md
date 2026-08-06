@@ -58,6 +58,20 @@ Two separate paths call into the C API — not one:
   (`Pipeline::filter_by_layer_visibility`, combining both axes - see
   `Scene::is_view_layer_visible`); selectability is interaction-only — no
   hit-testing/click-to-select API exists yet to consult it.
+- **Grid display and mouse-position tracking** (UPDATES.md 5.1/5.2, partial
+  — 5.3's snapped-coordinate readback and 5.4's origin marker aren't in the
+  API yet): `le_minor_grid_spacing`/`le_set_minor_grid_spacing` and the
+  `le_major_grid_spacing` equivalents (`LeEditor.minorGridSpacing`/
+  `majorGridSpacing` getter+setter pairs, dbu, defaulting to 5/50 — a
+  5nm/50nm grid under the common "1 dbu = 1nm" Technology convention) drawn
+  behind the design by `le_render_pixel_buffer`; `le_set_mouse_position`/
+  `le_clear_mouse_position` (`LeEditor.setMousePosition()`/
+  `clearMousePosition()`, same pixel space as `le_zoom`'s x/y - feed
+  straight from a pointer-move/-leave event) drive a grid-snap indicator
+  box also drawn by `le_render_pixel_buffer` - cheap to call every
+  pointer-move since it only invalidates the small cursor overlay, not the
+  potentially design-sized rasterized design cache (see
+  `Renderer::compose_with_cursor`).
 - **Native platform texture code** (macOS: `LeApiBridge`/`LeTexture` in
   `macos/Classes/`, implementing `FlutterTexture`; Linux: `FlLeTexture` in
   `linux/lef_texture.cc`, implementing `FlPixelBufferTexture`) calls
