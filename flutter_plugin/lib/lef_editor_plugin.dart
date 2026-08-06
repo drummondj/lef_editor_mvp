@@ -161,6 +161,16 @@ class LeLayer {
   final int colorB;
 }
 
+/// The current mouse position's coordinates in microns, snapped to the
+/// minor grid (see [LeEditor.snappedMousePosition]) - the same point
+/// [LeEditor.setMousePosition]'s grid-snap indicator box is centered on.
+class LeSnappedMouse {
+  const LeSnappedMouse({required this.xUm, required this.yUm});
+
+  final double xUm;
+  final double yUm;
+}
+
 /// One editor instance: owns a native `LeHandle*` (a Root/ViewLayerSet/
 /// Scene/Pipeline/Renderer, see api.hpp) that's reused across calls,
 /// matching the backend's own "one instance per Scene-equivalent lifetime"
@@ -516,6 +526,18 @@ class LeEditor {
   void clearMousePosition() {
     _checkNotDisposed();
     _bindings.le_clear_mouse_position(_handle);
+  }
+
+  /// The current mouse position's coordinates in microns, snapped to the
+  /// minor grid - the same point [setMousePosition]'s grid-snap indicator
+  /// box is centered on. Null if no mouse position has been set (or
+  /// [clearMousePosition] was called since), or no Technology has been
+  /// read yet ([readLef]) to convert dbu to microns with.
+  LeSnappedMouse? get snappedMousePosition {
+    _checkNotDisposed();
+    final result = _bindings.le_snapped_mouse_position(_handle);
+    if (result.has_position == 0) return null;
+    return LeSnappedMouse(xUm: result.x_um, yUm: result.y_um);
   }
 
   /// Runs the full pipeline+render chain for the currently selected Design
