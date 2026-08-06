@@ -25,10 +25,26 @@ namespace le
         uint8_t a = 255;
     };
 
+    /// @brief The fill treatment Renderer::draw_group draws a ViewLayer's
+    /// shapes with, on top of/instead of a flat color wash - see its own
+    /// doc comment for how each one is actually drawn (tiled shader vs.
+    /// drawn directly per-shape). Always drawn with a transparent
+    /// background so ViewLayers below remain visible through the gaps.
+    enum class FillPattern
+    {
+        NONE,                 // flat translucent fill (BOUNDARY today)
+        DIAGONAL_STRIPES_NE,   // ROUTING, horizontal direction: "/" hatch
+        DIAGONAL_STRIPES_NW,   // ROUTING, vertical direction: "\" hatch
+        CROSS,                 // CUT: an X spanning each shape's own bounds
+        BRICK,                 // any OBSTRUCTION, regardless of layer type
+        DOTS,                  // every other layer type
+    };
+
     struct ViewLayerStyle
     {
         Color outline_color;
         Color fill_color;
+        FillPattern fill_pattern = FillPattern::NONE;
     };
 
     struct ViewLayerTag
@@ -103,9 +119,13 @@ namespace le
                     color = other_color(other_index++);
                 }
 
-                const ViewLayerStyle style = layer_style(color);
-                set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, style);
-                set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, style);
+                // TERMINAL and OBSTRUCTION of the same physical Layer
+                // share the same color (see the palette logic above) but
+                // not the same FillPattern - OBSTRUCTION always reads as
+                // BRICK regardless of layer type, so blockage regions are
+                // recognizable at a glance across every layer.
+                set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, layer_style(color, terminal_fill_pattern(*layer)));
+                set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, layer_style(color, FillPattern::BRICK));
             }
 
             set.boundary_id_ = set.add("BOUNDARY", ViewLayerPurpose::BOUNDARY, LayerId{}, boundary_style());
@@ -225,11 +245,25 @@ namespace le
             return kOtherColors[index % kOtherColors.size()];
         }
 
-        static ViewLayerStyle layer_style(Color base)
+        // TERMINAL's FillPattern: bright-palette layer types (ROUTING,
+        // CUT) get a distinctive pattern of their own; everything else
+        // gets the generic muted-palette DOTS.
+        static FillPattern terminal_fill_pattern(const LayerData &layer)
+        {
+            if (layer.type == "ROUTING")
+                return layer.direction == RoutingDirection::V ? FillPattern::DIAGONAL_STRIPES_NW : FillPattern::DIAGONAL_STRIPES_NE;
+
+            if (layer.type == "CUT")
+                return FillPattern::CROSS;
+
+            return FillPattern::DOTS;
+        }
+
+        static ViewLayerStyle layer_style(Color base, FillPattern pattern = FillPattern::NONE)
         {
             Color fill = base;
             fill.a = 100;
-            return ViewLayerStyle{.outline_color = base, .fill_color = fill};
+            return ViewLayerStyle{.outline_color = base, .fill_color = fill, .fill_pattern = pattern};
         }
 
         static ViewLayerStyle boundary_style()

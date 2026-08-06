@@ -9,6 +9,8 @@ using namespace le;
 
 namespace
 {
+    SkColor to_sk_color(Color c) { return SkColorSetARGB(c.a, c.r, c.g, c.b); }
+
     // Builds a Root with one Technology, an M1 and M2 layer, a matching
     // ViewLayerSet, and one empty Abstract - the common scaffolding every
     // test below attaches to. Reuses PipelineFixture's shape of setup
@@ -58,6 +60,24 @@ namespace
             bitmap.allocPixels(SkImageInfo::MakeN32Premul(width, height));
             surface->readPixels(bitmap, 0, 0);
             return bitmap;
+        }
+
+        // A tiled FillPattern (stripes/brick/dots) only covers part of its
+        // shape - unlike the old flat fill, a single fixed-point sample can
+        // land in a transparent gap by coincidence of the pattern's phase.
+        // Scans a region instead and checks whether `rgb` (ignoring alpha -
+        // a covered pattern pixel is opaque, an uncovered one transparent,
+        // never a partial match) shows up anywhere in it.
+        bool region_shows_color(const SkBitmap &bitmap, int x0, int y0, int x1, int y1, SkColor rgb)
+        {
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x)
+                {
+                    SkColor c = bitmap.getColor(x, y);
+                    if (SkColorGetA(c) > 0 && SkColorGetR(c) == SkColorGetR(rgb) && SkColorGetG(c) == SkColorGetG(rgb) && SkColorGetB(c) == SkColorGetB(rgb))
+                        return true;
+                }
+            return false;
         }
 
         Root root;
@@ -167,16 +187,15 @@ TEST_F(RenderFixture, BuildPictureFillsInteriorPixelWithLayerStyleColor)
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
 
-    // Sampled well inside the 10..30 rect (at 25,25 - away from the label
-    // drawn at the centroid 20,20), away from any antialiased edge - the
-    // exact fully-covered fill color.
-    SkColor pixel = sample_pixel(picture, 100, 100, 25, 25);
+    // M1 is ROUTING, so its TERMINAL fill is a tiled diagonal-stripe
+    // pattern (see FillPattern), not a flat wash - scan a strip inside the
+    // 10..30 rect (away from both the outline hairline and the label at
+    // the centroid, 20,20) for the layer's own color instead of asserting
+    // on one exact pixel.
+    SkBitmap bitmap = rasterize(picture, 100, 100);
     const ViewLayerData *view_layer = view_layers.get(shapes.begin()->first);
     ASSERT_NE(view_layer, nullptr);
-    EXPECT_EQ(SkColorGetR(pixel), view_layer->style.fill_color.r);
-    EXPECT_EQ(SkColorGetG(pixel), view_layer->style.fill_color.g);
-    EXPECT_EQ(SkColorGetB(pixel), view_layer->style.fill_color.b);
-    EXPECT_EQ(SkColorGetA(pixel), view_layer->style.fill_color.a);
+    EXPECT_TRUE(region_shows_color(bitmap, 11, 11, 15, 29, to_sk_color(view_layer->style.outline_color)));
 }
 
 TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
@@ -194,19 +213,20 @@ TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
     ASSERT_EQ(shapes.size(), 2u); // two distinct groups: M1/OBSTRUCTION, M2/TERMINAL
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    SkBitmap bitmap = rasterize(picture, 100, 100);
 
-    const Color &m1_fill = view_layers.get(view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION))->style.fill_color;
-    const Color &m2_fill = view_layers.get(view_layers.find(m2, ViewLayerPurpose::TERMINAL))->style.fill_color;
+    // M1/OBSTRUCTION is BRICK (any OBSTRUCTION is); M2/TERMINAL is ROUTING's
+    // diagonal stripes - neither covers every pixel, so scan each shape's
+    // own rect (inset from its outline hairline) for its own color rather
+    // than sampling one exact point.
+    SkColor m1_color = to_sk_color(view_layers.get(view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION))->style.outline_color);
+    SkColor m2_color = to_sk_color(view_layers.get(view_layers.find(m2, ViewLayerPurpose::TERMINAL))->style.outline_color);
 
-    SkColor m1_pixel = sample_pixel(picture, 100, 100, 25, 25);
-    EXPECT_EQ(SkColorGetR(m1_pixel), m1_fill.r);
-    EXPECT_EQ(SkColorGetG(m1_pixel), m1_fill.g);
-    EXPECT_EQ(SkColorGetA(m1_pixel), m1_fill.a);
+    EXPECT_TRUE(region_shows_color(bitmap, 11, 11, 29, 29, m1_color));
+    EXPECT_FALSE(region_shows_color(bitmap, 11, 11, 29, 29, m2_color)); // M2's color doesn't leak into M1's rect
 
-    SkColor m2_pixel = sample_pixel(picture, 100, 100, 65, 25);
-    EXPECT_EQ(SkColorGetR(m2_pixel), m2_fill.r);
-    EXPECT_EQ(SkColorGetG(m2_pixel), m2_fill.g);
-    EXPECT_EQ(SkColorGetA(m2_pixel), m2_fill.a);
+    EXPECT_TRUE(region_shows_color(bitmap, 51, 11, 69, 29, m2_color));
+    EXPECT_FALSE(region_shows_color(bitmap, 51, 11, 69, 29, m1_color)); // M1's color doesn't leak into M2's rect
 }
 
 TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentFill)
@@ -307,36 +327,58 @@ TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
         return buffer.data[static_cast<size_t>(y) * buffer.row_bytes + static_cast<size_t>(x) * 4 + static_cast<size_t>(channel)];
     };
 
-    // Near the top of the buffer (row 20): M2's green, not M1's red.
-    EXPECT_GT(channel_at(20, 20, 1), 0);
-    EXPECT_EQ(channel_at(20, 20, 0), 0);
+    // OBSTRUCTION's BRICK pattern doesn't cover every pixel - unlike the
+    // old flat fill, a single fixed point can land in a transparent gap by
+    // coincidence of the pattern's phase. Scan each shape's own 20x20
+    // region (inset from its outline hairline) for any pixel carrying its
+    // color instead.
+    auto region_has_channel = [&](int x0, int y0, int x1, int y1, int channel)
+    {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+                if (channel_at(x, y, channel) > 0)
+                    return true;
+        return false;
+    };
 
-    // Near the bottom of the buffer (row 80): M1's red, not M2's green.
-    EXPECT_GT(channel_at(20, 80, 0), 0);
-    EXPECT_EQ(channel_at(20, 80, 1), 0);
+    // Near the top of the buffer (rows 11..29): M2's green, not M1's red.
+    EXPECT_TRUE(region_has_channel(11, 11, 29, 29, 1));
+    EXPECT_FALSE(region_has_channel(11, 11, 29, 29, 0));
+
+    // Near the bottom of the buffer (rows 71..89): M1's red, not M2's green.
+    EXPECT_TRUE(region_has_channel(11, 71, 29, 89, 0));
+    EXPECT_FALSE(region_has_channel(11, 71, 29, 89, 1));
 }
 
 TEST_F(RenderFixture, RasterizeBytesArePremultipliedRgba8888RegardlessOfPlatform)
 {
-    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
-
+    // A hand-built picture with a known translucent color, rather than
+    // going through build_picture()'s own ViewLayerStyle/FillPattern -
+    // every default FillPattern other than NONE (used only by BOUNDARY
+    // today) draws fully opaque pattern strokes/dots against a transparent
+    // background, not a translucent flat wash, so there's no fixed pixel
+    // build_picture's own output would reliably put a partial-alpha color
+    // at. This test's actual concern - rasterize()'s premultiply byte math -
+    // doesn't depend on FillPattern at all, so it's tested in isolation.
     Scene scene;
     scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
 
-    const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    constexpr SkColor kTranslucentColor = SkColorSetARGB(120, 200, 90, 40);
+    SkPictureRecorder recorder;
+    SkCanvas *record_canvas = recorder.beginRecording(SkRect::MakeWH(100, 100));
+    SkPaint paint;
+    paint.setColor(kTranslucentColor);
+    record_canvas->drawRect(SkRect::MakeLTRB(10, 10, 30, 30), paint);
+    sk_sp<SkPicture> picture = recorder.finishRecordingAsPicture();
+
     const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    ASSERT_NE(buffer.data, nullptr);
 
-    const Color &fill = view_layers.get(shapes.begin()->first)->style.fill_color;
-    ASSERT_LT(fill.a, 255); // this test's premultiply math assumes non-opaque fill
-
-    // dbu (25,25) -> pixel (25,25) (pan=0, scale=1) -> device (25, 100-25)
-    // after rasterize()'s Y-flip - well inside the 10..30 rect, away from
-    // any antialiased edge or the label at its centroid.
+    // dbu-space concerns don't apply to this hand-built picture - (25,25)
+    // in its own local coordinates ends up at device row 100-25=75 after
+    // rasterize()'s Y-flip, well inside the 10..30 rect drawn above, away
+    // from any antialiased edge.
     const uint8_t *p = buffer.data + static_cast<size_t>(75) * buffer.row_bytes + static_cast<size_t>(25) * 4;
 
     // Mirrors SkMulDiv255Round's exact rounding (SkMathPriv.h) rather than
@@ -348,10 +390,10 @@ TEST_F(RenderFixture, RasterizeBytesArePremultipliedRgba8888RegardlessOfPlatform
         return static_cast<uint8_t>((prod + (prod >> 8)) >> 8);
     };
 
-    EXPECT_EQ(p[0], premultiply(fill.r, fill.a)); // R
-    EXPECT_EQ(p[1], premultiply(fill.g, fill.a)); // G
-    EXPECT_EQ(p[2], premultiply(fill.b, fill.a)); // B
-    EXPECT_EQ(p[3], fill.a);                      // A
+    EXPECT_EQ(p[0], premultiply(SkColorGetR(kTranslucentColor), SkColorGetA(kTranslucentColor))); // R
+    EXPECT_EQ(p[1], premultiply(SkColorGetG(kTranslucentColor), SkColorGetA(kTranslucentColor))); // G
+    EXPECT_EQ(p[2], premultiply(SkColorGetB(kTranslucentColor), SkColorGetA(kTranslucentColor))); // B
+    EXPECT_EQ(p[3], SkColorGetA(kTranslucentColor));                                              // A
 }
 
 TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)

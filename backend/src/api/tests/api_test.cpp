@@ -9,6 +9,22 @@ namespace
         return std::string(API_TEST_FIXTURES_DIR) + "/" + name;
     }
 
+    // ROUTING layers (e.g. the pin's M1) render with a tiled FillPattern
+    // (diagonal stripes) rather than a flat fill - unlike a flat fill, a
+    // single fixed pixel can land in a transparent gap by coincidence of
+    // the pattern's phase. Scans a region instead of trusting one point.
+    bool region_has_opaque_pixel(const LePixelBuffer &buffer, int x0, int y0, int x1, int y1)
+    {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+            {
+                const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+                if (p[3] > 0)
+                    return true;
+            }
+        return false;
+    }
+
     struct ApiFixture : public ::testing::Test
     {
         void SetUp() override { handle = le_create(); }
@@ -153,10 +169,12 @@ TEST_F(ApiFixture, FitSceneFillsTheViewportWithThePinVisible)
     ASSERT_NE(buffer.data, nullptr);
 
     // The macro's content should now fill most of the 200x200 viewport -
-    // sample the center pixel, which sits inside both the 10x10 micron
-    // macro boundary and PIN A's (2,2)-(8,8) micron RECT.
-    const uint8_t *center = buffer.data + static_cast<size_t>(100) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(100) * 4;
-    EXPECT_GT(center[3], 0);
+    // scan a block around the center, which sits inside both the 10x10
+    // micron macro boundary and PIN A's (2,2)-(8,8) micron RECT. PIN A is
+    // on M1 (a ROUTING layer), so its fill is a tiled diagonal-stripe
+    // pattern rather than a flat fill - a single fixed pixel could land in
+    // a transparent gap by coincidence of the pattern's phase.
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 80, 80, 120, 120));
 }
 
 TEST_F(ApiFixture, LibraryCountAndAtAreZeroOrInvalidForNullHandle)
@@ -248,8 +266,9 @@ TEST_F(ApiFixture, SetCurrentDesignByIdSelectsTheSameDesignAsSetCurrentDesign)
 
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
     ASSERT_NE(buffer.data, nullptr);
-    const uint8_t *inside = buffer.data + static_cast<size_t>(50) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(50) * 4;
-    EXPECT_GT(inside[3], 0); // pin rect visible, same as le_set_current_design(handle, 0) would give
+    // PIN A is on M1 (ROUTING), so its fill is a tiled diagonal-stripe
+    // pattern - scan the pin's own region rather than trusting one pixel.
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 21, 21, 79, 79)); // pin rect visible, same as le_set_current_design(handle, 0) would give
 }
 
 TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)
@@ -272,8 +291,7 @@ TEST_F(ApiFixture, ZoomWithDegenerateFactorLeavesScaleAndPanUnchanged)
 
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
     ASSERT_NE(buffer.data, nullptr);
-    const uint8_t *inside = buffer.data + static_cast<size_t>(50) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(50) * 4;
-    EXPECT_GT(inside[3], 0); // pin rect still visible exactly where it was
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 21, 21, 79, 79)); // pin rect still visible exactly where it was
 }
 
 TEST_F(ApiFixture, ZoomKeepsTheAnchorPixelFixedOnScreen)
@@ -286,18 +304,19 @@ TEST_F(ApiFixture, ZoomKeepsTheAnchorPixelFixedOnScreen)
 
     LePixelBuffer before = le_render_pixel_buffer(handle);
     ASSERT_NE(before.data, nullptr);
-    const uint8_t *before_pixel = before.data + static_cast<size_t>(50) * static_cast<size_t>(before.row_bytes) + static_cast<size_t>(50) * 4;
-    ASSERT_GT(before_pixel[3], 0); // baseline: pin rect visible at (50, 50)
+    // A small window around (50, 50) rather than that one exact pixel -
+    // PIN A's ROUTING-layer fill is a tiled stripe pattern, so a single
+    // point could land in a transparent gap by coincidence of phase.
+    ASSERT_TRUE(region_has_opaque_pixel(before, 43, 43, 57, 57)); // baseline: pin rect visible around (50, 50)
 
     // Zoom in 2x anchored at the same pixel being sampled - the dbu point
     // under (50, 50) must still be under (50, 50) afterward, so it should
-    // still show the same pin rect content.
+    // still show the same pin rect content there.
     le_zoom(handle, 1.0, 50, 50);
 
     LePixelBuffer after = le_render_pixel_buffer(handle);
     ASSERT_NE(after.data, nullptr);
-    const uint8_t *after_pixel = after.data + static_cast<size_t>(50) * static_cast<size_t>(after.row_bytes) + static_cast<size_t>(50) * 4;
-    EXPECT_GT(after_pixel[3], 0);
+    EXPECT_TRUE(region_has_opaque_pixel(after, 43, 43, 57, 57));
 }
 
 TEST_F(ApiFixture, PanWithNullHandleDoesNotCrash)
@@ -315,8 +334,7 @@ TEST_F(ApiFixture, PanShiftsContentOutOfView)
 
     LePixelBuffer before = le_render_pixel_buffer(handle);
     ASSERT_NE(before.data, nullptr);
-    const uint8_t *before_pixel = before.data + static_cast<size_t>(50) * static_cast<size_t>(before.row_bytes) + static_cast<size_t>(50) * 4;
-    ASSERT_GT(before_pixel[3], 0); // baseline: pin rect visible at (50, 50)
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79)); // baseline: pin rect visible
 
     // Pan by 2 full viewport widths in dbu x - the whole 10000-dbu-wide
     // macro (well under one viewport width at this scale) ends up entirely
@@ -325,8 +343,7 @@ TEST_F(ApiFixture, PanShiftsContentOutOfView)
 
     LePixelBuffer after = le_render_pixel_buffer(handle);
     ASSERT_NE(after.data, nullptr);
-    const uint8_t *after_pixel = after.data + static_cast<size_t>(50) * static_cast<size_t>(after.row_bytes) + static_cast<size_t>(50) * 4;
-    EXPECT_EQ(after_pixel[3], 0);
+    EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79));
 }
 
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
@@ -348,9 +365,10 @@ TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
 
     // Pin rect (2,2)-(8,8) microns -> pixel (20,20)-(80,80) before
     // rasterize()'s Y-flip -> device (20, 100-80)-(80, 100-20) after it.
-    // Sample well inside that region, away from any antialiased edge.
-    const uint8_t *inside = buffer.data + static_cast<size_t>(50) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(50) * 4;
-    EXPECT_GT(inside[3], 0); // fill alpha - something was actually drawn here
+    // PIN A is on M1 (ROUTING), so its fill is a tiled diagonal-stripe
+    // pattern, not a flat fill - scan a region inside it (inset from the
+    // outline hairline) rather than trusting one exact pixel.
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 21, 21, 79, 79)); // fill pattern - something was actually drawn here
 
     // Well outside the pin rect, but still inside the macro boundary
     // outline - the boundary is stroke-only (no fill), so this should be

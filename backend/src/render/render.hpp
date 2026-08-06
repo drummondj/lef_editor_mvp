@@ -3,6 +3,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkFont.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathBuilder.h"
@@ -10,7 +11,10 @@
 #include "include/core/SkPicture.h"
 #include "include/core/SkPictureRecorder.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkSamplingOptions.h"
+#include "include/core/SkShader.h"
 #include "include/core/SkSurface.h"
+#include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
 #include <cstdint>
 #include <map>
@@ -348,17 +352,134 @@ namespace le
             return builder.detach();
         }
 
+        // Fixed screen-pixel tile size for every tiled FillPattern below -
+        // deliberately not scaled with Scene::scale() (the pattern stays a
+        // constant visual density at any zoom level, like a hatch fill in
+        // a CAD tool, rather than shrinking to nothing zoomed out or
+        // ballooning zoomed in).
+        static constexpr int kPatternTileSize = 12;
+
+        // Renders one FillPattern into a small transparent-background tile
+        // and wraps it in a kRepeat/kRepeat SkShader - this project's
+        // answer to "maybe using a shader?" (UPDATES.md 2.3): Skia's
+        // SkShader tiling works entirely on a CPU raster surface, no GPU
+        // involved, so it fits this project's no-GPU target directly.
+        // FillPattern::NONE and ::CROSS return null - NONE draws as today's
+        // flat color (no shader needed) and CROSS is drawn directly against
+        // each shape's own bounds in draw_group instead of tiled (see its
+        // own comment for why a repeating tile is the wrong shape for it).
+        static sk_sp<SkShader> pattern_shader(FillPattern pattern, SkColor color)
+        {
+            if (pattern == FillPattern::NONE || pattern == FillPattern::CROSS)
+                return nullptr;
+
+            const SkImageInfo info = SkImageInfo::MakeN32Premul(kPatternTileSize, kPatternTileSize);
+            sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+            SkCanvas *canvas = surface->getCanvas();
+            canvas->clear(SK_ColorTRANSPARENT);
+
+            SkPaint paint;
+            // Anti-aliasing off, deliberately - a hairline at an exact
+            // pixel-grid coordinate (e.g. this tile's own half-size
+            // offsets) still gets split into two ~50%-coverage rows by
+            // Skia's AA, which repeated across every tile turns crisp
+            // brick/stripe edges into a hazy, low-alpha wash instead of a
+            // legible pattern. Crisp, fully-opaque single-pixel lines read
+            // far better at this tile's small size.
+            paint.setAntiAlias(false);
+            paint.setColor(color);
+
+            const auto s = static_cast<SkScalar>(kPatternTileSize);
+
+            switch (pattern)
+            {
+            case FillPattern::DIAGONAL_STRIPES_NE:
+            case FillPattern::DIAGONAL_STRIPES_NW:
+            {
+                // A field of parallel 45-degree segments spanning past the
+                // tile's own edges (not just within [0, s]) so the hatch
+                // reads as continuous stripes once tiled, not a sawtooth -
+                // the classic tiled-hatch technique (e.g. CAD ANSI31 fill).
+                paint.setStyle(SkPaint::kStroke_Style);
+                constexpr SkScalar period = 4.0f;
+                const bool ne = pattern == FillPattern::DIAGONAL_STRIPES_NE;
+                for (SkScalar offset = -s; offset <= 2 * s; offset += period)
+                {
+                    if (ne)
+                        canvas->drawLine(offset, 0, offset + s, s, paint);
+                    else
+                        canvas->drawLine(offset + s, 0, offset, s, paint);
+                }
+                break;
+            }
+            case FillPattern::BRICK:
+            {
+                // Two staggered rows (the standard masonry half-offset
+                // joint). Tiling repeats this tile's own content exactly -
+                // it doesn't draw anything extra at the seam - so both
+                // horizontal mortar joints need drawing explicitly: one at
+                // the tile's own top edge (y=0, becoming the joint between
+                // this tile's top row and the previous tile's bottom row)
+                // and one at the row split (y=s/2). Leaving the y=0 one out
+                // meant every other row boundary had no joint at all.
+                paint.setStyle(SkPaint::kStroke_Style);
+                canvas->drawLine(0, 0, s, 0, paint);             // horizontal joint at the tile's top edge
+                canvas->drawLine(0, s / 2, s, s / 2, paint);     // horizontal joint between the two rows
+                canvas->drawLine(s / 2, 0, s / 2, s / 2, paint); // top row's interior vertical joint
+                canvas->drawLine(0, s / 2, 0, s, paint);         // bottom row's interior vertical joint (staggered to the tile edge)
+                break;
+            }
+            case FillPattern::DOTS:
+            {
+                paint.setStyle(SkPaint::kFill_Style);
+                canvas->drawCircle(s / 2, s / 2, s * 0.15f, paint);
+                break;
+            }
+            default:
+                break;
+            }
+
+            sk_sp<SkImage> image = surface->makeImageSnapshot();
+            return image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat, SkSamplingOptions());
+        }
+
+        // Draws an X spanning `bounds` - CUT layers' FillPattern::CROSS,
+        // drawn directly rather than tiled since CUT geometry (vias) is
+        // almost always one small rect per shape, not a large area a
+        // repeating texture would suit (see also pattern_shader's comment).
+        static void draw_cross(SkCanvas &canvas, const SkRect &bounds, const SkPaint &paint)
+        {
+            canvas.drawLine(bounds.left(), bounds.top(), bounds.right(), bounds.bottom(), paint);
+            canvas.drawLine(bounds.left(), bounds.bottom(), bounds.right(), bounds.top(), paint);
+        }
+
         // Paint/font construction hoisted out of the per-shape loop - one
         // ViewLayerStyle applies to every shape in the group.
         static void draw_group(SkCanvas &canvas, const std::vector<PixelShape> &group, const ViewLayerStyle &style)
         {
             const bool has_fill = style.fill_color.a > 0;
             const bool has_outline = style.outline_color.a > 0;
+            const bool is_cross = style.fill_pattern == FillPattern::CROSS;
 
             SkPaint fill;
             fill.setAntiAlias(true);
             fill.setStyle(SkPaint::kFill_Style);
-            fill.setColor(to_sk_color(style.fill_color));
+            if (sk_sp<SkShader> shader = pattern_shader(style.fill_pattern, to_sk_color(style.outline_color)))
+            {
+                // A paint's alpha still modulates its shader's own output
+                // alpha even though its RGB is ignored - leaving fill_color
+                // (translucent, alpha ~100) as this paint's color would
+                // silently wash out every already-opaque pattern pixel to
+                // ~40% opacity. Full alpha here so the tile's own baked-in
+                // alpha (opaque pattern, transparent gaps) passes through
+                // unmodulated.
+                fill.setShader(std::move(shader));
+                fill.setAlphaf(1.0f);
+            }
+            else
+            {
+                fill.setColor(to_sk_color(style.fill_color));
+            }
 
             SkPaint stroke;
             stroke.setAntiAlias(true);
@@ -379,7 +500,12 @@ namespace le
                 {
                     SkRect rect = SkRect::MakeLTRB(static_cast<SkScalar>(r.ll.x), static_cast<SkScalar>(r.ll.y),
                                                     static_cast<SkScalar>(r.ur.x), static_cast<SkScalar>(r.ur.y));
-                    if (has_fill)
+                    if (is_cross)
+                    {
+                        if (has_outline)
+                            draw_cross(canvas, rect, stroke);
+                    }
+                    else if (has_fill)
                         canvas.drawRect(rect, fill);
                     if (has_outline)
                         canvas.drawRect(rect, stroke);
@@ -388,7 +514,12 @@ namespace le
                 for (const auto &poly : shape.polygons)
                 {
                     SkPath path = to_sk_path(poly, /*close=*/true);
-                    if (has_fill)
+                    if (is_cross)
+                    {
+                        if (has_outline)
+                            draw_cross(canvas, path.getBounds(), stroke);
+                    }
+                    else if (has_fill)
                         canvas.drawPath(path, fill);
                     if (has_outline)
                         canvas.drawPath(path, stroke);
