@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.2.0",
+    version="0.3.0",
     classes=[
         Klass(
             name="Technology",
@@ -163,6 +163,12 @@ schema = Schema(
                     name="location",
                     description="The text location",
                     type="Point",
+                ),
+                Field(
+                    name="size",
+                    description="Local width of the shape geometry at the label's location, in database units, used to size the rendered text",
+                    type="double",
+                    example=200.0,
                 ),
             ],
         ),

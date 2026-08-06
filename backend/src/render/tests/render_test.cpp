@@ -121,7 +121,7 @@ TEST_F(RenderFixture, TransformToPixelsHandlesPolygonsPathsAndTexts)
         .layer_name = "M1",
         .paths = {Path{.polygon = Polygon{.points = {{0, 0}, {10, 0}}}, .width = 4}},
         .polygons = {Polygon{.points = {{0, 0}, {10, 0}, {10, 10}, {0, 10}}}},
-        .texts = {Text{.label = "note", .location = {5, 5}}},
+        .texts = {Text{.label = "note", .location = {5, 5}, .size = 20}},
     });
 
     Scene scene;
@@ -151,6 +151,37 @@ TEST_F(RenderFixture, TransformToPixelsHandlesPolygonsPathsAndTexts)
     EXPECT_EQ(ps.texts.front().label, "note");
     EXPECT_DOUBLE_EQ(ps.texts.front().location.x, 10.0);
     EXPECT_DOUBLE_EQ(ps.texts.front().location.y, 10.0);
+    // 20 dbu * scale 2.0 * kLabelWidthRatio (0.6) = 24.0 - well above the
+    // minimum floor, so the ratio (not the floor) determines this value.
+    EXPECT_DOUBLE_EQ(ps.texts.front().size, 24.0);
+}
+
+TEST_F(RenderFixture, TransformToPixelsFloorsTinyTextSizeToAMinimumPixelSize)
+{
+    // A hair-thin label size (e.g. from a very thin path/polygon arm) must
+    // not shrink to an unreadable speck - transform_to_pixels clamps to a
+    // minimum pixel size regardless of how small the scaled geometry size
+    // would otherwise be. 1 dbu * scale 1.0 * ratio would be well under 1px
+    // unclamped; assert it's floored to something actually legible instead.
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}},
+        .texts = {Text{.label = "tiny", .location = {5, 5}, .size = 1}},
+    });
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+
+    ASSERT_EQ(pixel_shapes.size(), 1u);
+    const auto &ps = pixel_shapes.begin()->second.front();
+    ASSERT_EQ(ps.texts.size(), 1u);
+    EXPECT_GT(ps.texts.front().size, 5.0); // unclamped would be 1*1.0*0.6 = 0.6
 }
 
 TEST_F(RenderFixture, TransformToPixelsReusesCacheUntilViewportVersionChanges)

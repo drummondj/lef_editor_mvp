@@ -349,3 +349,82 @@ TEST(Geometry, LabelLocationReturnsRawCentroidWhenGridSearchFindsNoInteriorPoint
     Point label = Geometry::get_label_location(shape);
     expect_point_eq(label, Point{50, 50});
 }
+
+TEST(Geometry, LocalWidthAtRectReturnsMinDimension)
+{
+    // Non-square rect: the smaller dimension is the "width" a label
+    // should be sized to, not the larger one or some average of the two.
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {100, 20}});
+
+    EXPECT_DOUBLE_EQ(Geometry::local_width_at(shape, Point{50, 10}), 20.0);
+}
+
+TEST(Geometry, LocalWidthAtPathReturnsPathWidthDirectly)
+{
+    // A Path's thickness is already known exactly - local_width_at should
+    // read path.width directly rather than derive anything from its
+    // (much larger) buffered bbox.
+    Shape shape;
+    shape.paths.push_back(Path{.polygon = Polygon{.points = {{0, 0}, {100, 0}}}, .width = 6});
+
+    EXPECT_DOUBLE_EQ(Geometry::local_width_at(shape, Point{50, 0}), 6.0);
+}
+
+TEST(Geometry, LocalWidthAtSquarePolygonMeasuresDistanceToBoundaryNotFilledArea)
+{
+    // A point well inside a 100x100 square polygon: distance to the
+    // nearest edge is 50 on every side, so width = 2*50 = 100. This is
+    // also a regression guard for the "distance to a filled polygon is 0
+    // for any interior point" pitfall - a buggy implementation that
+    // measured distance to the filled area instead of its boundary would
+    // return 0.0 here instead of 100.0.
+    Shape shape;
+    shape.polygons.push_back(Polygon{.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}}});
+
+    EXPECT_NEAR(Geometry::local_width_at(shape, Point{50, 50}), 100.0, 0.01);
+}
+
+TEST(Geometry, LocalWidthAtLShapedPolygonUsesArmThicknessNotBbox)
+{
+    // An L-shaped (non-convex) polygon: a 100x30 bottom arm plus a 30x100
+    // vertical arm, so the overall bbox is 100x100 - but a point centered
+    // in the vertical arm's own 30-wide interior should be sized to that
+    // arm's ~30 thickness, nowhere near the 100-wide bbox. This is the
+    // regression test that would fail if sizing were ever "simplified"
+    // back to a bbox-based approach - the whole point of this feature.
+    Shape shape;
+    shape.polygons.push_back(Polygon{.points = {
+                                          {0, 0},
+                                          {100, 0},
+                                          {100, 30},
+                                          {30, 30},
+                                          {30, 100},
+                                          {0, 100},
+                                      }});
+
+    const double width = Geometry::local_width_at(shape, Point{15, 70});
+    EXPECT_NEAR(width, 30.0, 0.01);
+    EXPECT_LT(width, 50.0); // far below the shape's own 100-wide bbox
+}
+
+TEST(Geometry, LocalWidthAtFallsBackToNearestPieceWhenPointOutsideEveryPiece)
+{
+    // Same two disjoint 10-wide bars as
+    // LabelLocationReturnsRawCentroidWhenGridSearchFindsNoInteriorPoint,
+    // whose raw-centroid fallback (50,50) sits in the gap between them,
+    // outside both. local_width_at must fall back to the nearest bar's
+    // own width (10), not the shape's overall ~90-wide bbox (which would
+    // grossly overstate either bar's actual thickness).
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 100}});
+    shape.rects.push_back(Rect{.ll = {90, 0}, .ur = {100, 100}});
+
+    EXPECT_DOUBLE_EQ(Geometry::local_width_at(shape, Point{50, 50}), 10.0);
+}
+
+TEST(Geometry, LocalWidthAtOfEmptyShapeIsZero)
+{
+    Shape shape;
+    EXPECT_DOUBLE_EQ(Geometry::local_width_at(shape, Point{0, 0}), 0.0);
+}

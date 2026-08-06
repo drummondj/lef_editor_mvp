@@ -16,6 +16,7 @@
 #include "include/core/SkSurface.h"
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <tuple>
@@ -50,6 +51,7 @@ namespace le
     {
         std::string label;
         PixelPoint location;
+        double size = 0.0;
     };
 
     /// @brief A Shape transformed from dbu-space to pixel-space (Scene's
@@ -181,7 +183,16 @@ namespace le
 
                         ps.texts.reserve(rs.shape.texts.size());
                         for (const auto &t : rs.shape.texts)
-                            ps.texts.push_back(PixelText{.label = t.label, .location = to_pixel(t.location)});
+                        {
+                            // t.size (dbu) scales like any other width
+                            // (mirrors PixelPath.width above), but a label
+                            // shouldn't literally touch/overflow the edges
+                            // of the geometry it's on (kLabelWidthRatio),
+                            // and must stay legible even on hair-thin
+                            // geometry at any zoom level (kMinLabelPixelSize).
+                            const double pixel_size = std::max(t.size * scale * kLabelWidthRatio, kMinLabelPixelSize);
+                            ps.texts.push_back(PixelText{.label = t.label, .location = to_pixel(t.location), .size = pixel_size});
+                        }
 
                         pixel_group.push_back(std::move(ps));
                     }
@@ -371,6 +382,17 @@ namespace le
         // Don't change kDiagonalStripePeriod without keeping this in sync.
         static constexpr int kDiagonalStripeTileSize = static_cast<int>(kDiagonalStripePeriod) * 3;
 
+        // Minimum on-screen text size in pixels regardless of how thin the
+        // labeled geometry is - keeps labels legible at any zoom level
+        // instead of shrinking to unreadable specks on hair-thin paths/
+        // polygon arms. Placeholder default, easily tuned.
+        static constexpr double kMinLabelPixelSize = 8.0;
+
+        // Fraction of the local geometry width actually used for text
+        // size, so a label doesn't touch/overflow the edges of the shape
+        // it's on. Placeholder default, easily tuned.
+        static constexpr double kLabelWidthRatio = 0.6;
+
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
         // answer to "maybe using a shader?" (UPDATES.md 2.3): Skia's
@@ -503,7 +525,13 @@ namespace le
             // Labels use the outline color (always opaque in every default
             // ViewLayerStyle, unlike fill) - there's no dedicated label
             // color yet, revisit if that turns out to matter visually.
-            SkFont font(default_typeface(), 24.0f);
+            // Font is the one exception to this class's "hoist paint/font
+            // out of the per-shape loop" rule above: since each PixelText
+            // now carries its own computed size, the font has to be built
+            // per-label instead of once per group (see the text loop
+            // below) - not a hot path, text labels are a small minority of
+            // draw calls relative to shapes/rects/paths, so the extra
+            // per-label SkFont construction is a non-issue.
             SkPaint text_paint;
             text_paint.setAntiAlias(true);
             text_paint.setColor(to_sk_color(style.outline_color));
@@ -576,6 +604,7 @@ namespace le
                         canvas.save();
                         canvas.translate(static_cast<SkScalar>(t.location.x), static_cast<SkScalar>(t.location.y));
                         canvas.scale(1, -1);
+                        SkFont font(default_typeface(), static_cast<SkScalar>(t.size));
                         canvas.drawString(t.label.c_str(), 0, 0, font, text_paint);
                         canvas.restore();
                     }

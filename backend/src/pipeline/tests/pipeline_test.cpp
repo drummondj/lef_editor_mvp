@@ -145,6 +145,47 @@ TEST_F(PipelineFixture, GenerateShapesAddsTerminalLabelAtComputedLocation)
     // get_label_location on a single {0,0}-{10,10} rect returns its centroid.
     EXPECT_EQ(shapes.front().shape.texts.front().location.x, 5);
     EXPECT_EQ(shapes.front().shape.texts.front().location.y, 5);
+    // local_width_at on the same rect: min(10, 10) = 10.
+    EXPECT_DOUBLE_EQ(shapes.front().shape.texts.front().size, 10.0);
+}
+
+TEST_F(PipelineFixture, GenerateShapesSizesLabelToPathWidth)
+{
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "P1"});
+    root.create_terminal_port(TerminalPortData{
+        .terminal = terminal_id,
+        .shapes = {Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{0, 0}, {100, 0}}}, .width = 6}}}},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    ASSERT_EQ(shapes.front().shape.texts.size(), 1u);
+    EXPECT_DOUBLE_EQ(shapes.front().shape.texts.front().size, 6.0);
+}
+
+TEST_F(PipelineFixture, GenerateShapesSizesLabelToLocalPolygonWidthNotBbox)
+{
+    // Same L-shaped polygon as Geometry.LocalWidthAtLShapedPolygonUsesArmThicknessNotBbox
+    // (100x30 bottom arm + 30x100 vertical arm, ~100x100 overall bbox) -
+    // proves the schema field -> Geometry::local_width_at wiring is
+    // actually connected end to end, not just correct in isolation.
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "L1"});
+    root.create_terminal_port(TerminalPortData{
+        .terminal = terminal_id,
+        .shapes = {Shape{.layer_name = "M1", .polygons = {Polygon{.points = {
+                                                                        {0, 0},
+                                                                        {100, 0},
+                                                                        {100, 30},
+                                                                        {30, 30},
+                                                                        {30, 100},
+                                                                        {0, 100},
+                                                                    }}}}},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    ASSERT_EQ(shapes.front().shape.texts.size(), 1u);
+    EXPECT_LT(shapes.front().shape.texts.front().size, 50.0); // far below the ~100-wide bbox
 }
 
 TEST_F(PipelineFixture, GenerateShapesLabelsOnlyTheFirstPortsFirstShape)

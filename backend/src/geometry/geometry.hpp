@@ -1,5 +1,6 @@
 #pragma once
 #include "../database/database.hpp"
+#include <algorithm>
 #include <boost/geometry.hpp>
 #include <boost/geometry/algorithms/buffer.hpp>
 #include <boost/geometry/algorithms/union.hpp>
@@ -74,6 +75,20 @@ namespace le
             bg_polygon.outer().assign(ring.begin(), ring.end());
             bg::correct(bg_polygon);
             return bg_polygon;
+        }
+
+        // bg::distance(point, ring) treats a *closed ring* as an areal
+        // geometry, same trap as bg::distance(point, polygon) - it's 0 for
+        // any interior point, not the boundary distance you'd expect.
+        // Copying the ring's points into an explicit linestring forces
+        // Boost.Geometry to treat it as a 1-D path instead, giving the
+        // correct nearest-edge distance regardless of whether `point` is
+        // inside or outside.
+        static double distance_to_boundary(const bg::model::polygon<Point> &bg_polygon, const Point &point)
+        {
+            const auto &ring = bg::exterior_ring(bg_polygon);
+            bg::model::linestring<Point> boundary(ring.begin(), ring.end());
+            return bg::distance(point, boundary);
         }
 
         static Polygon from_boost_polygon(const bg::model::polygon<Point> &bg_polygon)
@@ -391,6 +406,109 @@ namespace le
                 return *best;
 
             return target;
+        }
+
+        /// @brief The local "width" (thickness) of `shape` at `point`: the
+        /// diameter of the largest circle centered at `point` that still
+        /// fits inside whichever rect/polygon/path of `shape` contains it.
+        /// Used to size a label to the actual geometry it sits on rather
+        /// than the shape's overall bounding box, which is wrong for a
+        /// long, thin, non-convex (e.g. L-shaped) polygon.
+        ///
+        /// - Rects are checked first (cheapest, exact): if `point` falls
+        ///   inside one, its width is simply `min(dx, dy)` - no boost call.
+        /// - Paths are checked next: if `point` falls inside one's
+        ///   buffered polygon (via `path_to_polygons`), its width is
+        ///   `path.width` directly - a Path's thickness is already known
+        ///   exactly and uniform along its whole centerline, so no
+        ///   distance computation applies.
+        /// - Polygons are checked last: if `point` falls inside one,
+        ///   `2 * distance_to_boundary(...)` approximates local thickness
+        ///   there - distance to the *boundary*, not the filled area
+        ///   (`bg::distance` against either the filled polygon or its own
+        ///   closed exterior ring directly both return 0 for any interior
+        ///   point, treating them as areal geometry - see
+        ///   distance_to_boundary's own comment for why the ring's points
+        ///   are copied into an explicit linestring first). This stays
+        ///   correct for non-convex/L-shaped polygons because it's local
+        ///   to `point`, unlike an area/perimeter ratio over the whole
+        ///   polygon (perimeter sums the concave boundary too, inflating
+        ///   the ratio; area/max(dim) conflates both arms of an L into one
+        ///   wrong average for either arm).
+        ///
+        /// If `point` falls inside none of the shape's pieces (e.g. it
+        /// came from get_label_location's own last-resort raw-centroid
+        /// fallback, which can land outside every piece for disjoint
+        /// geometry - see its own tests), falls back to whichever
+        /// individual piece's own bbox center is nearest to `point`, and
+        /// returns that piece's width by the same rules above - a
+        /// meaningful per-piece answer, not the whole shape's bbox (which
+        /// could span disjoint pieces and grossly overstate their actual
+        /// width). Returns 0.0 for a shape with no geometry at all.
+        static double local_width_at(const Shape &shape, const Point &point)
+        {
+            for (const auto &rect : shape.rects)
+            {
+                if (point.x >= rect.ll.x && point.x <= rect.ur.x && point.y >= rect.ll.y && point.y <= rect.ur.y)
+                    return static_cast<double>(std::min(rect.ur.x - rect.ll.x, rect.ur.y - rect.ll.y));
+            }
+
+            for (const auto &path : shape.paths)
+            {
+                for (const auto &part : path_to_polygons(path))
+                {
+                    if (bg::within(point, to_boost_polygon(part)))
+                        return static_cast<double>(path.width);
+                }
+            }
+
+            for (const auto &polygon : shape.polygons)
+            {
+                const auto bg_polygon = to_boost_polygon(polygon);
+                if (bg::within(point, bg_polygon))
+                    return 2.0 * distance_to_boundary(bg_polygon, point);
+            }
+
+            // Fallback: point isn't inside any single piece - use whichever
+            // piece's own bbox center is nearest to point, and that
+            // piece's own width (by the same rules as above).
+            std::optional<double> best_width;
+            int64_t best_dist_sq = std::numeric_limits<int64_t>::max();
+
+            auto consider = [&](const Point &center, double width)
+            {
+                const int64_t dx = center.x - point.x;
+                const int64_t dy = center.y - point.y;
+                const int64_t dist_sq = dx * dx + dy * dy;
+                if (dist_sq < best_dist_sq)
+                {
+                    best_dist_sq = dist_sq;
+                    best_width = width;
+                }
+            };
+
+            for (const auto &rect : shape.rects)
+            {
+                const Point center{(rect.ll.x + rect.ur.x) / 2, (rect.ll.y + rect.ur.y) / 2};
+                consider(center, static_cast<double>(std::min(rect.ur.x - rect.ll.x, rect.ur.y - rect.ll.y)));
+            }
+
+            for (const auto &path : shape.paths)
+            {
+                const Rect bbox = bbox_of(path);
+                const Point center{(bbox.ll.x + bbox.ur.x) / 2, (bbox.ll.y + bbox.ur.y) / 2};
+                consider(center, static_cast<double>(path.width));
+            }
+
+            for (const auto &polygon : shape.polygons)
+            {
+                const Rect bbox = bbox_of(polygon);
+                const Point center{(bbox.ll.x + bbox.ur.x) / 2, (bbox.ll.y + bbox.ur.y) / 2};
+                const auto bg_polygon = to_boost_polygon(polygon);
+                consider(center, 2.0 * distance_to_boundary(bg_polygon, center));
+            }
+
+            return best_width.value_or(0.0);
         }
     };
 }

@@ -106,9 +106,13 @@ namespace le
         ///
         /// Each Terminal gets one text label *per distinct layer_name* it
         /// has geometry on - its name, placed via Geometry::get_label_location
-        /// on the union of that layer's geometry across all the Terminal's
-        /// Ports (not per-Port; several Ports can share a layer, and the
-        /// label represents all of a Terminal's geometry on that layer). A
+        /// and sized via Geometry::local_width_at on the union of that
+        /// layer's geometry across all the Terminal's Ports (not per-Port;
+        /// several Ports can share a layer, and the label represents all
+        /// of a Terminal's geometry on that layer). Both calls share the
+        /// same combined geometry and anchor point, so the label is sized
+        /// to whichever piece it actually landed on, not the layer's
+        /// overall bbox. A
         /// single-layer Terminal (the common case) gets exactly one label;
         /// a Terminal with shapes on e.g. both M1 and M2 gets two, each
         /// correctly tied to its own layer's ViewLayerId so it only shows
@@ -192,9 +196,11 @@ namespace le
                     {
                         for (const auto &[layer_name, acc] : by_layer)
                         {
+                            const Point location = Geometry::get_label_location(acc.combined);
                             shapes[acc.first_shape_index].shape.texts.push_back(Text{
                                 .label = terminal->name,
-                                .location = Geometry::get_label_location(acc.combined),
+                                .location = location,
+                                .size = Geometry::local_width_at(acc.combined, location),
                             });
                         }
                     }
