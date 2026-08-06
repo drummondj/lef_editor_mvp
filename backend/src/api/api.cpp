@@ -340,6 +340,34 @@ extern "C"
         handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
     }
 
+    int64_t le_minor_grid_spacing(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        return handle->scene.minor_grid_spacing();
+    }
+
+    void le_set_minor_grid_spacing(LeHandle *handle, int64_t dbu)
+    {
+        if (!handle)
+            return;
+        handle->scene.set_minor_grid_spacing(dbu);
+    }
+
+    int64_t le_major_grid_spacing(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        return handle->scene.major_grid_spacing();
+    }
+
+    void le_set_major_grid_spacing(LeHandle *handle, int64_t dbu)
+    {
+        if (!handle)
+            return;
+        handle->scene.set_major_grid_spacing(dbu);
+    }
+
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)
     {
         if (!handle)

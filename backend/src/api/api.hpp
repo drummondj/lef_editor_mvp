@@ -312,6 +312,31 @@ extern "C"
     /// is selected or its Abstract has no shapes, rather than crashing.
     void le_fit_scene(LeHandle *handle, int32_t padding_px);
 
+    /// @brief Spacing (dbu) between minor grid dots, drawn behind the
+    /// design by le_render_pixel_buffer() - see Renderer::draw_grid.
+    /// Mirrors Scene::minor_grid_spacing directly. Defaults to 5 (dbu),
+    /// matching a 5nm minor grid under the common "1 dbu = 1nm" Technology
+    /// convention. Returns 0 if handle is null.
+    int64_t le_minor_grid_spacing(LeHandle *handle);
+
+    /// @brief Set the minor grid dot spacing (dbu). Mirrors
+    /// Scene::set_minor_grid_spacing directly (affects rendering) - values
+    /// <= 0 are ignored, same guard as le_set_scale. A no-op if handle is
+    /// null.
+    void le_set_minor_grid_spacing(LeHandle *handle, int64_t dbu);
+
+    /// @brief Spacing (dbu) between major grid dots (drawn bolder than
+    /// minor ones - see Renderer::draw_grid). Mirrors
+    /// Scene::major_grid_spacing directly. Defaults to 50 (dbu), matching
+    /// a 50nm major grid under the common "1 dbu = 1nm" Technology
+    /// convention. Returns 0 if handle is null.
+    int64_t le_major_grid_spacing(LeHandle *handle);
+
+    /// @brief Set the major grid dot spacing (dbu). Mirrors
+    /// Scene::set_major_grid_spacing directly (affects rendering) - values
+    /// <= 0 are ignored. A no-op if handle is null.
+    void le_set_major_grid_spacing(LeHandle *handle, int64_t dbu);
+
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently
     /// selected Design and viewport, returning the resulting pixel

@@ -112,6 +112,38 @@ namespace le
             set_pan(Point{pan_x, pan_y});
         }
 
+        // --- Grid spacing (dbu) ---
+        // Defaults assume the common "1 dbu = 1nm" convention (i.e. a
+        // Technology declared with DATABASE MICRONS 1000, which most real
+        // PDKs use) - 5 and 50 dbu then read as the requested 5nm minor /
+        // 50nm major defaults. Not otherwise unit-aware (Scene has no
+        // Technology reference to convert against) - a caller on a
+        // Technology with different units should set explicit dbu values.
+        // Non-positive values are rejected (keeps the last valid spacing),
+        // same guard as set_scale, and setters bump visibility_version()
+        // since the grid is part of the rendered picture (see
+        // Renderer::draw_grid) - unlike layer selectability below, this
+        // does need to invalidate the render cache.
+        void set_minor_grid_spacing(int64_t dbu)
+        {
+            if (dbu > 0)
+            {
+                minor_grid_spacing_ = dbu;
+                ++visibility_version_;
+            }
+        }
+        int64_t minor_grid_spacing() const { return minor_grid_spacing_; }
+
+        void set_major_grid_spacing(int64_t dbu)
+        {
+            if (dbu > 0)
+            {
+                major_grid_spacing_ = dbu;
+                ++visibility_version_;
+            }
+        }
+        int64_t major_grid_spacing() const { return major_grid_spacing_; }
+
         // --- Layer visibility (defaults to visible until toggled) ---
         // Two independent axes, deliberately *not* per-ViewLayerId: by
         // layer name (every purpose-column of that ViewLayerRow, e.g.
@@ -219,6 +251,8 @@ namespace le
         int viewport_width_px_ = 0;
         int viewport_height_px_ = 0;
         uint64_t viewport_version_ = 0;
+        int64_t minor_grid_spacing_ = 5;
+        int64_t major_grid_spacing_ = 50;
         std::unordered_map<std::string, bool> layer_name_visible_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_visible_;
         uint64_t visibility_version_ = 0;

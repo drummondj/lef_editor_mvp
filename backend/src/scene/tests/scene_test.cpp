@@ -16,6 +16,8 @@ TEST(Scene, DefaultStateIsSensible)
     EXPECT_TRUE(scene.selection().empty());
     EXPECT_EQ(scene.viewport_version(), 0u);
     EXPECT_EQ(scene.visibility_version(), 0u);
+    EXPECT_EQ(scene.minor_grid_spacing(), 5);
+    EXPECT_EQ(scene.major_grid_spacing(), 50);
 }
 
 TEST(Scene, CurrentAbstractRoundTrips)
@@ -73,6 +75,50 @@ TEST(Scene, ViewportVersionBumpsOnPanScaleAndViewportSizeChangesOnly)
     // Unrelated state (visibility) must not bump it either.
     scene.set_layer_name_visible("M1", false);
     EXPECT_EQ(scene.viewport_version(), 3u);
+}
+
+TEST(Scene, GridSpacingRoundTrips)
+{
+    Scene scene;
+    scene.set_minor_grid_spacing(10);
+    scene.set_major_grid_spacing(100);
+
+    EXPECT_EQ(scene.minor_grid_spacing(), 10);
+    EXPECT_EQ(scene.major_grid_spacing(), 100);
+}
+
+TEST(Scene, GridSpacingIgnoresNonPositiveValues)
+{
+    Scene scene;
+    scene.set_minor_grid_spacing(10);
+    scene.set_major_grid_spacing(100);
+
+    scene.set_minor_grid_spacing(0);
+    scene.set_minor_grid_spacing(-5);
+    EXPECT_EQ(scene.minor_grid_spacing(), 10); // unchanged
+
+    scene.set_major_grid_spacing(0);
+    scene.set_major_grid_spacing(-5);
+    EXPECT_EQ(scene.major_grid_spacing(), 100); // unchanged
+}
+
+TEST(Scene, GridSpacingSettersBumpVisibilityVersion)
+{
+    // The grid is part of the rendered picture (see Renderer::draw_grid),
+    // so changing its spacing must invalidate the same render cache
+    // layer visibility does - unlike selectability, which doesn't.
+    Scene scene;
+    EXPECT_EQ(scene.visibility_version(), 0u);
+
+    scene.set_minor_grid_spacing(10);
+    EXPECT_EQ(scene.visibility_version(), 1u);
+
+    scene.set_major_grid_spacing(100);
+    EXPECT_EQ(scene.visibility_version(), 2u);
+
+    // A rejected (non-positive) value must not bump it.
+    scene.set_minor_grid_spacing(-5);
+    EXPECT_EQ(scene.visibility_version(), 2u);
 }
 
 TEST(Scene, LayerNameVisibilityDefaultsToTrueUntilSet)

@@ -332,6 +332,78 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
     EXPECT_EQ(renderer.picture_calls(), 2u);
 }
 
+TEST_F(RenderFixture, BuildPictureDrawsSolidAxisLinesAtDbuOrigin)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+
+    // pan=(0,0), scale=1.0 -> dbu (x=0) is pixel column 0, dbu (y=0) is
+    // pixel row 0 (sample_pixel reads the picture's own unflipped pixel
+    // space directly - see its own comment).
+    EXPECT_GT(SkColorGetA(sample_pixel(picture, 100, 100, 0, 50)), 0); // on the vertical (x=0) axis line
+    EXPECT_GT(SkColorGetA(sample_pixel(picture, 100, 100, 50, 0)), 0); // on the horizontal (y=0) axis line
+}
+
+TEST_F(RenderFixture, BuildPictureDrawsAMajorGridDotAtAKnownLatticePoint)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0); // minor (5dbu*2=10px) and major (50dbu*2=100px) both clear the density floor
+    scene.set_viewport_size(200, 200);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+
+    // dbu (50,50) is on the default major lattice (multiple of 50) but
+    // off both axes -> pixel (100,100) at this pan/scale.
+    EXPECT_GT(SkColorGetA(sample_pixel(picture, 200, 200, 100, 100)), 0);
+}
+
+TEST_F(RenderFixture, BuildPictureHidesBothGridTiersWhenTooDenseButKeepsAxisLines)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(0.1); // minor 5*0.1=0.5px, major 50*0.1=5px - both under the 8px floor
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+
+    // dbu (500,500) -> pixel (50,50) at this scale, and 500 is a multiple
+    // of 50 (would be a major dot if that tier weren't suppressed) - away
+    // from either axis line, so this isolates the density cutoff itself.
+    EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 50, 50)), 0);
+}
+
+TEST_F(RenderFixture, BuildPictureHidesMinorTierIndependentlyOfMajorTier)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(0.5); // minor 5*0.5=2.5px (hidden), major 50*0.5=25px (shown)
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+
+    // dbu (100,100) is on the major lattice (multiple of 50), off-axis,
+    // -> pixel (50,50) at this pan/scale: still drawn even though minor
+    // dots are hidden, proving the two tiers gate independently.
+    EXPECT_GT(SkColorGetA(sample_pixel(picture, 100, 100, 50, 50)), 0);
+}
+
 TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
 {
     // M1 (red, palette index 0) sits at low dbu y; M2 (green, palette
@@ -442,7 +514,13 @@ TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)
 
     ASSERT_EQ(buffer.width, 100);
     ASSERT_EQ(buffer.height, 100);
-    const uint8_t *p = buffer.data + static_cast<size_t>(50) * buffer.row_bytes + static_cast<size_t>(50) * 4;
+    // (50,50) would land exactly on the default grid's major dot lattice
+    // (dbu (50,50), a multiple of both the default 5 minor and 50 major
+    // spacing) - build_picture always draws the background grid now (see
+    // Renderer::draw_grid), so "nothing drawn" means away from any grid
+    // dot/axis line, not literally the whole buffer. dbu (52,53) sits
+    // safely off every lattice point.
+    const uint8_t *p = buffer.data + static_cast<size_t>(47) * buffer.row_bytes + static_cast<size_t>(52) * 4;
     EXPECT_EQ(p[3], 0);
 }
 

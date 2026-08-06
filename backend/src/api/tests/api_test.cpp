@@ -459,6 +459,42 @@ TEST_F(ApiFixture, HidingATerminalPurposeRemovesItFromTheRenderedBuffer)
     EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79)); // PIN A's TERMINAL column is hidden now
 }
 
+TEST_F(ApiFixture, GridSpacingDefaultsMatchScene)
+{
+    EXPECT_EQ(le_minor_grid_spacing(handle), 5);
+    EXPECT_EQ(le_major_grid_spacing(handle), 50);
+}
+
+TEST_F(ApiFixture, GridSpacingRoundTrips)
+{
+    le_set_minor_grid_spacing(handle, 10);
+    le_set_major_grid_spacing(handle, 100);
+
+    EXPECT_EQ(le_minor_grid_spacing(handle), 10);
+    EXPECT_EQ(le_major_grid_spacing(handle), 100);
+}
+
+TEST_F(ApiFixture, GridSpacingIgnoresNonPositiveValues)
+{
+    le_set_minor_grid_spacing(handle, 10);
+    le_set_minor_grid_spacing(handle, 0);
+    le_set_minor_grid_spacing(handle, -5);
+    EXPECT_EQ(le_minor_grid_spacing(handle), 10); // unchanged
+
+    le_set_major_grid_spacing(handle, 100);
+    le_set_major_grid_spacing(handle, 0);
+    le_set_major_grid_spacing(handle, -5);
+    EXPECT_EQ(le_major_grid_spacing(handle), 100); // unchanged
+}
+
+TEST_F(ApiFixture, GridSpacingWithNullHandleReturnsZeroAndDoesNotCrash)
+{
+    EXPECT_EQ(le_minor_grid_spacing(nullptr), 0);
+    EXPECT_EQ(le_major_grid_spacing(nullptr), 0);
+    le_set_minor_grid_spacing(nullptr, 10);
+    le_set_major_grid_spacing(nullptr, 100);
+}
+
 TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)
 {
     le_zoom(nullptr, 0.5, 10, 10);

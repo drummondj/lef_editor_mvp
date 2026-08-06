@@ -17,6 +17,7 @@
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <tuple>
@@ -205,12 +206,13 @@ namespace le
 
         /// @brief Record the pixel-space shapes into an SkPicture, sized to
         /// the Scene's viewport, drawn in map order (bottom-up, see
-        /// Pipeline::filter_by_layer_visibility's comment). Each group's
-        /// ViewLayerStyle (outline/fill Color) comes from `view_layers`; a
-        /// ViewLayerId that doesn't resolve to a known ViewLayer (see
-        /// Pipeline's layer filter comment on why that's kept, not dropped)
-        /// has its whole group skipped here - there's no style to draw it
-        /// with.
+        /// Pipeline::filter_by_layer_visibility's comment) on top of the
+        /// background dot grid + axis lines drawn first by draw_grid.
+        /// Each group's ViewLayerStyle (outline/fill Color) comes from
+        /// `view_layers`; a ViewLayerId that doesn't resolve to a known
+        /// ViewLayer (see Pipeline's layer filter comment on why that's
+        /// kept, not dropped) has its whole group skipped here - there's
+        /// no style to draw it with.
         const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
@@ -219,6 +221,10 @@ namespace le
                 SkPictureRecorder recorder;
                 SkCanvas *canvas = recorder.beginRecording(
                     SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
+
+                // Grid first, so it sits underneath the real design
+                // geometry drawn below rather than obscuring it.
+                draw_grid(*canvas, scene);
 
                 for (const auto &[view_layer_id, group] : shapes)
                 {
@@ -393,6 +399,25 @@ namespace le
         // it's on. Placeholder default, easily tuned.
         static constexpr double kLabelWidthRatio = 0.6;
 
+        // Below this on-screen pixel spacing, a grid dot tier (minor or
+        // major, checked independently) is hidden entirely rather than
+        // smearing into a solid wash as the view zooms out - see
+        // draw_grid's own comment. Placeholder default, easily tuned.
+        static constexpr double kMinGridDotPixelSpacing = 8.0;
+
+        // Major and minor dots are drawn the same size - only kMajorGridColor's
+        // brightness distinguishes the two tiers.
+        static constexpr float kGridDotRadius = 1.0f;
+
+        // Grid dots/axis lines are UI chrome, not design geometry -
+        // deliberately muted/neutral so they don't compete visually with
+        // real shapes; kMajorGridColor is brighter/more opaque than
+        // kMinorGridColor so the major tier still reads as bolder despite
+        // being drawn at the same radius. Placeholder defaults, easily tuned.
+        static constexpr Color kMinorGridColor = {128, 128, 128, 120};
+        static constexpr Color kMajorGridColor = {255, 255, 255, 230};
+        static constexpr Color kAxisLineColor = {255, 255, 255, 160};
+
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
         // answer to "maybe using a shader?" (UPDATES.md 2.3): Skia's
@@ -477,6 +502,106 @@ namespace le
 
             sk_sp<SkImage> image = surface->makeImageSnapshot();
             return image->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat, SkSamplingOptions());
+        }
+
+        // Draws the background dot grid (major/minor tiers, dbu-space
+        // lattices independent of any Shape/ViewLayer - the only thing
+        // this class draws that isn't derived from pipeline output) plus
+        // solid axis lines at dbu (x=0)/(y=0) - UPDATES.md 5.1.
+        //
+        // Direct per-dot drawing, not a tiled SkShader (unlike
+        // pattern_shader): dot positions are anchored to absolute dbu
+        // coordinates that shift with `pan`, and a shader tile's phase
+        // would need a local-matrix offset recomputed every frame to stay
+        // aligned - simple direct drawing sidesteps that entirely, and
+        // hiding a tier once its on-screen pixel spacing drops below
+        // kMinGridDotPixelSpacing already bounds the worst case to a few
+        // tens of thousands of dots (viewport_px / kMinGridDotPixelSpacing
+        // per axis), not an unbounded loop. Revisit if a benchmark ever
+        // shows this mattering.
+        //
+        // Major and minor lattices are iterated independently (not "walk
+        // the minor lattice and check every 10th point"), so this stays
+        // correct even if major spacing isn't an exact multiple of minor
+        // spacing - a minor-lattice point that coincides with a major one
+        // is skipped in favor of the major draw below it, avoiding a
+        // double-draw at the default 50/5 = 10x ratio.
+        static void draw_grid(SkCanvas &canvas, const Scene &scene)
+        {
+            const double scale = scene.scale();
+            const int width_px = scene.viewport_width_px();
+            const int height_px = scene.viewport_height_px();
+            if (scale <= 0.0 || width_px <= 0 || height_px <= 0)
+                return;
+
+            const Point pan = scene.pan();
+
+            SkPaint axis_paint;
+            axis_paint.setColor(to_sk_color(kAxisLineColor));
+            axis_paint.setStyle(SkPaint::kStroke_Style);
+            const auto axis_x_px = static_cast<SkScalar>((0.0 - static_cast<double>(pan.x)) * scale);
+            const auto axis_y_px = static_cast<SkScalar>((0.0 - static_cast<double>(pan.y)) * scale);
+            // Skia clips these to the canvas for free when the dbu origin
+            // itself is off-screen - no visibility check needed first.
+            canvas.drawLine(axis_x_px, 0, axis_x_px, static_cast<SkScalar>(height_px), axis_paint);
+            canvas.drawLine(0, axis_y_px, static_cast<SkScalar>(width_px), axis_y_px, axis_paint);
+
+            const int64_t minor_spacing = scene.minor_grid_spacing();
+            const int64_t major_spacing = scene.major_grid_spacing();
+            if (minor_spacing <= 0 || major_spacing <= 0)
+                return;
+
+            // Visible dbu-space range: pixel = (dbu - pan) * scale, so
+            // dbu = pixel / scale + pan.
+            const double dbu_x_min = static_cast<double>(pan.x);
+            const double dbu_x_max = dbu_x_min + width_px / scale;
+            const double dbu_y_min = static_cast<double>(pan.y);
+            const double dbu_y_max = dbu_y_min + height_px / scale;
+
+            // The first grid line at or above `min_value` on a lattice
+            // spaced `spacing` apart - std::ceil handles a negative
+            // min_value correctly too.
+            auto first_line = [](double min_value, int64_t spacing)
+            {
+                return spacing * static_cast<int64_t>(std::ceil(min_value / static_cast<double>(spacing)));
+            };
+
+            auto to_pixel_x = [&](int64_t dbu_x)
+            { return static_cast<SkScalar>((static_cast<double>(dbu_x) - static_cast<double>(pan.x)) * scale); };
+            auto to_pixel_y = [&](int64_t dbu_y)
+            { return static_cast<SkScalar>((static_cast<double>(dbu_y) - static_cast<double>(pan.y)) * scale); };
+
+            if (minor_spacing * scale >= kMinGridDotPixelSpacing)
+            {
+                SkPaint minor_paint;
+                minor_paint.setAntiAlias(true);
+                minor_paint.setColor(to_sk_color(kMinorGridColor));
+                minor_paint.setStyle(SkPaint::kFill_Style);
+
+                for (int64_t x = first_line(dbu_x_min, minor_spacing); x <= dbu_x_max; x += minor_spacing)
+                {
+                    for (int64_t y = first_line(dbu_y_min, minor_spacing); y <= dbu_y_max; y += minor_spacing)
+                    {
+                        if (x % major_spacing == 0 && y % major_spacing == 0)
+                            continue; // drawn as a major dot below instead
+                        canvas.drawCircle(to_pixel_x(x), to_pixel_y(y), kGridDotRadius, minor_paint);
+                    }
+                }
+            }
+
+            if (major_spacing * scale >= kMinGridDotPixelSpacing)
+            {
+                SkPaint major_paint;
+                major_paint.setAntiAlias(true);
+                major_paint.setColor(to_sk_color(kMajorGridColor));
+                major_paint.setStyle(SkPaint::kFill_Style);
+
+                for (int64_t x = first_line(dbu_x_min, major_spacing); x <= dbu_x_max; x += major_spacing)
+                {
+                    for (int64_t y = first_line(dbu_y_min, major_spacing); y <= dbu_y_max; y += major_spacing)
+                        canvas.drawCircle(to_pixel_x(x), to_pixel_y(y), kGridDotRadius, major_paint);
+                }
+            }
         }
 
         // Draws an X spanning `bounds` - CUT layers' FillPattern::CROSS,
