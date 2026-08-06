@@ -132,7 +132,7 @@ namespace le
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return pixel_shapes_.get(key, [&]
-            {
+                                     {
                 const Point pan = scene.pan();
                 const double scale = scene.scale();
                 auto to_pixel = [&](Point p)
@@ -189,8 +189,7 @@ namespace le
                     result.emplace(view_layer, std::move(pixel_group));
                 }
 
-                return result;
-            });
+                return result; });
         }
 
         /// @brief Record the pixel-space shapes into an SkPicture, sized to
@@ -205,7 +204,7 @@ namespace le
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return picture_.get(key, [&]
-            {
+                                {
                 SkPictureRecorder recorder;
                 SkCanvas *canvas = recorder.beginRecording(
                     SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
@@ -219,8 +218,7 @@ namespace le
                     draw_group(*canvas, group, view_layer->style);
                 }
 
-                return recorder.finishRecordingAsPicture();
-            });
+                return recorder.finishRecordingAsPicture(); });
         }
 
         /// @brief Rasterize `picture` into a raw RGBA8888 PixelBuffer sized
@@ -266,7 +264,7 @@ namespace le
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return rasterized_.get(key, [&]
-            {
+                                   {
                 const int width = scene.viewport_width_px();
                 const int height = scene.viewport_height_px();
 
@@ -301,8 +299,8 @@ namespace le
                         .height = height,
                         .row_bytes = pixmap.rowBytes(),
                     },
-                };
-            }).buffer;
+                }; })
+                .buffer;
         }
 
         // Number of times each stage actually recomputed - exposed purely
@@ -352,12 +350,26 @@ namespace le
             return builder.detach();
         }
 
-        // Fixed screen-pixel tile size for every tiled FillPattern below -
-        // deliberately not scaled with Scene::scale() (the pattern stays a
-        // constant visual density at any zoom level, like a hatch fill in
-        // a CAD tool, rather than shrinking to nothing zoomed out or
-        // ballooning zoomed in).
+        // Fixed screen-pixel tile size for every tiled FillPattern below
+        // except the diagonal stripes (which need their own - see
+        // kDiagonalStripeTileSize) - deliberately not scaled with
+        // Scene::scale() (the pattern stays a constant visual density at
+        // any zoom level, like a hatch fill in a CAD tool, rather than
+        // shrinking to nothing zoomed out or ballooning zoomed in).
         static constexpr int kPatternTileSize = 12;
+
+        // Spacing between stripes, in screen pixels.
+        static constexpr SkScalar kDiagonalStripePeriod = 8.0f;
+
+        // SkShader's kRepeat tiling only ever translates by exact multiples
+        // of the tile's own size - so for the "redundant offset lines,
+        // let the canvas clip them" technique below to reconstruct a
+        // truly continuous periodic hatch (not a phase-shifted zigzag
+        // between tiles), the tile size *must* be an exact multiple of
+        // kDiagonalStripePeriod. 3x gives a reasonable amount of visible
+        // repetition per tile without an oversized offscreen surface.
+        // Don't change kDiagonalStripePeriod without keeping this in sync.
+        static constexpr int kDiagonalStripeTileSize = static_cast<int>(kDiagonalStripePeriod) * 3;
 
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
@@ -373,7 +385,10 @@ namespace le
             if (pattern == FillPattern::NONE || pattern == FillPattern::CROSS)
                 return nullptr;
 
-            const SkImageInfo info = SkImageInfo::MakeN32Premul(kPatternTileSize, kPatternTileSize);
+            const bool diagonal = pattern == FillPattern::DIAGONAL_STRIPES_NE || pattern == FillPattern::DIAGONAL_STRIPES_NW;
+            const int tile_size = diagonal ? kDiagonalStripeTileSize : kPatternTileSize;
+
+            const SkImageInfo info = SkImageInfo::MakeN32Premul(tile_size, tile_size);
             sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
             SkCanvas *canvas = surface->getCanvas();
             canvas->clear(SK_ColorTRANSPARENT);
@@ -389,7 +404,7 @@ namespace le
             paint.setAntiAlias(false);
             paint.setColor(color);
 
-            const auto s = static_cast<SkScalar>(kPatternTileSize);
+            const auto s = static_cast<SkScalar>(tile_size);
 
             switch (pattern)
             {
@@ -401,9 +416,8 @@ namespace le
                 // reads as continuous stripes once tiled, not a sawtooth -
                 // the classic tiled-hatch technique (e.g. CAD ANSI31 fill).
                 paint.setStyle(SkPaint::kStroke_Style);
-                constexpr SkScalar period = 4.0f;
                 const bool ne = pattern == FillPattern::DIAGONAL_STRIPES_NE;
-                for (SkScalar offset = -s; offset <= 2 * s; offset += period)
+                for (SkScalar offset = -s; offset <= 2 * s; offset += kDiagonalStripePeriod)
                 {
                     if (ne)
                         canvas->drawLine(offset, 0, offset + s, s, paint);
@@ -489,7 +503,7 @@ namespace le
             // Labels use the outline color (always opaque in every default
             // ViewLayerStyle, unlike fill) - there's no dedicated label
             // color yet, revisit if that turns out to matter visually.
-            SkFont font(default_typeface(), 12.0f);
+            SkFont font(default_typeface(), 24.0f);
             SkPaint text_paint;
             text_paint.setAntiAlias(true);
             text_paint.setColor(to_sk_color(style.outline_color));
@@ -499,7 +513,7 @@ namespace le
                 for (const auto &r : shape.rects)
                 {
                     SkRect rect = SkRect::MakeLTRB(static_cast<SkScalar>(r.ll.x), static_cast<SkScalar>(r.ll.y),
-                                                    static_cast<SkScalar>(r.ur.x), static_cast<SkScalar>(r.ur.y));
+                                                   static_cast<SkScalar>(r.ur.x), static_cast<SkScalar>(r.ur.y));
                     if (is_cross)
                     {
                         if (has_outline)

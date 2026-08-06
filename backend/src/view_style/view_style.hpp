@@ -33,12 +33,12 @@ namespace le
     /// background so ViewLayers below remain visible through the gaps.
     enum class FillPattern
     {
-        NONE,                 // flat translucent fill (BOUNDARY today)
-        DIAGONAL_STRIPES_NE,   // ROUTING, horizontal direction: "/" hatch
-        DIAGONAL_STRIPES_NW,   // ROUTING, vertical direction: "\" hatch
-        CROSS,                 // CUT: an X spanning each shape's own bounds
-        BRICK,                 // any OBSTRUCTION, regardless of layer type
-        DOTS,                  // every other layer type
+        NONE,                // flat translucent fill (BOUNDARY today)
+        DIAGONAL_STRIPES_NE, // ROUTING, horizontal direction: "/" hatch
+        DIAGONAL_STRIPES_NW, // ROUTING, vertical direction: "\" hatch
+        CROSS,               // CUT: an X spanning each shape's own bounds
+        BRICK,               // any OBSTRUCTION, regardless of layer type
+        DOTS,                // every other layer type
     };
 
     struct ViewLayerStyle
@@ -240,7 +240,7 @@ namespace le
         static constexpr std::array<Color, 30> kRoutingCutColors = {{
             {255, 0, 0, 255},     // red
             {0, 255, 0, 255},     // green
-            {0, 0, 255, 255},     // blue
+            {100, 100, 255, 255}, // light blue
             {255, 255, 0, 255},   // yellow
             {255, 0, 255, 255},   // magenta
             {0, 255, 255, 255},   // cyan
