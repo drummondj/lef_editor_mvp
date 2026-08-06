@@ -518,6 +518,62 @@ TEST_F(ApiFixture, MousePositionWithNullHandleDoesNotCrash)
     le_clear_mouse_position(nullptr);
 }
 
+TEST_F(ApiFixture, SnappedMousePositionWithNullHandleReturnsNoPosition)
+{
+    const LeSnappedMousePosition result = le_snapped_mouse_position(nullptr);
+    EXPECT_EQ(result.has_position, 0);
+    EXPECT_EQ(result.x_um, 0.0);
+    EXPECT_EQ(result.y_um, 0.0);
+}
+
+TEST_F(ApiFixture, SnappedMousePositionHasNoPositionUntilMouseIsSet)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    le_set_viewport_size(handle, 100, 100);
+    const LeSnappedMousePosition result = le_snapped_mouse_position(handle);
+    EXPECT_EQ(result.has_position, 0);
+}
+
+TEST_F(ApiFixture, SnappedMousePositionHasNoPositionWithoutATechnologyLoaded)
+{
+    // No le_read_lef call at all - degrades gracefully instead of dividing
+    // by a Technology::database_units_microns that doesn't exist yet.
+    le_set_viewport_size(handle, 100, 100);
+    le_set_mouse_position(handle, 50, 50);
+
+    const LeSnappedMousePosition result = le_snapped_mouse_position(handle);
+    EXPECT_EQ(result.has_position, 0);
+}
+
+TEST_F(ApiFixture, SnappedMousePositionReturnsGridSnappedMicronCoordinates)
+{
+    // testcell.lef declares DATABASE MICRONS 1000 - 1000 dbu per micron.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_set_minor_grid_spacing(handle, 10);
+
+    // dbu (23, 100 - 27) = (23, 73); nearest multiples of 10 are 20 and 70
+    // -> 0.02um and 0.07um at 1000 dbu/um.
+    le_set_mouse_position(handle, 23, 27);
+
+    const LeSnappedMousePosition result = le_snapped_mouse_position(handle);
+    ASSERT_EQ(result.has_position, 1);
+    EXPECT_DOUBLE_EQ(result.x_um, 0.02);
+    EXPECT_DOUBLE_EQ(result.y_um, 0.07);
+}
+
+TEST_F(ApiFixture, SnappedMousePositionHasNoPositionAfterClear)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    le_set_viewport_size(handle, 100, 100);
+    le_set_mouse_position(handle, 50, 50);
+    ASSERT_EQ(le_snapped_mouse_position(handle).has_position, 1);
+
+    le_clear_mouse_position(handle);
+    EXPECT_EQ(le_snapped_mouse_position(handle).has_position, 0);
+}
+
 TEST_F(ApiFixture, RenderPixelBufferShowsRedCursorBoxAtSnappedMousePosition)
 {
     le_set_viewport_size(handle, 100, 100);

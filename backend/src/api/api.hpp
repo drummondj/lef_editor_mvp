@@ -121,6 +121,28 @@ extern "C"
         uint8_t color_b;
     } LeLayerRow;
 
+    /// @brief Result of le_snapped_mouse_position(): the current mouse
+    /// position's coordinates, snapped to the minor grid (mirrors
+    /// Scene::snapped_mouse_position - see UPDATES.md 5.3) and converted
+    /// from dbu to microns via the Root's Technology::database_units_microns
+    /// (e.g. 1000 dbu/um -> 3 decimal digits of representable precision;
+    /// dividing the already-integral snapped dbu value by this is exact to
+    /// the finest resolution the database itself supports - no additional
+    /// rounding is meaningful beyond it). `has_position` is 0 (with
+    /// x_um/y_um both 0) if no mouse position has been set yet (see
+    /// le_set_mouse_position), the handle is null, or no Technology has
+    /// been read yet (le_read_lef) to convert with - checked explicitly
+    /// rather than a sentinel x_um/y_um value, since any coordinate
+    /// including 0 is otherwise legitimate. Mirrors this project's single
+    /// shared/global Technology assumption (see ViewLayerSet::
+    /// build_for_technology's own caller in le_read_lef).
+    typedef struct LeSnappedMousePosition
+    {
+        double x_um;
+        double y_um;
+        int32_t has_position;
+    } LeSnappedMousePosition;
+
     /// @brief Allocate a new, empty editor instance (no LEF loaded, no
     /// Design selected, 0x0 viewport). Never returns null.
     LeHandle *le_create(void);
@@ -352,6 +374,15 @@ extern "C"
     /// event) so the grid-snap indicator box stops showing at the last
     /// known position. A no-op if handle is null.
     void le_clear_mouse_position(LeHandle *handle);
+
+    /// @brief The current mouse position's coordinates in microns, snapped
+    /// to the minor grid (UPDATES.md 5.3) - the same point the grid-snap
+    /// indicator box drawn by le_render_pixel_buffer() is centered on (see
+    /// Renderer::draw_cursor), for a Flutter UI to display as coordinate
+    /// text. See LeSnappedMousePosition's own comment for the dbu-to-micron
+    /// conversion and its degrade-gracefully cases (null handle, no mouse
+    /// position set, no Technology read yet).
+    LeSnappedMousePosition le_snapped_mouse_position(LeHandle *handle);
 
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently

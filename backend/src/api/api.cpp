@@ -382,6 +382,33 @@ extern "C"
         handle->scene.clear_mouse_position();
     }
 
+    LeSnappedMousePosition le_snapped_mouse_position(LeHandle *handle)
+    {
+        if (!handle)
+            return LeSnappedMousePosition{.x_um = 0.0, .y_um = 0.0, .has_position = 0};
+
+        const std::optional<le::Point> snapped = handle->scene.snapped_mouse_position();
+        if (!snapped)
+            return LeSnappedMousePosition{.x_um = 0.0, .y_um = 0.0, .has_position = 0};
+
+        // Single shared/global Technology, same assumption le_read_lef's
+        // own ViewLayerSet::build_for_technology(..., technology_ids.front())
+        // call already makes.
+        const auto technology_ids = handle->root.get_technology_ids();
+        if (technology_ids.empty())
+            return LeSnappedMousePosition{.x_um = 0.0, .y_um = 0.0, .has_position = 0};
+
+        const le::TechnologyData *technology = handle->root.get_technology(technology_ids.front());
+        if (!technology || technology->database_units_microns <= 0.0)
+            return LeSnappedMousePosition{.x_um = 0.0, .y_um = 0.0, .has_position = 0};
+
+        return LeSnappedMousePosition{
+            .x_um = static_cast<double>(snapped->x) / technology->database_units_microns,
+            .y_um = static_cast<double>(snapped->y) / technology->database_units_microns,
+            .has_position = 1,
+        };
+    }
+
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)
     {
         if (!handle)
