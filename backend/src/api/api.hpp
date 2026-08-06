@@ -337,12 +337,32 @@ extern "C"
     /// <= 0 are ignored. A no-op if handle is null.
     void le_set_major_grid_spacing(LeHandle *handle, int64_t dbu);
 
+    /// @brief Set the current mouse position, in the same pixel space as
+    /// le_render_pixel_buffer()'s output image (top-left origin, y
+    /// increasing downward) and le_zoom()'s x/y - meant to be fed straight
+    /// from a pointer-move event. Drives the grid-snap indicator box drawn
+    /// by le_render_pixel_buffer() (see Renderer::draw_cursor) - a no-op
+    /// if handle is null. Cheap to call on every pointer-move event: it
+    /// does not invalidate the (potentially design-sized) rasterized
+    /// design cache, only the small cursor overlay - see
+    /// Renderer::compose_with_cursor.
+    void le_set_mouse_position(LeHandle *handle, int32_t x, int32_t y);
+
+    /// @brief Clear the current mouse position (e.g. on a pointer-leave
+    /// event) so the grid-snap indicator box stops showing at the last
+    /// known position. A no-op if handle is null.
+    void le_clear_mouse_position(LeHandle *handle);
+
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently
     /// selected Design and viewport, returning the resulting pixel
-    /// buffer. Each stage is cached internally (see Pipeline/Renderer) -
-    /// calling this again with nothing changed since the last call is
-    /// close to free; only viewport/selection changes actually recompute.
+    /// buffer - including the grid-snap indicator box at the current
+    /// mouse position, if one has been set (see le_set_mouse_position).
+    /// Each stage is cached internally (see Pipeline/Renderer) - calling
+    /// this again with nothing changed since the last call is close to
+    /// free; only viewport/selection/mouse-position changes actually
+    /// recompute, and a mouse-position-only change is itself cheap (see
+    /// Renderer::compose_with_cursor), not proportional to design size.
     /// Returns an all-zero/null LePixelBuffer if handle is null. No
     /// Design selected (le_set_current_design was never called) degrades
     /// gracefully to an empty (but correctly-sized, non-null) buffer

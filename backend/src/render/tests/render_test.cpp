@@ -404,6 +404,124 @@ TEST_F(RenderFixture, BuildPictureHidesMinorTierIndependentlyOfMajorTier)
     EXPECT_GT(SkColorGetA(sample_pixel(picture, 100, 100, 50, 50)), 0);
 }
 
+TEST_F(RenderFixture, BuildCursorPictureDrawsAFixedSizeBoxCenteredOnTheSnappedMousePosition)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(10);
+
+    // Pixel (40,40) -> dbu (20,30) via mouse_dbu_position's pan/scale/Y-flip
+    // inverse - already a multiple of the 10-spacing minor grid, so it
+    // snaps to itself, landing at pixel (40,60) in draw_cursor's own
+    // pre-flip pixel space (not the Y-flipped image space rasterize()
+    // produces). The box is a fixed kCursorBoxSizePx (7px) square
+    // centered there - rect left edge at 40-3.5=36.5, stroke (1px)
+    // spanning continuous x in [36.0,37.0], so pixel column 36 is fully
+    // covered.
+    scene.set_mouse_position(40, 40);
+
+    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+
+    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 36, 60)), 0); // left edge of the fixed-size box
+    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 40, 60)), 0); // interior (stroke only, no fill) - where the grid dot itself shows through
+}
+
+TEST_F(RenderFixture, BuildCursorPictureBoxStaysFixedPixelSizeAtHighZoomInsteadOfBallooningWithTheGridCell)
+{
+    // Regression: the box used to be sized in dbu-space (+-minor_spacing/2
+    // around the snapped point), so at high zoom it ballooned along with
+    // the grid cell. It's now a fixed on-screen size (kCursorBoxSizePx)
+    // regardless of scale.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(25.0);
+    scene.set_viewport_size(400, 400);
+    scene.set_minor_grid_spacing(8);
+
+    // dbu (8,8) -> pixel (200,200) at this scale/pan, and 8 is already a
+    // multiple of the 8-spacing minor grid, so it snaps to itself. The
+    // old dbu-sized box (+-4dbu = +-100px at this scale) would have
+    // covered pixel (210,200); the new fixed-size box does not.
+    scene.set_mouse_position(200, 200);
+
+    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+
+    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 400, 400, 196, 200)), 0); // just inside the fixed box's edge
+    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 400, 400, 210, 200)), 0); // far outside the fixed box, but well within where the old dbu-sized box would have drawn
+}
+
+TEST_F(RenderFixture, BuildCursorPictureIsEmptyWhenNoMousePositionSet)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(100, 100);
+
+    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 50, 50)), 0);
+}
+
+TEST_F(RenderFixture, BuildCursorPictureDrawsEvenWhenTheMinorGridIsTooDenseToShowDots)
+{
+    // Unlike draw_grid's own dots (which hide below a density floor), the
+    // mouse marker is meant to stay visible at all times regardless of
+    // whether the grid itself is currently shown.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(0.1); // minor 5*0.1=0.5px - under draw_grid's own minor-tier density floor
+    scene.set_viewport_size(100, 100);
+
+    // dbu (500,500) -> pixel (50,50) at this pan/scale, and 500 is already
+    // a multiple of the default 5dbu minor spacing, so it snaps to itself.
+    scene.set_mouse_position(50, 50);
+
+    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+
+    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 46, 50)), 0); // left edge of the fixed-size box
+    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 50, 50)), 0); // interior (stroke only, no fill)
+}
+
+TEST_F(RenderFixture, ComposeWithCursorDoesNotReRasterizeDesignWhenOnlyMouseMoves)
+{
+    // This is the whole point of the design/cursor-picture split (see
+    // UPDATES.md 5.2's own flagged perf concern, and Renderer::
+    // compose_with_cursor's doc comment): a mouse-move must not force a
+    // full re-rasterize of a potentially design-sized picture on every
+    // pointer event, only the cheap composite step.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+
+    scene.set_mouse_position(10, 10);
+    const auto &cursor_picture_1 = renderer.build_cursor_picture(scene);
+    renderer.compose_with_cursor(design_picture, cursor_picture_1, scene);
+    ASSERT_EQ(renderer.rasterize_calls(), 1u);
+    ASSERT_EQ(renderer.cursor_picture_calls(), 1u);
+    ASSERT_EQ(renderer.compose_calls(), 1u);
+
+    // Move the mouse only - viewport/visibility versions (and therefore
+    // the design content itself) are untouched.
+    scene.set_mouse_position(20, 20);
+    const auto &cursor_picture_2 = renderer.build_cursor_picture(scene);
+    renderer.compose_with_cursor(design_picture, cursor_picture_2, scene);
+
+    EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
+    EXPECT_EQ(renderer.cursor_picture_calls(), 2u); // cheap cursor overlay did recompute
+    EXPECT_EQ(renderer.compose_calls(), 2u);        // cheap composite did recompute
+}
+
 TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
 {
     // M1 (red, palette index 0) sits at low dbu y; M2 (green, palette

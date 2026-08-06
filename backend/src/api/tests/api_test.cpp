@@ -25,6 +25,23 @@ namespace
         return false;
     }
 
+    // The mouse-snap cursor box is drawn pure opaque red (see
+    // Renderer::kCursorBoxColor) - distinct from the grid's gray/white
+    // dots and any layer fill color, so "clearly red-dominant and opaque"
+    // is a reliable way to detect it without depending on exact stroke
+    // antialiasing.
+    bool region_has_red_cursor_pixel(const LePixelBuffer &buffer, int x0, int y0, int x1, int y1)
+    {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+            {
+                const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+                if (p[0] > 200 && p[1] < 50 && p[2] < 50 && p[3] > 200)
+                    return true;
+            }
+        return false;
+    }
+
     struct ApiFixture : public ::testing::Test
     {
         void SetUp() override { handle = le_create(); }
@@ -493,6 +510,54 @@ TEST_F(ApiFixture, GridSpacingWithNullHandleReturnsZeroAndDoesNotCrash)
     EXPECT_EQ(le_major_grid_spacing(nullptr), 0);
     le_set_minor_grid_spacing(nullptr, 10);
     le_set_major_grid_spacing(nullptr, 100);
+}
+
+TEST_F(ApiFixture, MousePositionWithNullHandleDoesNotCrash)
+{
+    le_set_mouse_position(nullptr, 10, 10);
+    le_clear_mouse_position(nullptr);
+}
+
+TEST_F(ApiFixture, RenderPixelBufferShowsRedCursorBoxAtSnappedMousePosition)
+{
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 1.0, 0, 100); // scale 1.0 -> 2.0, anchored at dbu (0,0) so pan stays (0,0) - default minor spacing (5dbu*2=10px) clears the density floor
+
+    // Screen pixel (50,50), top-left origin/y-down (same convention as
+    // le_zoom's x/y) -> dbu (25,25), already a multiple of the default
+    // 5dbu minor grid, so it snaps to itself and the box lands centered
+    // on screen pixel (50,50) after compose_with_cursor's Y-flip.
+    le_set_mouse_position(handle, 50, 50);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_red_cursor_pixel(buffer, 40, 40, 60, 60));
+}
+
+TEST_F(ApiFixture, RenderPixelBufferHasNoCursorBoxWhenNoMousePositionSet)
+{
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 1.0, 0, 100);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_FALSE(region_has_red_cursor_pixel(buffer, 40, 40, 60, 60));
+}
+
+TEST_F(ApiFixture, ClearMousePositionRemovesTheCursorBoxFromSubsequentRenders)
+{
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 1.0, 0, 100);
+    le_set_mouse_position(handle, 50, 50);
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_red_cursor_pixel(before, 40, 40, 60, 60));
+
+    le_clear_mouse_position(handle);
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_FALSE(region_has_red_cursor_pixel(after, 40, 40, 60, 60));
 }
 
 TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)

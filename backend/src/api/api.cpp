@@ -368,6 +368,20 @@ extern "C"
         handle->scene.set_major_grid_spacing(dbu);
     }
 
+    void le_set_mouse_position(LeHandle *handle, int32_t x, int32_t y)
+    {
+        if (!handle)
+            return;
+        handle->scene.set_mouse_position(x, y);
+    }
+
+    void le_clear_mouse_position(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        handle->scene.clear_mouse_position();
+    }
+
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)
     {
         if (!handle)
@@ -376,7 +390,8 @@ extern "C"
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
         const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
         const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers);
-        const auto &buffer = handle->renderer.rasterize(picture, handle->scene);
+        const auto &cursor_picture = handle->renderer.build_cursor_picture(handle->scene);
+        const auto &buffer = handle->renderer.compose_with_cursor(picture, cursor_picture, handle->scene);
 
         return LePixelBuffer{
             .data = buffer.data,

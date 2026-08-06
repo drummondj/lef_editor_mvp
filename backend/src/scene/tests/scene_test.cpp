@@ -121,6 +121,87 @@ TEST(Scene, GridSpacingSettersBumpVisibilityVersion)
     EXPECT_EQ(scene.visibility_version(), 2u);
 }
 
+TEST(Scene, MousePositionDefaultsToUnset)
+{
+    Scene scene;
+    EXPECT_FALSE(scene.has_mouse_position());
+    EXPECT_EQ(scene.mouse_version(), 0u);
+    EXPECT_FALSE(scene.mouse_dbu_position().has_value());
+    EXPECT_FALSE(scene.snapped_mouse_position().has_value());
+}
+
+TEST(Scene, SetMousePositionBumpsMouseVersionNotViewportOrVisibilityVersion)
+{
+    // A mouse move must invalidate only the cheap cursor-overlay cache
+    // (see Renderer::build_cursor_picture/compose_with_cursor), not the
+    // expensive design rasterize cache keyed on viewport/visibility
+    // version - see scene.hpp's own comment on mouse_version_.
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_viewport_size(100, 100);
+    const uint64_t viewport_version_before = scene.viewport_version();
+    const uint64_t visibility_version_before = scene.visibility_version();
+
+    scene.set_mouse_position(10, 20);
+    EXPECT_TRUE(scene.has_mouse_position());
+    EXPECT_EQ(scene.mouse_version(), 1u);
+    EXPECT_EQ(scene.viewport_version(), viewport_version_before);
+    EXPECT_EQ(scene.visibility_version(), visibility_version_before);
+
+    scene.set_mouse_position(11, 20);
+    EXPECT_EQ(scene.mouse_version(), 2u);
+}
+
+TEST(Scene, MouseDbuPositionUndoesPanScaleAndYFlip)
+{
+    // Pixel space is top-left origin/y-down (matches le_render_pixel_buffer's
+    // output image and le_zoom's x/y); dbu space is y-up - see scene.hpp's
+    // mouse_dbu_position comment for the exact inverse formula.
+    Scene scene;
+    scene.set_pan(Point{100, 200});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(50, 40);
+
+    scene.set_mouse_position(10, 10);
+    const std::optional<Point> dbu = scene.mouse_dbu_position();
+    ASSERT_TRUE(dbu.has_value());
+    EXPECT_EQ(dbu->x, 100 + 10 / 2); // pan.x + x_px / scale
+    EXPECT_EQ(dbu->y, 200 + (40 - 10) / 2); // pan.y + (height - y_px) / scale
+}
+
+TEST(Scene, SnappedMousePositionRoundsToNearestMinorGridMultiple)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(10);
+
+    // dbu (23, 100 - 27) = (23, 73); nearest multiples of 10 are 20 and 70.
+    scene.set_mouse_position(23, 27);
+    const std::optional<Point> snapped = scene.snapped_mouse_position();
+    ASSERT_TRUE(snapped.has_value());
+    EXPECT_EQ(snapped->x, 20);
+    EXPECT_EQ(snapped->y, 70);
+}
+
+TEST(Scene, ClearMousePositionResetsHasMousePositionAndBumpsVersionOnlyIfItWasSet)
+{
+    Scene scene;
+    scene.set_mouse_position(5, 5);
+    ASSERT_EQ(scene.mouse_version(), 1u);
+
+    scene.clear_mouse_position();
+    EXPECT_FALSE(scene.has_mouse_position());
+    EXPECT_FALSE(scene.mouse_dbu_position().has_value());
+    EXPECT_EQ(scene.mouse_version(), 2u);
+
+    // Clearing an already-clear position is a no-op - must not bump the
+    // version again (would otherwise invalidate caches for nothing).
+    scene.clear_mouse_position();
+    EXPECT_EQ(scene.mouse_version(), 2u);
+}
+
 TEST(Scene, LayerNameVisibilityDefaultsToTrueUntilSet)
 {
     Scene scene;

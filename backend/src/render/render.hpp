@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <vector>
 
@@ -238,72 +239,95 @@ namespace le
                 return recorder.finishRecordingAsPicture(); });
         }
 
+        /// @brief Records just the grid-snap indicator box (see
+        /// draw_cursor) into its own small SkPicture, cached independently
+        /// of the (potentially design-sized, expensive) design picture
+        /// above - keyed on viewport_version()/visibility_version() (grid
+        /// spacing lives there) and mouse_version(), deliberately *not*
+        /// AbstractId: the cursor overlay is a pure viewport/mouse concern,
+        /// not design content, so switching Abstracts doesn't need to
+        /// recompute it. See compose_with_cursor for how this combines
+        /// with the design picture without re-rasterizing it - this
+        /// project's answer to UPDATES.md 5.2's own flagged perf concern
+        /// (recomputing this tiny picture on every mouse-move event is
+        /// cheap; recomputing/re-rasterizing the whole design picture on
+        /// every mouse-move event would not be).
+        const sk_sp<SkPicture> &build_cursor_picture(const Scene &scene)
+        {
+            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
+            return cursor_picture_.get(key, [&]
+                                       {
+                SkPictureRecorder recorder;
+                SkCanvas *canvas = recorder.beginRecording(
+                    SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
+
+                draw_cursor(*canvas, scene);
+
+                return recorder.finishRecordingAsPicture(); });
+        }
+
         /// @brief Rasterize `picture` into a raw RGBA8888 PixelBuffer sized
-        /// to the Scene's viewport - the step this project's README's open
-        /// design questions flagged the Y-axis-flip decision as belonging
-        /// to (not `transform_to_pixels`, which stays a pure, unflipped
-        /// dbu->pixel map either way). dbu-space y increases upward
-        /// (physical layout convention); PixelShape's own transform maps
-        /// that straight through with no flip, so without correction here,
-        /// increasing dbu y would end up increasing *pixel row index* -
-        /// i.e. the design's "up" would render toward the bottom of the
-        /// buffer, since Skia's own canvas is y-down. Corrected with one
-        /// canvas-level flip (`translate` + `scale(1,-1)`) applied once
-        /// before drawing the whole picture, not by changing
-        /// `transform_to_pixels`'s per-shape math or reversing output rows
-        /// after the fact - cheapest place to do it, and keeps that
-        /// already-tested transform simple. A whole-canvas flip mirrors
-        /// glyph rendering too, though (Skia has no notion that text is
-        /// directionally special) - `draw_group`'s text-drawing loop
-        /// counter-flips locally around each label's own anchor so glyphs
-        /// stay upright under this; see its own comment for why that
-        /// couples `build_picture`'s `SkPicture` to being drawn through
-        /// this specific flip to render text right-side-up.
-        ///
-        /// Uses an explicit `kRGBA_8888_SkColorType` raster surface, not
-        /// `SkImageInfo::MakeN32Premul` (which picks Skia's *platform*-
-        /// native `kN32_SkColorType` - BGRA on some platforms, RGBA on
-        /// others): this project develops on macOS but targets Linux
-        /// servers, and a pixel buffer meant to eventually cross into
-        /// Flutter needs the same byte layout on both, not whatever the
-        /// build machine's native order happens to be. Clears to fully
-        /// transparent first - the real "nothing drawn here" state for
-        /// content meant to be composited into a Flutter texture.
-        ///
-        /// The returned PixelBuffer's `data` points into the backing
-        /// raster surface kept alive inside this cache entry (no extra
-        /// copy) - valid until the next call that invalidates it, same
-        /// convention as `build_picture`'s returned `sk_sp<SkPicture>&`.
-        /// `peekPixels` is unchecked here (unlike e.g. render_preview.cpp's
-        /// defensive check): it's documented to always succeed for a
-        /// surface this function itself just created via `SkSurfaces::Raster`.
+        /// to the Scene's viewport - see rasterize_frame's own comment for
+        /// the full Y-flip/format rationale (this is a thin wrapper over
+        /// it, discarding the RasterizedFrame's surface and keeping just
+        /// its PixelBuffer view). Kept as its own entry point (rather than
+        /// only exposing compose_with_cursor below) since not every
+        /// caller wants a cursor overlay composited in - render_preview.cpp
+        /// and this class's own tests call it directly.
         const PixelBuffer &rasterize(const sk_sp<SkPicture> &picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
-            return rasterized_.get(key, [&]
-                                   {
+            return rasterize_frame(picture, scene).buffer;
+        }
+
+        /// @brief Composites the design picture's cached, already-rasterized
+        /// frame (from rasterize_frame - the expensive step for a large
+        /// design) with the cheap cursor-overlay picture (see
+        /// build_cursor_picture) into one final RGBA8888 buffer, without
+        /// re-rasterizing the design's own vector content on every call.
+        /// Reuses the design's cached raster surface via a cheap SkImage
+        /// snapshot + blit (`SkCanvas::drawImage`, a bitmap copy - not a
+        /// re-walk of the design's draw ops) rather than recording both
+        /// pictures into one fresh canvas, which would re-execute every
+        /// shape's draw calls again on every mouse move. `cursor_picture`
+        /// is drawn through the same whole-canvas Y-flip rasterize_frame
+        /// applies to the design (translate + scale(1,-1) - see its own
+        /// comment for why that flip exists), since build_cursor_picture
+        /// records pre-flip pixel-space coordinates, the same convention
+        /// build_picture's own shapes use.
+        ///
+        /// Cached on all four of AbstractId/viewport_version/
+        /// visibility_version/mouse_version - unlike rasterize_frame's own
+        /// cache, a mouse-only change *does* invalidate this entry, but
+        /// recomputing it only costs one full-viewport image blit plus the
+        /// tiny cursor picture, not anything proportional to design
+        /// complexity - this project's answer to UPDATES.md 5.2's own
+        /// flagged perf concern (a naive single-picture-per-frame design
+        /// would re-rasterize the whole design on every mouse-move event).
+        const PixelBuffer &compose_with_cursor(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &cursor_picture, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
+            return composed_.get(key, [&]
+                                 {
+                const RasterizedFrame &design_frame = rasterize_frame(design_picture, scene);
+
                 const int width = scene.viewport_width_px();
                 const int height = scene.viewport_height_px();
-
-                // SkSurfaces::Raster returns null for non-positive
-                // dimensions (Scene's default-constructed viewport size,
-                // or simply not having called set_viewport_size() yet) -
-                // an empty (all-null/zero) PixelBuffer rather than a null
-                // surface->getCanvas() dereference, matching this
-                // project's "degrade gracefully rather than crash on
-                // unset/invalid state" convention elsewhere (e.g. an
-                // unknown AbstractId in Pipeline::generate_shapes).
-                if (width <= 0 || height <= 0)
+                if (width <= 0 || height <= 0 || !design_frame.surface)
                     return RasterizedFrame{};
 
                 const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
                 sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
-
                 SkCanvas *canvas = surface->getCanvas();
                 canvas->clear(SK_ColorTRANSPARENT);
+
+                // Cheap blit of the already-rasterized design pixels - no
+                // re-walk of its underlying (potentially design-sized)
+                // draw commands.
+                canvas->drawImage(design_frame.surface->makeImageSnapshot(), 0, 0);
+
                 canvas->translate(0, static_cast<SkScalar>(height));
                 canvas->scale(1, -1);
-                canvas->drawPicture(picture);
+                canvas->drawPicture(cursor_picture);
 
                 SkPixmap pixmap;
                 surface->peekPixels(&pixmap);
@@ -324,7 +348,9 @@ namespace le
         // to make cache hits/misses observable in tests.
         uint64_t transform_calls() const { return pixel_shapes_.call_count(); }
         uint64_t picture_calls() const { return picture_.call_count(); }
+        uint64_t cursor_picture_calls() const { return cursor_picture_.call_count(); }
         uint64_t rasterize_calls() const { return rasterized_.call_count(); }
+        uint64_t compose_calls() const { return composed_.call_count(); }
 
     private:
         static SkColor to_sk_color(Color c) { return SkColorSetARGB(c.a, c.r, c.g, c.b); }
@@ -417,6 +443,17 @@ namespace le
         static constexpr Color kMinorGridColor = {128, 128, 128, 120};
         static constexpr Color kMajorGridColor = {255, 255, 255, 230};
         static constexpr Color kAxisLineColor = {255, 255, 255, 160};
+
+        // Grid-snap indicator box (UPDATES.md 5.2) - fully opaque so it
+        // stays visible over any layer color/pattern underneath. Fixed
+        // on-screen size regardless of zoom (see draw_cursor) - 7x7px
+        // with a 1px stroke leaves a ~6px transparent interior, comfortably
+        // enough for the grid dot itself (kGridDotRadius, 2px diameter) to
+        // show through centered inside the box rather than being overdrawn
+        // by the stroke.
+        static constexpr Color kCursorBoxColor = {255, 0, 0, 255};
+        static constexpr float kCursorBoxStrokeWidth = 1.0f;
+        static constexpr float kCursorBoxSizePx = 7.0f;
 
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
@@ -604,6 +641,50 @@ namespace le
             }
         }
 
+        // Draws the grid-snap indicator box (UPDATES.md 5.2) - a red
+        // outline of a fixed on-screen size (kCursorBoxSizePx, NOT scaled
+        // by Scene::scale - a dbu-sized box would grow/shrink with zoom
+        // like a real shape, but this marks a screen position, not
+        // geometry) centered on the snapped minor-grid point the mouse is
+        // currently over, in the same pre-flip pixel space as draw_grid
+        // and build_picture's own shapes. Sized/stroked so the grid dot
+        // itself (kGridDotRadius) is visible centered inside the box
+        // rather than overdrawn by the stroke. Shown regardless of
+        // whether the minor grid tier itself is currently visible
+        // (unlike draw_grid's own density floor) - the mouse marker is
+        // meant to be visible at all times, not just when the dots
+        // happen to be dense enough to draw. No-op only if no mouse
+        // position is set (Scene::has_mouse_position).
+        static void draw_cursor(SkCanvas &canvas, const Scene &scene)
+        {
+            const double scale = scene.scale();
+            if (scale <= 0.0)
+                return;
+
+            const std::optional<Point> snapped = scene.snapped_mouse_position();
+            if (!snapped)
+                return;
+
+            const Point pan = scene.pan();
+
+            auto to_pixel_x = [&](int64_t dbu_x)
+            { return static_cast<SkScalar>((static_cast<double>(dbu_x) - static_cast<double>(pan.x)) * scale); };
+            auto to_pixel_y = [&](int64_t dbu_y)
+            { return static_cast<SkScalar>((static_cast<double>(dbu_y) - static_cast<double>(pan.y)) * scale); };
+
+            const SkScalar cx = to_pixel_x(snapped->x);
+            const SkScalar cy = to_pixel_y(snapped->y);
+            const SkScalar half = kCursorBoxSizePx / 2.0f;
+            const SkRect rect = SkRect::MakeLTRB(cx - half, cy - half, cx + half, cy + half);
+
+            SkPaint paint;
+            paint.setAntiAlias(true);
+            paint.setStyle(SkPaint::kStroke_Style);
+            paint.setStrokeWidth(kCursorBoxStrokeWidth);
+            paint.setColor(to_sk_color(kCursorBoxColor));
+            canvas.drawRect(rect, paint);
+        }
+
         // Draws an X spanning `bounds` - CUT layers' FillPattern::CROSS,
         // drawn directly rather than tiled since CUT geometry (vias) is
         // almost always one small rect per shape, not a large area a
@@ -741,14 +822,99 @@ namespace le
         // that owns its backing memory, so the CachedStage below keeps
         // that memory alive for as long as the cache entry is valid -
         // PixelBuffer itself holds no ownership, just a view into this.
+        // Also what makes compose_with_cursor's cheap image-snapshot reuse
+        // possible - the surface has to still be alive to snapshot it.
         struct RasterizedFrame
         {
             sk_sp<SkSurface> surface;
             PixelBuffer buffer;
         };
 
+        /// @brief The actual rasterize implementation - `rasterize()` and
+        /// `compose_with_cursor()` are both thin callers, the latter using
+        /// the returned RasterizedFrame's `surface` directly (not just its
+        /// `buffer`) to snapshot it cheaply rather than re-drawing
+        /// `picture`. dbu-space y increases upward (physical layout
+        /// convention); PixelShape's own transform maps that straight
+        /// through with no flip, so without correction here, increasing
+        /// dbu y would end up increasing *pixel row index* - i.e. the
+        /// design's "up" would render toward the bottom of the buffer,
+        /// since Skia's own canvas is y-down. Corrected with one
+        /// canvas-level flip (`translate` + `scale(1,-1)`) applied once
+        /// before drawing the whole picture, not by changing
+        /// `transform_to_pixels`'s per-shape math or reversing output rows
+        /// after the fact - cheapest place to do it, and keeps that
+        /// already-tested transform simple. A whole-canvas flip mirrors
+        /// glyph rendering too, though (Skia has no notion that text is
+        /// directionally special) - `draw_group`'s text-drawing loop
+        /// counter-flips locally around each label's own anchor so glyphs
+        /// stay upright under this; see its own comment for why that
+        /// couples `build_picture`'s `SkPicture` to being drawn through
+        /// this specific flip to render text right-side-up.
+        ///
+        /// Uses an explicit `kRGBA_8888_SkColorType` raster surface, not
+        /// `SkImageInfo::MakeN32Premul` (which picks Skia's *platform*-
+        /// native `kN32_SkColorType` - BGRA on some platforms, RGBA on
+        /// others): this project develops on macOS but targets Linux
+        /// servers, and a pixel buffer meant to eventually cross into
+        /// Flutter needs the same byte layout on both, not whatever the
+        /// build machine's native order happens to be. Clears to fully
+        /// transparent first - the real "nothing drawn here" state for
+        /// content meant to be composited into a Flutter texture.
+        ///
+        /// The returned RasterizedFrame's `buffer.data` points into
+        /// `surface` - valid until the next call that invalidates this
+        /// cache entry, same convention as `build_picture`'s returned
+        /// `sk_sp<SkPicture>&`. `peekPixels` is unchecked here (unlike
+        /// e.g. render_preview.cpp's defensive check): it's documented to
+        /// always succeed for a surface this function itself just created
+        /// via `SkSurfaces::Raster`.
+        const RasterizedFrame &rasterize_frame(const sk_sp<SkPicture> &picture, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            return rasterized_.get(key, [&]
+                                   {
+                const int width = scene.viewport_width_px();
+                const int height = scene.viewport_height_px();
+
+                // SkSurfaces::Raster returns null for non-positive
+                // dimensions (Scene's default-constructed viewport size,
+                // or simply not having called set_viewport_size() yet) -
+                // an empty (all-null/zero) PixelBuffer rather than a null
+                // surface->getCanvas() dereference, matching this
+                // project's "degrade gracefully rather than crash on
+                // unset/invalid state" convention elsewhere (e.g. an
+                // unknown AbstractId in Pipeline::generate_shapes).
+                if (width <= 0 || height <= 0)
+                    return RasterizedFrame{};
+
+                const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+
+                SkCanvas *canvas = surface->getCanvas();
+                canvas->clear(SK_ColorTRANSPARENT);
+                canvas->translate(0, static_cast<SkScalar>(height));
+                canvas->scale(1, -1);
+                canvas->drawPicture(picture);
+
+                SkPixmap pixmap;
+                surface->peekPixels(&pixmap);
+
+                return RasterizedFrame{
+                    .surface = std::move(surface),
+                    .buffer = PixelBuffer{
+                        .data = static_cast<const uint8_t *>(pixmap.addr()),
+                        .width = width,
+                        .height = height,
+                        .row_bytes = pixmap.rowBytes(),
+                    },
+                }; });
+        }
+
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> cursor_picture_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };
 }

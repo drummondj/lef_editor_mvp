@@ -144,6 +144,74 @@ namespace le
         }
         int64_t major_grid_spacing() const { return major_grid_spacing_; }
 
+        // --- Mouse position (screen pixels) + grid-snapped dbu position ---
+        // Set by the frontend on every pointer move (see le_set_mouse_position)
+        // - screen/image pixel space (top-left origin, y down, matching
+        // le_render_pixel_buffer()'s output and le_zoom's x/y), not
+        // Renderer's own pre-Y-flip pixel space. Deliberately its own
+        // version counter, not visibility_version - a mouse move must not
+        // invalidate Renderer's (expensive, design-sized) rasterized
+        // picture cache; see Renderer::compose_with_cursor for how the
+        // cursor overlay stays cheap to redraw independently of it.
+        void set_mouse_position(int32_t x_px, int32_t y_px)
+        {
+            mouse_x_px_ = x_px;
+            mouse_y_px_ = y_px;
+            has_mouse_position_ = true;
+            ++mouse_version_;
+        }
+
+        // Call when the pointer leaves the viewport (or before the first
+        // pointer event) so the cursor overlay stops showing a stale
+        // position rather than sticking at the last-known one.
+        void clear_mouse_position()
+        {
+            if (has_mouse_position_)
+            {
+                has_mouse_position_ = false;
+                ++mouse_version_;
+            }
+        }
+
+        bool has_mouse_position() const { return has_mouse_position_; }
+        uint64_t mouse_version() const { return mouse_version_; }
+
+        // The dbu point currently under the mouse - nullopt if no position
+        // has been set yet (see has_mouse_position). Undoes rasterize()'s
+        // Y-flip the same way le_zoom's own pixel->dbu conversion does -
+        // see render.hpp's PixelShape/Renderer::rasterize comments for why
+        // pan/scale describe the pre-flip transform while a screen pixel
+        // coordinate is post-flip. scale_ is always positive by
+        // construction (set_scale rejects non-positive values), so no
+        // divide-by-zero guard is needed here.
+        std::optional<Point> mouse_dbu_position() const
+        {
+            if (!has_mouse_position_)
+                return std::nullopt;
+
+            const double dbu_x = static_cast<double>(pan_.x) + static_cast<double>(mouse_x_px_) / scale_;
+            const double dbu_y = static_cast<double>(pan_.y) + (static_cast<double>(viewport_height_px_) - static_cast<double>(mouse_y_px_)) / scale_;
+            return Point{static_cast<int64_t>(dbu_x), static_cast<int64_t>(dbu_y)};
+        }
+
+        // mouse_dbu_position() rounded to the nearest multiple of the
+        // minor grid spacing (round-to-nearest, not truncation - a mouse
+        // position exactly between two grid points snaps to whichever the
+        // division rounds to). nullopt under the same conditions as
+        // mouse_dbu_position().
+        std::optional<Point> snapped_mouse_position() const
+        {
+            const std::optional<Point> dbu = mouse_dbu_position();
+            if (!dbu)
+                return std::nullopt;
+
+            auto snap = [spacing = minor_grid_spacing_](int64_t v)
+            {
+                return static_cast<int64_t>(std::llround(static_cast<double>(v) / static_cast<double>(spacing))) * spacing;
+            };
+            return Point{snap(dbu->x), snap(dbu->y)};
+        }
+
         // --- Layer visibility (defaults to visible until toggled) ---
         // Two independent axes, deliberately *not* per-ViewLayerId: by
         // layer name (every purpose-column of that ViewLayerRow, e.g.
@@ -253,6 +321,10 @@ namespace le
         uint64_t viewport_version_ = 0;
         int64_t minor_grid_spacing_ = 5;
         int64_t major_grid_spacing_ = 50;
+        int32_t mouse_x_px_ = 0;
+        int32_t mouse_y_px_ = 0;
+        bool has_mouse_position_ = false;
+        uint64_t mouse_version_ = 0;
         std::unordered_map<std::string, bool> layer_name_visible_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_visible_;
         uint64_t visibility_version_ = 0;
