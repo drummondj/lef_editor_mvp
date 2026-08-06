@@ -122,6 +122,45 @@ class LeDesignEntry {
   final String name;
 }
 
+/// Mirrors `le::ViewLayerPurpose`'s declaration order (api.hpp's
+/// `le_purpose_at`/`le_is_purpose_visible`/etc.) - the layer widget's
+/// column axis, independent of any row (see [LeEditor.purposeAt]).
+enum LeLayerPurpose {
+  terminal,
+  obstruction,
+  boundary;
+
+  static LeLayerPurpose? fromValue(int value) => switch (value) {
+    0 => LeLayerPurpose.terminal,
+    1 => LeLayerPurpose.obstruction,
+    2 => LeLayerPurpose.boundary,
+    _ => null,
+  };
+}
+
+/// One row of [LeEditor.layer]: a layer-widget row's name and swatch
+/// color - not tied to a physical Layer existing (BOUNDARY is a row like
+/// any other). Visibility/selectability are set by [LeLayer.name] directly
+/// ([LeEditor.setLayerNameVisible]/[setLayerNameSelectable]) - a whole row
+/// together, not addressed by any id; see [LeLayerPurpose] for the other,
+/// row-independent axis.
+class LeLayer {
+  const LeLayer({
+    required this.name,
+    required this.colorR,
+    required this.colorG,
+    required this.colorB,
+  });
+
+  final String name;
+
+  /// The row's swatch color (0-255 per channel) - not the fill color or
+  /// pattern, which are resolved per shape during rendering.
+  final int colorR;
+  final int colorG;
+  final int colorB;
+}
+
 /// One editor instance: owns a native `LeHandle*` (a Root/ViewLayerSet/
 /// Scene/Pipeline/Renderer, see api.hpp) that's reused across calls,
 /// matching the backend's own "one instance per Scene-equivalent lifetime"
@@ -256,6 +295,136 @@ class LeEditor {
     } finally {
       pkg_ffi.calloc.free(idPtr);
     }
+  }
+
+  /// Number of layer-widget rows currently available (0 before the first
+  /// [readLef] call, since no ViewLayerSet has been built yet). Includes
+  /// BOUNDARY and any future non-Technology-derived row, not just physical
+  /// Layers. See [layer] for each row's contents.
+  int get layerCount {
+    _checkNotDisposed();
+    return _bindings.le_layer_count(_handle);
+  }
+
+  /// The row at [rowIndex] (0..[layerCount] - 1), or null if out of range.
+  LeLayer? layer(int rowIndex) {
+    _checkNotDisposed();
+    final row = _bindings.le_layer_at(_handle, rowIndex);
+    if (row.name == ffi.nullptr) return null;
+    return LeLayer(
+      name: row.name.cast<pkg_ffi.Utf8>().toDartString(),
+      colorR: row.color_r,
+      colorG: row.color_g,
+      colorB: row.color_b,
+    );
+  }
+
+  /// Number of distinct purposes across the currently loaded ViewLayerSet -
+  /// the layer widget's column axis, independent of any row. See
+  /// [purposeAt] for each one.
+  int get purposeCount {
+    _checkNotDisposed();
+    return _bindings.le_purpose_count(_handle);
+  }
+
+  /// The purpose at [index] (0..[purposeCount] - 1), or null if out of
+  /// range.
+  LeLayerPurpose? purposeAt(int index) {
+    _checkNotDisposed();
+    return LeLayerPurpose.fromValue(_bindings.le_purpose_at(_handle, index));
+  }
+
+  /// Whether every ViewLayer named [layerName] (a whole [LeLayer] row
+  /// together, not one purpose-column) is currently visible - true by
+  /// default until toggled with [setLayerNameVisible]. See
+  /// [isPurposeVisible] for the other, row-independent axis.
+  bool isLayerNameVisible(String layerName) {
+    _checkNotDisposed();
+    final namePtr = layerName.toNativeUtf8();
+    try {
+      return _bindings.le_is_layer_name_visible(_handle, namePtr.cast()) != 0;
+    } finally {
+      pkg_ffi.calloc.free(namePtr);
+    }
+  }
+
+  /// Sets the visibility of every ViewLayer named [layerName] - e.g. a
+  /// layer-widget row-header checkbox. Affects rendering.
+  void setLayerNameVisible(String layerName, bool visible) {
+    _checkNotDisposed();
+    final namePtr = layerName.toNativeUtf8();
+    try {
+      _bindings.le_set_layer_name_visible(
+        _handle,
+        namePtr.cast(),
+        visible ? 1 : 0,
+      );
+    } finally {
+      pkg_ffi.calloc.free(namePtr);
+    }
+  }
+
+  /// Whether every ViewLayer whose purpose is [purpose] (a whole column,
+  /// not one row) is currently visible - true by default until toggled
+  /// with [setPurposeVisible].
+  bool isPurposeVisible(LeLayerPurpose purpose) {
+    _checkNotDisposed();
+    return _bindings.le_is_purpose_visible(_handle, purpose.index) != 0;
+  }
+
+  /// Sets the visibility of every ViewLayer whose purpose is [purpose] -
+  /// e.g. a layer-widget column-header checkbox. Affects rendering.
+  void setPurposeVisible(LeLayerPurpose purpose, bool visible) {
+    _checkNotDisposed();
+    _bindings.le_set_purpose_visible(_handle, purpose.index, visible ? 1 : 0);
+  }
+
+  /// Whether every ViewLayer named [layerName] is currently selectable -
+  /// true by default until toggled with [setLayerNameSelectable]. Purely
+  /// an interaction-layer concern (no hit-testing/click-to-select API
+  /// exists yet to consult it) - doesn't affect rendering.
+  bool isLayerNameSelectable(String layerName) {
+    _checkNotDisposed();
+    final namePtr = layerName.toNativeUtf8();
+    try {
+      return _bindings.le_is_layer_name_selectable(_handle, namePtr.cast()) !=
+          0;
+    } finally {
+      pkg_ffi.calloc.free(namePtr);
+    }
+  }
+
+  /// Sets the selectability of every ViewLayer named [layerName].
+  void setLayerNameSelectable(String layerName, bool selectable) {
+    _checkNotDisposed();
+    final namePtr = layerName.toNativeUtf8();
+    try {
+      _bindings.le_set_layer_name_selectable(
+        _handle,
+        namePtr.cast(),
+        selectable ? 1 : 0,
+      );
+    } finally {
+      pkg_ffi.calloc.free(namePtr);
+    }
+  }
+
+  /// Whether every ViewLayer whose purpose is [purpose] is currently
+  /// selectable - true by default until toggled with
+  /// [setPurposeSelectable].
+  bool isPurposeSelectable(LeLayerPurpose purpose) {
+    _checkNotDisposed();
+    return _bindings.le_is_purpose_selectable(_handle, purpose.index) != 0;
+  }
+
+  /// Sets the selectability of every ViewLayer whose purpose is [purpose].
+  void setPurposeSelectable(LeLayerPurpose purpose, bool selectable) {
+    _checkNotDisposed();
+    _bindings.le_set_purpose_selectable(
+      _handle,
+      purpose.index,
+      selectable ? 1 : 0,
+    );
   }
 
   /// Zooms the viewport, keeping the dbu point under screen pixel (x, y)

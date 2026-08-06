@@ -38,6 +38,26 @@ Two separate paths call into the C API — not one:
   view), plus a `renderPixelBuffer()` that copies a frame into Dart memory
   for previewing/testing without a texture. Cheap, called directly from
   Dart.
+- **The layer visibility/selectability widget** is two independent axes,
+  not a per-cell grid addressed by id: rows by name
+  (`le_layer_count`/`le_layer_at` — `LeEditor.layerCount`/`layer()` —
+  `ViewLayerSet`'s rows, e.g. a physical Layer or BOUNDARY, each just a
+  name + swatch color, not tied to a physical Layer existing) and columns
+  by purpose (`le_purpose_count`/`le_purpose_at` — `LeEditor.purposeCount`/
+  `purposeAt()` — `LeLayerPurpose.terminal`/`obstruction`/`boundary`,
+  independent of any row). Toggling addresses a whole row or a whole
+  column at once - `le_is_layer_name_visible`/`le_set_layer_name_visible`/
+  `le_is_layer_name_selectable`/`le_set_layer_name_selectable` by name
+  (`LeEditor.isLayerNameVisible()`/`setLayerNameVisible()`/
+  `isLayerNameSelectable()`/`setLayerNameSelectable()`), and
+  `le_is_purpose_visible`/`le_set_purpose_visible`/
+  `le_is_purpose_selectable`/`le_set_purpose_selectable` by purpose
+  (`LeEditor.isPurposeVisible()`/`setPurposeVisible()`/
+  `isPurposeSelectable()`/`setPurposeSelectable()`) - there is no API for
+  one individual (row, column) cell. Visibility affects rendering
+  (`Pipeline::filter_by_layer_visibility`, combining both axes - see
+  `Scene::is_view_layer_visible`); selectability is interaction-only — no
+  hit-testing/click-to-select API exists yet to consult it.
 - **Native platform texture code** (macOS: `LeApiBridge`/`LeTexture` in
   `macos/Classes/`, implementing `FlutterTexture`; Linux: `FlLeTexture` in
   `linux/lef_texture.cc`, implementing `FlPixelBufferTexture`) calls

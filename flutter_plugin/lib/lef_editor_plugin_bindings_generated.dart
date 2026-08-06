@@ -210,6 +210,245 @@ class LefEditorPluginBindings {
   late final _le_set_current_design_by_id = _le_set_current_design_by_idPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, LeDesignId)>();
 
+  /// @brief Number of layer-widget rows currently available - mirrors
+  /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
+  /// includes BOUNDARY and any future non-Technology-derived "extra"
+  /// row, not just physical Layers), so this doesn't care whether a
+  /// Technology has even been declared yet - it's simply however many
+  /// rows the handle's current ViewLayerSet happens to have (0 if
+  /// handle is null or none has been built yet, e.g. before the first
+  /// le_read_lef() call). See le_layer_at() for each row's contents.
+  int le_layer_count(ffi.Pointer<LeHandle> handle) {
+    return _le_layer_count(handle);
+  }
+
+  late final _le_layer_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_layer_count',
+      );
+  late final _le_layer_count = _le_layer_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief The row at `row_index` (0..le_layer_count()-1). An
+  /// all-invalid/null row (name == null) if handle is null or row_index
+  /// is out of range, rather than crashing.
+  LeLayerRow le_layer_at(ffi.Pointer<LeHandle> handle, int row_index) {
+    return _le_layer_at(handle, row_index);
+  }
+
+  late final _le_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerRow Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_layer_at');
+  late final _le_layer_at = _le_layer_atPtr
+      .asFunction<LeLayerRow Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Number of distinct purposes across the handle's current
+  /// ViewLayerSet - mirrors ViewLayerSet::purposes() directly. The
+  /// "columns" axis of a layer visibility/selectability widget,
+  /// independent of any row/layer (see le_purpose_at()). 0 if handle is
+  /// null or no ViewLayerSet has been built yet.
+  int le_purpose_count(ffi.Pointer<LeHandle> handle) {
+    return _le_purpose_count(handle);
+  }
+
+  late final _le_purpose_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_purpose_count',
+      );
+  late final _le_purpose_count = _le_purpose_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief The purpose at `index` (0..le_purpose_count()-1) - mirrors
+  /// le::ViewLayerPurpose's declaration order: 0 = TERMINAL,
+  /// 1 = OBSTRUCTION, 2 = BOUNDARY. Returns -1 if handle is null or
+  /// index is out of range, rather than crashing.
+  int le_purpose_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_purpose_at(handle, index);
+  }
+
+  late final _le_purpose_atPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_purpose_at');
+  late final _le_purpose_at = _le_purpose_atPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Current visibility of every ViewLayer whose LeLayerRow::name
+  /// is `layer_name` (case-sensitive exact match) - i.e. a whole row
+  /// (every purpose-column of it) together, not one column - a
+  /// coarser-grained "layer visibility widget" model than one toggle per
+  /// grid cell: see le_is_purpose_visible() for the other axis, and
+  /// Scene::is_view_layer_visible for how a specific column's effective
+  /// visibility combines both. Visible by default until toggled. Returns
+  /// nonzero (visible) if handle or layer_name is null, matching Scene's
+  /// own "unknown name defaults to visible" default.
+  int le_is_layer_name_visible(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_is_layer_name_visible(handle, layer_name);
+  }
+
+  late final _le_is_layer_name_visiblePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_is_layer_name_visible');
+  late final _le_is_layer_name_visible = _le_is_layer_name_visiblePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  /// @brief Set the visibility of every ViewLayer whose LeLayerRow::name
+  /// is `layer_name` - e.g. a layer-visibility widget's row-header
+  /// checkbox. Mirrors Scene::set_layer_name_visible directly (affects
+  /// rendering - see Pipeline::filter_by_layer_visibility). A no-op if
+  /// handle or layer_name is null.
+  void le_set_layer_name_visible(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> layer_name,
+    int visible,
+  ) {
+    return _le_set_layer_name_visible(handle, layer_name, visible);
+  }
+
+  late final _le_set_layer_name_visiblePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+          )
+        >
+      >('le_set_layer_name_visible');
+  late final _le_set_layer_name_visible = _le_set_layer_name_visiblePtr
+      .asFunction<
+        void Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>, int)
+      >();
+
+  /// @brief Current visibility of every ViewLayer whose purpose is
+  /// `purpose` (mirrors le::ViewLayerPurpose's declaration order: 0 =
+  /// TERMINAL, 1 = OBSTRUCTION, 2 = BOUNDARY), across every layer - i.e.
+  /// a whole column, not one row. Visible by default until toggled.
+  /// Returns nonzero (visible) if handle is null.
+  int le_is_purpose_visible(ffi.Pointer<LeHandle> handle, int purpose) {
+    return _le_is_purpose_visible(handle, purpose);
+  }
+
+  late final _le_is_purpose_visiblePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_is_purpose_visible');
+  late final _le_is_purpose_visible = _le_is_purpose_visiblePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Set the visibility of every ViewLayer whose purpose is
+  /// `purpose`, across every layer - e.g. a layer-visibility widget's
+  /// column-header checkbox. Mirrors Scene::set_purpose_visible directly
+  /// (affects rendering). A no-op if handle is null.
+  void le_set_purpose_visible(
+    ffi.Pointer<LeHandle> handle,
+    int purpose,
+    int visible,
+  ) {
+    return _le_set_purpose_visible(handle, purpose, visible);
+  }
+
+  late final _le_set_purpose_visiblePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32, ffi.Int32)
+        >
+      >('le_set_purpose_visible');
+  late final _le_set_purpose_visible = _le_set_purpose_visiblePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
+
+  /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
+  /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
+  /// general row/column model this mirrors. Selectable by default until
+  /// toggled. Purely an interaction-layer concern (no hit-testing/
+  /// click-to-select API exists yet to consult it) - doesn't affect
+  /// rendering. Returns nonzero (selectable) if handle or layer_name is
+  /// null.
+  int le_is_layer_name_selectable(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_is_layer_name_selectable(handle, layer_name);
+  }
+
+  late final _le_is_layer_name_selectablePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_is_layer_name_selectable');
+  late final _le_is_layer_name_selectable = _le_is_layer_name_selectablePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  /// @brief Set the selectability of every ViewLayer whose LeLayerRow::name
+  /// is `layer_name`. Mirrors Scene::set_layer_name_selectable directly.
+  /// A no-op if handle or layer_name is null.
+  void le_set_layer_name_selectable(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> layer_name,
+    int selectable,
+  ) {
+    return _le_set_layer_name_selectable(handle, layer_name, selectable);
+  }
+
+  late final _le_set_layer_name_selectablePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+          )
+        >
+      >('le_set_layer_name_selectable');
+  late final _le_set_layer_name_selectable = _le_set_layer_name_selectablePtr
+      .asFunction<
+        void Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>, int)
+      >();
+
+  /// @brief Current selectability of every ViewLayer whose purpose is
+  /// `purpose`, across every layer. Selectable by default until toggled.
+  /// Returns nonzero (selectable) if handle is null.
+  int le_is_purpose_selectable(ffi.Pointer<LeHandle> handle, int purpose) {
+    return _le_is_purpose_selectable(handle, purpose);
+  }
+
+  late final _le_is_purpose_selectablePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_is_purpose_selectable');
+  late final _le_is_purpose_selectable = _le_is_purpose_selectablePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Set the selectability of every ViewLayer whose purpose is
+  /// `purpose`, across every layer. Mirrors Scene::set_purpose_selectable
+  /// directly. A no-op if handle is null.
+  void le_set_purpose_selectable(
+    ffi.Pointer<LeHandle> handle,
+    int purpose,
+    int selectable,
+  ) {
+    return _le_set_purpose_selectable(handle, purpose, selectable);
+  }
+
+  late final _le_set_purpose_selectablePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32, ffi.Int32)
+        >
+      >('le_set_purpose_selectable');
+  late final _le_set_purpose_selectable = _le_set_purpose_selectablePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
+
   /// @brief Zoom the viewport, keeping the dbu point under screen pixel
   /// (x, y) fixed on screen. `factor` is a signed fractional step applied
   /// to the current scale (new_scale = scale * (1 + factor)) - positive
@@ -635,4 +874,32 @@ final class LeDesignInfo extends ffi.Struct {
   /// destroyed, never owned by the caller. Null if this row is
   /// invalid (out-of-range index or null handle).
   external ffi.Pointer<ffi.Char> name;
+}
+
+/// @brief One row of le_layer_at(): a layer-visibility/selectability
+/// widget's row-header - a name plus a swatch color, *not* tied to a
+/// physical Layer existing - BOUNDARY is a row like any other, and any
+/// future non-Technology-derived ("extra") ViewLayer becomes a row the
+/// same way. Visibility/selectability are set by this name directly
+/// (le_set_layer_name_visible()/le_set_layer_name_selectable()), not
+/// by any id here - there's no per-row column list to address (see
+/// le_purpose_count()/le_purpose_at() for the other, row-independent
+/// "columns" axis).
+final class LeLayerRow extends ffi.Struct {
+  /// Owned by the handle's Root - valid until the handle is
+  /// destroyed, never owned by the caller. Null if this row is
+  /// invalid (out-of-range index or null handle).
+  external ffi.Pointer<ffi.Char> name;
+
+  /// This row's own outline color, for a swatch next to its name -
+  /// not the fill color or FillPattern, which draw_group already
+  /// resolves per shape.
+  @ffi.Uint8()
+  external int color_r;
+
+  @ffi.Uint8()
+  external int color_g;
+
+  @ffi.Uint8()
+  external int color_b;
 }
