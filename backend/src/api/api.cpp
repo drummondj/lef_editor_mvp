@@ -171,6 +171,109 @@ extern "C"
         return 0;
     }
 
+    int32_t le_layer_count(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        return static_cast<int32_t>(handle->view_layers.rows().size());
+    }
+
+    LeLayerRow le_layer_at(LeHandle *handle, int32_t row_index)
+    {
+        const LeLayerRow invalid{.name = nullptr, .color_r = 0, .color_g = 0, .color_b = 0};
+        if (!handle || row_index < 0)
+            return invalid;
+
+        const auto &rows = handle->view_layers.rows();
+        if (static_cast<size_t>(row_index) >= rows.size())
+            return invalid;
+
+        const le::ViewLayerRow &row = rows[static_cast<size_t>(row_index)];
+        const le::ViewLayerData *first_column = row.columns.empty() ? nullptr : handle->view_layers.get(row.columns.front().id);
+
+        return LeLayerRow{
+            .name = row.name.c_str(),
+            .color_r = first_column ? first_column->style.outline_color.r : uint8_t{0},
+            .color_g = first_column ? first_column->style.outline_color.g : uint8_t{0},
+            .color_b = first_column ? first_column->style.outline_color.b : uint8_t{0},
+        };
+    }
+
+    int32_t le_purpose_count(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        return static_cast<int32_t>(handle->view_layers.purposes().size());
+    }
+
+    int32_t le_purpose_at(LeHandle *handle, int32_t index)
+    {
+        if (!handle || index < 0)
+            return -1;
+
+        const auto purposes = handle->view_layers.purposes();
+        if (static_cast<size_t>(index) >= purposes.size())
+            return -1;
+
+        return static_cast<int32_t>(purposes[static_cast<size_t>(index)]);
+    }
+
+    int32_t le_is_layer_name_visible(LeHandle *handle, const char *layer_name)
+    {
+        if (!handle || !layer_name)
+            return 1;
+        return handle->scene.is_layer_name_visible(layer_name) ? 1 : 0;
+    }
+
+    void le_set_layer_name_visible(LeHandle *handle, const char *layer_name, int32_t visible)
+    {
+        if (!handle || !layer_name)
+            return;
+        handle->scene.set_layer_name_visible(layer_name, visible != 0);
+    }
+
+    int32_t le_is_purpose_visible(LeHandle *handle, int32_t purpose)
+    {
+        if (!handle)
+            return 1;
+        return handle->scene.is_purpose_visible(static_cast<le::ViewLayerPurpose>(purpose)) ? 1 : 0;
+    }
+
+    void le_set_purpose_visible(LeHandle *handle, int32_t purpose, int32_t visible)
+    {
+        if (!handle)
+            return;
+        handle->scene.set_purpose_visible(static_cast<le::ViewLayerPurpose>(purpose), visible != 0);
+    }
+
+    int32_t le_is_layer_name_selectable(LeHandle *handle, const char *layer_name)
+    {
+        if (!handle || !layer_name)
+            return 1;
+        return handle->scene.is_layer_name_selectable(layer_name) ? 1 : 0;
+    }
+
+    void le_set_layer_name_selectable(LeHandle *handle, const char *layer_name, int32_t selectable)
+    {
+        if (!handle || !layer_name)
+            return;
+        handle->scene.set_layer_name_selectable(layer_name, selectable != 0);
+    }
+
+    int32_t le_is_purpose_selectable(LeHandle *handle, int32_t purpose)
+    {
+        if (!handle)
+            return 1;
+        return handle->scene.is_purpose_selectable(static_cast<le::ViewLayerPurpose>(purpose)) ? 1 : 0;
+    }
+
+    void le_set_purpose_selectable(LeHandle *handle, int32_t purpose, int32_t selectable)
+    {
+        if (!handle)
+            return;
+        handle->scene.set_purpose_selectable(static_cast<le::ViewLayerPurpose>(purpose), selectable != 0);
+    }
+
     void le_zoom(LeHandle *handle, double factor, int32_t x, int32_t y)
     {
         if (!handle)

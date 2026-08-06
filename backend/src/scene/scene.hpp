@@ -113,22 +113,82 @@ namespace le
         }
 
         // --- Layer visibility (defaults to visible until toggled) ---
-        // Keyed by ViewLayerId (purpose-tagged: e.g. "M1 terminals" and "M1
-        // obstructions" toggle independently), not the physical LayerId -
-        // see view_style.hpp for why.
-        void set_layer_visible(ViewLayerId id, bool visible)
+        // Two independent axes, deliberately *not* per-ViewLayerId: by
+        // layer name (every purpose-column of that ViewLayerRow, e.g.
+        // toggling "M1" off hides both M1/TERMINAL and M1/OBSTRUCTION) and
+        // by purpose (every layer with that purpose, e.g. toggling
+        // OBSTRUCTION off hides every layer's obstructions at once) -
+        // matching a layer-visibility widget's row-header/column-header
+        // checkboxes rather than one checkbox per grid cell. A given
+        // ViewLayer's effective visibility is the AND of both axes - see
+        // is_view_layer_visible().
+        void set_layer_name_visible(std::string layer_name, bool visible)
         {
-            layer_visible_[id] = visible;
+            layer_name_visible_[std::move(layer_name)] = visible;
             ++visibility_version_;
         }
 
-        // Monotonic counter bumped by set_layer_visible - cheap for a
-        // caller to compare instead of comparing the visibility map by value.
-        uint64_t visibility_version() const { return visibility_version_; }
-        bool is_layer_visible(ViewLayerId id) const
+        bool is_layer_name_visible(const std::string &layer_name) const
         {
-            auto it = layer_visible_.find(id);
-            return it == layer_visible_.end() ? true : it->second;
+            auto it = layer_name_visible_.find(layer_name);
+            return it == layer_name_visible_.end() ? true : it->second;
+        }
+
+        void set_purpose_visible(ViewLayerPurpose purpose, bool visible)
+        {
+            purpose_visible_[purpose] = visible;
+            ++visibility_version_;
+        }
+
+        bool is_purpose_visible(ViewLayerPurpose purpose) const
+        {
+            auto it = purpose_visible_.find(purpose);
+            return it == purpose_visible_.end() ? true : it->second;
+        }
+
+        // The actual per-ViewLayer question Pipeline::filter_by_layer_visibility
+        // filters on: visible only if both its layer-name axis and its
+        // purpose axis are visible.
+        bool is_view_layer_visible(const std::string &layer_name, ViewLayerPurpose purpose) const
+        {
+            return is_layer_name_visible(layer_name) && is_purpose_visible(purpose);
+        }
+
+        // Monotonic counter bumped by set_layer_name_visible/set_purpose_visible -
+        // cheap for a caller to compare instead of comparing both maps by value.
+        uint64_t visibility_version() const { return visibility_version_; }
+
+        // --- Layer selectability (defaults to selectable until toggled) ---
+        // Same two-axis shape as visibility above, but deliberately doesn't
+        // bump any version counter: unlike visibility, nothing here caches
+        // on it yet - it's consulted by a future hit-testing/click-to-select
+        // path (not implemented yet), not by Pipeline/Renderer, so there's
+        // no cache to invalidate.
+        void set_layer_name_selectable(std::string layer_name, bool selectable)
+        {
+            layer_name_selectable_[std::move(layer_name)] = selectable;
+        }
+
+        bool is_layer_name_selectable(const std::string &layer_name) const
+        {
+            auto it = layer_name_selectable_.find(layer_name);
+            return it == layer_name_selectable_.end() ? true : it->second;
+        }
+
+        void set_purpose_selectable(ViewLayerPurpose purpose, bool selectable)
+        {
+            purpose_selectable_[purpose] = selectable;
+        }
+
+        bool is_purpose_selectable(ViewLayerPurpose purpose) const
+        {
+            auto it = purpose_selectable_.find(purpose);
+            return it == purpose_selectable_.end() ? true : it->second;
+        }
+
+        bool is_view_layer_selectable(const std::string &layer_name, ViewLayerPurpose purpose) const
+        {
+            return is_layer_name_selectable(layer_name) && is_purpose_selectable(purpose);
         }
 
         // --- Selection ---
@@ -159,8 +219,11 @@ namespace le
         int viewport_width_px_ = 0;
         int viewport_height_px_ = 0;
         uint64_t viewport_version_ = 0;
-        std::unordered_map<ViewLayerId, bool> layer_visible_;
+        std::unordered_map<std::string, bool> layer_name_visible_;
+        std::unordered_map<ViewLayerPurpose, bool> purpose_visible_;
         uint64_t visibility_version_ = 0;
+        std::unordered_map<std::string, bool> layer_name_selectable_;
+        std::unordered_map<ViewLayerPurpose, bool> purpose_selectable_;
         std::vector<SelectionRef> selection_;
     };
 }

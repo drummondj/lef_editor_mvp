@@ -161,10 +161,9 @@ namespace
         scene.set_viewport_size(2000, 2000); // visible: [0, 100,000,000) dbu on each axis
 
         // M2 shapes appear as both PINs and OBS items in the generated LEF
-        // (item_geometry alternates M1/M2 regardless of which), so hide both purposes.
-        le::LayerId m2 = data.root.get_layer_by_name("M2");
-        scene.set_layer_visible(data.view_layers.find(m2, le::ViewLayerPurpose::TERMINAL), false);
-        scene.set_layer_visible(data.view_layers.find(m2, le::ViewLayerPurpose::OBSTRUCTION), false);
+        // (item_geometry alternates M1/M2 regardless of which), so hide the
+        // whole M2 layer name - covers both purposes in one call.
+        scene.set_layer_name_visible("M2", false);
 
         return scene;
     }

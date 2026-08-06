@@ -98,6 +98,29 @@ extern "C"
         const char *name;
     } LeDesignInfo;
 
+    /// @brief One row of le_layer_at(): a layer-visibility/selectability
+    /// widget's row-header - a name plus a swatch color, *not* tied to a
+    /// physical Layer existing - BOUNDARY is a row like any other, and any
+    /// future non-Technology-derived ("extra") ViewLayer becomes a row the
+    /// same way. Visibility/selectability are set by this name directly
+    /// (le_set_layer_name_visible()/le_set_layer_name_selectable()), not
+    /// by any id here - there's no per-row column list to address (see
+    /// le_purpose_count()/le_purpose_at() for the other, row-independent
+    /// "columns" axis).
+    typedef struct LeLayerRow
+    {
+        /// Owned by the handle's Root - valid until the handle is
+        /// destroyed, never owned by the caller. Null if this row is
+        /// invalid (out-of-range index or null handle).
+        const char *name;
+        /// This row's own outline color, for a swatch next to its name -
+        /// not the fill color or FillPattern, which draw_group already
+        /// resolves per shape.
+        uint8_t color_r;
+        uint8_t color_g;
+        uint8_t color_b;
+    } LeLayerRow;
+
     /// @brief Allocate a new, empty editor instance (no LEF loaded, no
     /// Design selected, 0x0 viewport). Never returns null.
     LeHandle *le_create(void);
@@ -168,6 +191,89 @@ extern "C"
     /// doesn't name a Design currently loaded on this handle - the current
     /// selection is left unchanged on failure.
     int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id);
+
+    /// @brief Number of layer-widget rows currently available - mirrors
+    /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
+    /// includes BOUNDARY and any future non-Technology-derived "extra"
+    /// row, not just physical Layers), so this doesn't care whether a
+    /// Technology has even been declared yet - it's simply however many
+    /// rows the handle's current ViewLayerSet happens to have (0 if
+    /// handle is null or none has been built yet, e.g. before the first
+    /// le_read_lef() call). See le_layer_at() for each row's contents.
+    int32_t le_layer_count(LeHandle *handle);
+
+    /// @brief The row at `row_index` (0..le_layer_count()-1). An
+    /// all-invalid/null row (name == null) if handle is null or row_index
+    /// is out of range, rather than crashing.
+    LeLayerRow le_layer_at(LeHandle *handle, int32_t row_index);
+
+    /// @brief Number of distinct purposes across the handle's current
+    /// ViewLayerSet - mirrors ViewLayerSet::purposes() directly. The
+    /// "columns" axis of a layer visibility/selectability widget,
+    /// independent of any row/layer (see le_purpose_at()). 0 if handle is
+    /// null or no ViewLayerSet has been built yet.
+    int32_t le_purpose_count(LeHandle *handle);
+
+    /// @brief The purpose at `index` (0..le_purpose_count()-1) - mirrors
+    /// le::ViewLayerPurpose's declaration order: 0 = TERMINAL,
+    /// 1 = OBSTRUCTION, 2 = BOUNDARY. Returns -1 if handle is null or
+    /// index is out of range, rather than crashing.
+    int32_t le_purpose_at(LeHandle *handle, int32_t index);
+
+    /// @brief Current visibility of every ViewLayer whose LeLayerRow::name
+    /// is `layer_name` (case-sensitive exact match) - i.e. a whole row
+    /// (every purpose-column of it) together, not one column - a
+    /// coarser-grained "layer visibility widget" model than one toggle per
+    /// grid cell: see le_is_purpose_visible() for the other axis, and
+    /// Scene::is_view_layer_visible for how a specific column's effective
+    /// visibility combines both. Visible by default until toggled. Returns
+    /// nonzero (visible) if handle or layer_name is null, matching Scene's
+    /// own "unknown name defaults to visible" default.
+    int32_t le_is_layer_name_visible(LeHandle *handle, const char *layer_name);
+
+    /// @brief Set the visibility of every ViewLayer whose LeLayerRow::name
+    /// is `layer_name` - e.g. a layer-visibility widget's row-header
+    /// checkbox. Mirrors Scene::set_layer_name_visible directly (affects
+    /// rendering - see Pipeline::filter_by_layer_visibility). A no-op if
+    /// handle or layer_name is null.
+    void le_set_layer_name_visible(LeHandle *handle, const char *layer_name, int32_t visible);
+
+    /// @brief Current visibility of every ViewLayer whose purpose is
+    /// `purpose` (mirrors le::ViewLayerPurpose's declaration order: 0 =
+    /// TERMINAL, 1 = OBSTRUCTION, 2 = BOUNDARY), across every layer - i.e.
+    /// a whole column, not one row. Visible by default until toggled.
+    /// Returns nonzero (visible) if handle is null.
+    int32_t le_is_purpose_visible(LeHandle *handle, int32_t purpose);
+
+    /// @brief Set the visibility of every ViewLayer whose purpose is
+    /// `purpose`, across every layer - e.g. a layer-visibility widget's
+    /// column-header checkbox. Mirrors Scene::set_purpose_visible directly
+    /// (affects rendering). A no-op if handle is null.
+    void le_set_purpose_visible(LeHandle *handle, int32_t purpose, int32_t visible);
+
+    /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
+    /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
+    /// general row/column model this mirrors. Selectable by default until
+    /// toggled. Purely an interaction-layer concern (no hit-testing/
+    /// click-to-select API exists yet to consult it) - doesn't affect
+    /// rendering. Returns nonzero (selectable) if handle or layer_name is
+    /// null.
+    int32_t le_is_layer_name_selectable(LeHandle *handle, const char *layer_name);
+
+    /// @brief Set the selectability of every ViewLayer whose LeLayerRow::name
+    /// is `layer_name`. Mirrors Scene::set_layer_name_selectable directly.
+    /// A no-op if handle or layer_name is null.
+    void le_set_layer_name_selectable(LeHandle *handle, const char *layer_name, int32_t selectable);
+
+    /// @brief Current selectability of every ViewLayer whose purpose is
+    /// `purpose`, across every layer. Selectable by default until toggled.
+    /// Returns nonzero (selectable) if handle is null.
+    int32_t le_is_purpose_selectable(LeHandle *handle, int32_t purpose);
+
+    /// @brief Set the selectability of every ViewLayer whose purpose is
+    /// `purpose`, across every layer. Mirrors Scene::set_purpose_selectable
+    /// directly. A no-op if handle is null.
+    void le_set_purpose_selectable(LeHandle *handle, int32_t purpose, int32_t selectable);
 
     /// @brief Zoom the viewport, keeping the dbu point under screen pixel
     /// (x, y) fixed on screen. `factor` is a signed fractional step applied

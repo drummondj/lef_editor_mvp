@@ -289,7 +289,7 @@ namespace le
         /// iterating this map in key order - which callers drawing it are
         /// expected to do - draws bottom-up with the boundary outline on
         /// top, with no separate sort/ordering step needed.
-        const std::map<ViewLayerId, std::vector<RenderedShape>> &filter_by_layer_visibility(const std::vector<RenderedShape> &shapes, const Scene &scene)
+        const std::map<ViewLayerId, std::vector<RenderedShape>> &filter_by_layer_visibility(const std::vector<RenderedShape> &shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return layer_filtered_.get(key, [&]
@@ -300,7 +300,12 @@ namespace le
 
                 for (auto it = grouped.begin(); it != grouped.end();)
                 {
-                    if (it->first.valid() && !scene.is_layer_visible(it->first))
+                    // Scene's visibility is keyed by (layer name, purpose) -
+                    // not ViewLayerId directly (see its own comment) - so an
+                    // unresolved ViewLayerId (no ViewLayerData behind it)
+                    // has no visibility toggle to check, same as before.
+                    const ViewLayerData *data = view_layers.get(it->first);
+                    if (data && !scene.is_view_layer_visible(data->layer_name, data->purpose))
                         it = grouped.erase(it);
                     else
                         ++it;
@@ -315,7 +320,7 @@ namespace le
         {
             const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
             const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene);
-            return filter_by_layer_visibility(viewport_filtered, scene);
+            return filter_by_layer_visibility(viewport_filtered, scene, view_layers);
         }
 
         // Number of times each stage actually recomputed - exposed purely

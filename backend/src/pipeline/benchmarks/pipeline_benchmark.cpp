@@ -60,7 +60,7 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &filtered = pipeline.filter_by_layer_visibility(viewport_filtered, scene);
+        const auto &filtered = pipeline.filter_by_layer_visibility(viewport_filtered, scene, data.view_layers);
         const auto *filtered_ptr = &filtered;
         benchmark::DoNotOptimize(filtered_ptr);
     }
@@ -141,12 +141,11 @@ static void BM_RunReused_VisibilityOnly(benchmark::State &state)
     const auto &data = stress_data();
     Scene scene = make_scene(data);
     Pipeline pipeline;
-    ViewLayerId m1_obstruction = data.view_layers.find(data.root.get_layer_by_name("M1"), ViewLayerPurpose::OBSTRUCTION);
 
     bool visible = true;
     for (auto _ : state)
     {
-        scene.set_layer_visible(m1_obstruction, visible);
+        scene.set_layer_name_visible("M1", visible);
         visible = !visible;
         const auto &result = pipeline.run(data.root, scene, data.view_layers);
         const auto *result_ptr = &result;

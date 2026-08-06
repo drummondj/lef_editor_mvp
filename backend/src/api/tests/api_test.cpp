@@ -271,6 +271,194 @@ TEST_F(ApiFixture, SetCurrentDesignByIdSelectsTheSameDesignAsSetCurrentDesign)
     EXPECT_TRUE(region_has_opaque_pixel(buffer, 21, 21, 79, 79)); // pin rect visible, same as le_set_current_design(handle, 0) would give
 }
 
+TEST_F(ApiFixture, LayerCountAndAtAreZeroOrInvalidForNullHandleOrNoViewLayerSetYet)
+{
+    EXPECT_EQ(le_layer_count(nullptr), 0);
+    EXPECT_EQ(le_layer_count(handle), 0); // no LEF read yet - no ViewLayerSet built
+
+    const LeLayerRow row = le_layer_at(handle, 0);
+    EXPECT_EQ(row.name, nullptr);
+}
+
+TEST_F(ApiFixture, LayerAtOutOfRangeReturnsInvalidRow)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    const LeLayerRow row = le_layer_at(handle, 2);
+    EXPECT_EQ(row.name, nullptr);
+}
+
+TEST_F(ApiFixture, LayerAtIncludesBoundaryAsAnOrdinaryRowAfterEveryPhysicalLayer)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    // testcell.lef declares one physical Layer (M1) - the API doesn't
+    // special-case BOUNDARY, it's just another row, so the count is 2.
+    ASSERT_EQ(le_layer_count(handle), 2);
+
+    const LeLayerRow m1_row = le_layer_at(handle, 0);
+    ASSERT_NE(m1_row.name, nullptr);
+    EXPECT_STREQ(m1_row.name, "M1");
+
+    // M1 is the first ROUTING layer declared - first slot of the bright
+    // ROUTING/CUT palette, red (255, 0, 0) - see view_style.hpp.
+    EXPECT_EQ(m1_row.color_r, 255);
+    EXPECT_EQ(m1_row.color_g, 0);
+    EXPECT_EQ(m1_row.color_b, 0);
+
+    const LeLayerRow boundary_row = le_layer_at(handle, 1);
+    ASSERT_NE(boundary_row.name, nullptr);
+    EXPECT_STREQ(boundary_row.name, "BOUNDARY");
+}
+
+TEST_F(ApiFixture, PurposeCountAndAtAreZeroOrInvalidForNullHandleOrNoViewLayerSetYet)
+{
+    EXPECT_EQ(le_purpose_count(nullptr), 0);
+    EXPECT_EQ(le_purpose_count(handle), 0); // no LEF read yet - no ViewLayerSet built
+
+    EXPECT_EQ(le_purpose_at(handle, 0), -1);
+    EXPECT_EQ(le_purpose_at(nullptr, 0), -1);
+}
+
+TEST_F(ApiFixture, PurposeAtOutOfRangeReturnsInvalid)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    EXPECT_EQ(le_purpose_at(handle, 3), -1);
+    EXPECT_EQ(le_purpose_at(handle, -1), -1);
+}
+
+TEST_F(ApiFixture, PurposeAtListsTerminalObstructionThenBoundary)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    // The "columns" axis - row-independent, not scoped to M1 or any other
+    // specific layer (see ViewLayerSet::purposes()'s own comment).
+    ASSERT_EQ(le_purpose_count(handle), 3);
+    EXPECT_EQ(le_purpose_at(handle, 0), 0); // TERMINAL
+    EXPECT_EQ(le_purpose_at(handle, 1), 1); // OBSTRUCTION
+    EXPECT_EQ(le_purpose_at(handle, 2), 2); // BOUNDARY
+}
+
+TEST_F(ApiFixture, LayerNameVisibilityDefaultsTrueAndRoundTrips)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    // Unknown-to-null-handle/name default matches Scene's own default.
+    EXPECT_NE(le_is_layer_name_visible(nullptr, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, nullptr), 0);
+
+    le_set_layer_name_visible(handle, "M1", 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M1"), 0);
+    // A different, never-toggled layer name is unaffected.
+    EXPECT_NE(le_is_layer_name_visible(handle, "BOUNDARY"), 0);
+
+    le_set_layer_name_visible(handle, "M1", 1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+}
+
+TEST_F(ApiFixture, SetLayerNameVisibleWithNullHandleOrNullNameDoesNotCrash)
+{
+    le_set_layer_name_visible(nullptr, "M1", 0);
+    le_set_layer_name_visible(handle, nullptr, 0);
+}
+
+TEST_F(ApiFixture, PurposeVisibilityDefaultsTrueAndRoundTrips)
+{
+    EXPECT_NE(le_is_purpose_visible(handle, 1), 0); // OBSTRUCTION
+    EXPECT_NE(le_is_purpose_visible(nullptr, 1), 0);
+
+    le_set_purpose_visible(handle, 1, 0);
+    EXPECT_EQ(le_is_purpose_visible(handle, 1), 0);
+    // A different, never-toggled purpose is unaffected.
+    EXPECT_NE(le_is_purpose_visible(handle, 0), 0); // TERMINAL
+
+    le_set_purpose_visible(handle, 1, 1);
+    EXPECT_NE(le_is_purpose_visible(handle, 1), 0);
+}
+
+TEST_F(ApiFixture, SetPurposeVisibleWithNullHandleDoesNotCrash)
+{
+    le_set_purpose_visible(nullptr, 1, 0);
+}
+
+TEST_F(ApiFixture, LayerNameSelectabilityDefaultsTrueAndRoundTrips)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    EXPECT_NE(le_is_layer_name_selectable(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_selectable(nullptr, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_selectable(handle, nullptr), 0);
+
+    le_set_layer_name_selectable(handle, "M1", 0);
+    EXPECT_EQ(le_is_layer_name_selectable(handle, "M1"), 0);
+
+    le_set_layer_name_selectable(handle, "M1", 1);
+    EXPECT_NE(le_is_layer_name_selectable(handle, "M1"), 0);
+}
+
+TEST_F(ApiFixture, SetLayerNameSelectableWithNullHandleOrNullNameDoesNotCrash)
+{
+    le_set_layer_name_selectable(nullptr, "M1", 0);
+    le_set_layer_name_selectable(handle, nullptr, 0);
+}
+
+TEST_F(ApiFixture, PurposeSelectabilityDefaultsTrueAndRoundTrips)
+{
+    EXPECT_NE(le_is_purpose_selectable(handle, 1), 0); // OBSTRUCTION
+    EXPECT_NE(le_is_purpose_selectable(nullptr, 1), 0);
+
+    le_set_purpose_selectable(handle, 1, 0);
+    EXPECT_EQ(le_is_purpose_selectable(handle, 1), 0);
+
+    le_set_purpose_selectable(handle, 1, 1);
+    EXPECT_NE(le_is_purpose_selectable(handle, 1), 0);
+}
+
+TEST_F(ApiFixture, SetPurposeSelectableWithNullHandleDoesNotCrash)
+{
+    le_set_purpose_selectable(nullptr, 1, 0);
+}
+
+TEST_F(ApiFixture, HidingALayerByNameRemovesItFromTheRenderedBuffer)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // pan (0,0), scale 0.01 - see other zoom-setup tests
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79)); // baseline: PIN A visible
+
+    le_set_layer_name_visible(handle, "M1", 0); // hides both M1/TERMINAL and M1/OBSTRUCTION
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79)); // M1 is hidden now
+}
+
+TEST_F(ApiFixture, HidingATerminalPurposeRemovesItFromTheRenderedBuffer)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // pan (0,0), scale 0.01 - see other zoom-setup tests
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79)); // baseline: PIN A (TERMINAL) visible
+
+    le_set_purpose_visible(handle, 0, 0); // TERMINAL off, across every layer
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79)); // PIN A's TERMINAL column is hidden now
+}
+
 TEST_F(ApiFixture, ZoomWithNullHandleDoesNotCrash)
 {
     le_zoom(nullptr, 0.5, 10, 10);

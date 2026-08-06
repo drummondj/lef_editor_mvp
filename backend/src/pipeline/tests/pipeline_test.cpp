@@ -278,14 +278,14 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityDropsHiddenViewLayerKeepsVisible)
     ViewLayerId m2_obstruction = view_layers.find(m2, ViewLayerPurpose::OBSTRUCTION);
 
     Scene scene;
-    scene.set_layer_visible(m2_obstruction, false);
+    scene.set_layer_name_visible("M2", false);
 
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = m1_obstruction},
         RenderedShape{.shape = Shape{.layer_name = "M2", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = m2_obstruction},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
+    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 1u); // only the M1 group survives - the whole M2 group is dropped
     ASSERT_TRUE(result.contains(m1_obstruction));
     EXPECT_EQ(result.at(m1_obstruction).front().shape.layer_name, "M1");
@@ -298,7 +298,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityKeepsShapesWithInvalidViewLayer)
         RenderedShape{.shape = Shape{.layer_name = "DOES_NOT_EXIST", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = {}},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
+    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 1u);
     ASSERT_TRUE(result.contains(ViewLayerId{}));
     EXPECT_EQ(result.at(ViewLayerId{}).size(), 1u);
@@ -320,7 +320,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityGroupsInBottomUpLayerOrder)
         RenderedShape{.shape = Shape{.layer_name = "M1"}, .view_layer = m1_terminal},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene);
+    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 3u);
 
     std::vector<ViewLayerId> order;
@@ -340,12 +340,12 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityReusesCacheUntilVisibilityVersion
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = {}},
     };
 
-    pipeline.filter_by_layer_visibility(shapes, scene);
-    pipeline.filter_by_layer_visibility(shapes, scene);
+    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
     EXPECT_EQ(pipeline.layer_filter_calls(), 1u);
 
-    scene.set_layer_visible(ViewLayerId{3, 0}, false);
-    pipeline.filter_by_layer_visibility(shapes, scene);
+    scene.set_layer_name_visible("M1", false);
+    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
 
@@ -363,7 +363,7 @@ TEST_F(PipelineFixture, RunChainsAllThreeStagesForCurrentAbstract)
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.set_layer_visible(view_layers.find(m2, ViewLayerPurpose::OBSTRUCTION), false);
+    scene.set_layer_name_visible("M2", false);
 
     const auto &result = pipeline.run(root, scene, view_layers);
     ASSERT_EQ(result.size(), 1u); // only the M1/TERMINAL group survives
@@ -424,7 +424,7 @@ TEST_F(PipelineFixture, RunOnVisibilityOnlyChangeRecomputesOnlyTheLayerFilterSta
     scene.set_viewport_size(100, 100);
 
     pipeline.run(root, scene, view_layers);
-    scene.set_layer_visible(view_layers.find(m2, ViewLayerPurpose::OBSTRUCTION), false);
+    scene.set_layer_name_visible("M2", false);
     pipeline.run(root, scene, view_layers);
 
     EXPECT_EQ(pipeline.generate_calls(), 1u);

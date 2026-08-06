@@ -1,5 +1,6 @@
 #pragma once
 #include "../database/database.hpp"
+#include <algorithm>
 #include <array>
 #include <optional>
 #include <string>
@@ -57,18 +58,40 @@ namespace le
     /// any physical LEF Layer.
     struct ViewLayerData
     {
-        std::string name;
+        std::string name;       // e.g. "M1/TERMINAL", "BOUNDARY"
+        std::string layer_name; // e.g. "M1", "BOUNDARY" - Scene::is_view_layer_visible's grouping key (its ViewLayerRow's own name)
         ViewLayerPurpose purpose;
         LayerId layer;
         ViewLayerStyle style;
+    };
+
+    /// @brief One purpose-column of a ViewLayerRow.
+    struct ViewLayerColumn
+    {
+        ViewLayerPurpose purpose;
+        ViewLayerId id;
+    };
+
+    /// @brief One row of a layer visibility/selectability widget ("one row
+    /// per layer, columns per purpose" - see UPDATES.md 2.2): a name plus
+    /// every purpose-column that belongs to it. Deliberately not keyed by
+    /// LayerId - BOUNDARY is a row with a single column and no physical
+    /// Layer behind it, and any future non-Technology-derived ("extra")
+    /// ViewLayer becomes a row the same way, so a caller enumerating
+    /// ViewLayerSet::rows() never needs to know or care whether a given
+    /// row came from a physical Layer.
+    struct ViewLayerRow
+    {
+        std::string name;
+        std::vector<ViewLayerColumn> columns;
     };
 
     /// @brief The set of ViewLayers for a Technology: a TERMINAL and an
     /// OBSTRUCTION ViewLayer per physical Layer, plus one BOUNDARY
     /// ViewLayer not tied to any physical Layer. Shared/global for a
     /// Technology (not per-Scene) - which ViewLayers are toggled off is a
-    /// per-Scene concern (Scene::set_layer_visible), but the set of
-    /// ViewLayers that exist and how they're styled is not.
+    /// per-Scene concern (Scene::set_layer_name_visible/set_purpose_visible),
+    /// but the set of ViewLayers that exist and how they're styled is not.
     class ViewLayerSet
     {
     public:
@@ -124,11 +147,23 @@ namespace le
                 // not the same FillPattern - OBSTRUCTION always reads as
                 // BRICK regardless of layer type, so blockage regions are
                 // recognizable at a glance across every layer.
-                set.add(layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, layer_style(color, terminal_fill_pattern(*layer)));
-                set.add(layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, layer_style(color, FillPattern::BRICK));
+                const ViewLayerId terminal_id = set.add(layer->name, layer->name + "/TERMINAL", ViewLayerPurpose::TERMINAL, layer_id, layer_style(color, terminal_fill_pattern(*layer)));
+                const ViewLayerId obstruction_id = set.add(layer->name, layer->name + "/OBSTRUCTION", ViewLayerPurpose::OBSTRUCTION, layer_id, layer_style(color, FillPattern::BRICK));
+
+                set.rows_.push_back(ViewLayerRow{
+                    .name = layer->name,
+                    .columns = {
+                        ViewLayerColumn{.purpose = ViewLayerPurpose::TERMINAL, .id = terminal_id},
+                        ViewLayerColumn{.purpose = ViewLayerPurpose::OBSTRUCTION, .id = obstruction_id},
+                    },
+                });
             }
 
-            set.boundary_id_ = set.add("BOUNDARY", ViewLayerPurpose::BOUNDARY, LayerId{}, boundary_style());
+            set.boundary_id_ = set.add("BOUNDARY", "BOUNDARY", ViewLayerPurpose::BOUNDARY, LayerId{}, boundary_style());
+            set.rows_.push_back(ViewLayerRow{
+                .name = "BOUNDARY",
+                .columns = {ViewLayerColumn{.purpose = ViewLayerPurpose::BOUNDARY, .id = set.boundary_id_}},
+            });
 
             return set;
         }
@@ -150,6 +185,32 @@ namespace le
 
         std::vector<ViewLayerId> all() const { return pool_.ids(); }
 
+        /// @brief Every row of a layer visibility/selectability widget, in
+        /// declaration order (physical Layers in their LEF-declared
+        /// bottom-up stacking order, then BOUNDARY last) - see
+        /// ViewLayerRow's own comment for why this is the API a caller
+        /// should enumerate rather than going through Root's Technology
+        /// directly.
+        const std::vector<ViewLayerRow> &rows() const { return rows_; }
+
+        /// @brief Every distinct ViewLayerPurpose present across every row,
+        /// in first-encountered order (rows() order - LEF declaration order
+        /// then BOUNDARY last) with duplicates removed, e.g. {TERMINAL,
+        /// OBSTRUCTION, BOUNDARY} for a typical Technology. The "columns"
+        /// axis of a layer visibility/selectability widget - deliberately
+        /// not scoped to any one row/layer, since Scene's own visibility/
+        /// selectability model toggles a purpose across every layer at
+        /// once (see Scene::set_purpose_visible), not per row.
+        std::vector<ViewLayerPurpose> purposes() const
+        {
+            std::vector<ViewLayerPurpose> result;
+            for (const auto &row : rows_)
+                for (const auto &column : row.columns)
+                    if (std::find(result.begin(), result.end(), column.purpose) == result.end())
+                        result.push_back(column.purpose);
+            return result;
+        }
+
     private:
         struct LookupEntry
         {
@@ -158,10 +219,11 @@ namespace le
             ViewLayerId id;
         };
 
-        ViewLayerId add(std::string name, ViewLayerPurpose purpose, LayerId layer, ViewLayerStyle style)
+        ViewLayerId add(std::string layer_name, std::string name, ViewLayerPurpose purpose, LayerId layer, ViewLayerStyle style)
         {
             ViewLayerId id = pool_.create(ViewLayerData{
                 .name = std::move(name),
+                .layer_name = std::move(layer_name),
                 .purpose = purpose,
                 .layer = layer,
                 .style = style,
@@ -274,5 +336,6 @@ namespace le
         Pool<ViewLayerData, ViewLayerId> pool_;
         std::vector<LookupEntry> lookup_;
         ViewLayerId boundary_id_;
+        std::vector<ViewLayerRow> rows_;
     };
 }

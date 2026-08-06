@@ -115,6 +115,48 @@ TEST_F(ViewStyleFixture, BoundaryColorIsUnaffectedByThePerLayerPalette)
     EXPECT_EQ(boundary->style.fill_color.a, 0);
 }
 
+TEST_F(ViewStyleFixture, RowsHasOneRowPerPhysicalLayerPlusBoundaryLast)
+{
+    // 2 physical Layers (M1, M2) + BOUNDARY = 3 rows, BOUNDARY last -
+    // matches ViewLayerRow's contract: a caller never needs to special-case
+    // it, but declaration order still puts it after every physical Layer.
+    const auto &rows = view_layers.rows();
+    ASSERT_EQ(rows.size(), 3u);
+    EXPECT_EQ(rows[0].name, "M1");
+    EXPECT_EQ(rows[1].name, "M2");
+    EXPECT_EQ(rows[2].name, "BOUNDARY");
+}
+
+TEST_F(ViewStyleFixture, PhysicalLayerRowHasTerminalAndObstructionColumns)
+{
+    const auto &row = view_layers.rows().at(0);
+    ASSERT_EQ(row.columns.size(), 2u);
+    EXPECT_EQ(row.columns[0].purpose, ViewLayerPurpose::TERMINAL);
+    EXPECT_EQ(row.columns[0].id, view_layers.find(m1, ViewLayerPurpose::TERMINAL));
+    EXPECT_EQ(row.columns[1].purpose, ViewLayerPurpose::OBSTRUCTION);
+    EXPECT_EQ(row.columns[1].id, view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION));
+}
+
+TEST_F(ViewStyleFixture, BoundaryRowHasASingleBoundaryColumn)
+{
+    const auto &row = view_layers.rows().back();
+    ASSERT_EQ(row.columns.size(), 1u);
+    EXPECT_EQ(row.columns[0].purpose, ViewLayerPurpose::BOUNDARY);
+    EXPECT_EQ(row.columns[0].id, view_layers.boundary_view_layer());
+}
+
+TEST_F(ViewStyleFixture, PurposesListsEachDistinctPurposeOnceInFirstEncounteredOrder)
+{
+    // M1's row contributes TERMINAL then OBSTRUCTION; M2's row repeats
+    // both (deduplicated, not appended again); BOUNDARY's row contributes
+    // BOUNDARY last.
+    const auto purposes = view_layers.purposes();
+    ASSERT_EQ(purposes.size(), 3u);
+    EXPECT_EQ(purposes[0], ViewLayerPurpose::TERMINAL);
+    EXPECT_EQ(purposes[1], ViewLayerPurpose::OBSTRUCTION);
+    EXPECT_EQ(purposes[2], ViewLayerPurpose::BOUNDARY);
+}
+
 TEST(ViewStylePalette, CutLayerAboveARoutingLayerSharesItsColor)
 {
     // LEF LAYER declaration order is bottom-up physical stacking order -

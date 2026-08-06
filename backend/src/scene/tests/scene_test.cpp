@@ -71,44 +71,139 @@ TEST(Scene, ViewportVersionBumpsOnPanScaleAndViewportSizeChangesOnly)
     EXPECT_EQ(scene.viewport_version(), 3u);
 
     // Unrelated state (visibility) must not bump it either.
-    scene.set_layer_visible(ViewLayerId{1, 0}, false);
+    scene.set_layer_name_visible("M1", false);
     EXPECT_EQ(scene.viewport_version(), 3u);
 }
 
-TEST(Scene, LayerVisibilityDefaultsToTrueUntilSet)
+TEST(Scene, LayerNameVisibilityDefaultsToTrueUntilSet)
 {
-    // Scene only stores/queries by ViewLayerId - it doesn't know or care
-    // about ViewLayerSet, so an arbitrary id is enough to test this.
     Scene scene;
-    ViewLayerId view_layer{3, 0};
 
-    EXPECT_TRUE(scene.is_layer_visible(view_layer));
+    EXPECT_TRUE(scene.is_layer_name_visible("M1"));
 
-    scene.set_layer_visible(view_layer, false);
-    EXPECT_FALSE(scene.is_layer_visible(view_layer));
+    scene.set_layer_name_visible("M1", false);
+    EXPECT_FALSE(scene.is_layer_name_visible("M1"));
 
-    scene.set_layer_visible(view_layer, true);
-    EXPECT_TRUE(scene.is_layer_visible(view_layer));
+    scene.set_layer_name_visible("M1", true);
+    EXPECT_TRUE(scene.is_layer_name_visible("M1"));
 
-    // A different, never-toggled ViewLayer is unaffected.
-    ViewLayerId other_view_layer{4, 0};
-    EXPECT_TRUE(scene.is_layer_visible(other_view_layer));
+    // A different, never-toggled layer name is unaffected.
+    EXPECT_TRUE(scene.is_layer_name_visible("M2"));
 }
 
-TEST(Scene, VisibilityVersionBumpsOnlyOnSetLayerVisible)
+TEST(Scene, PurposeVisibilityDefaultsToTrueUntilSet)
+{
+    Scene scene;
+
+    EXPECT_TRUE(scene.is_purpose_visible(ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_purpose_visible(ViewLayerPurpose::OBSTRUCTION, false);
+    EXPECT_FALSE(scene.is_purpose_visible(ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_purpose_visible(ViewLayerPurpose::OBSTRUCTION, true);
+    EXPECT_TRUE(scene.is_purpose_visible(ViewLayerPurpose::OBSTRUCTION));
+
+    // A different, never-toggled purpose is unaffected.
+    EXPECT_TRUE(scene.is_purpose_visible(ViewLayerPurpose::TERMINAL));
+}
+
+TEST(Scene, IsViewLayerVisibleIsTheAndOfBothAxes)
+{
+    Scene scene;
+
+    // Both axes default true -> visible.
+    EXPECT_TRUE(scene.is_view_layer_visible("M1", ViewLayerPurpose::TERMINAL));
+
+    // Layer name off, purpose still on -> not visible.
+    scene.set_layer_name_visible("M1", false);
+    EXPECT_FALSE(scene.is_view_layer_visible("M1", ViewLayerPurpose::TERMINAL));
+    // A different layer name is unaffected by M1's toggle.
+    EXPECT_TRUE(scene.is_view_layer_visible("M2", ViewLayerPurpose::TERMINAL));
+
+    // Layer name back on, but now the purpose is off -> still not visible.
+    scene.set_layer_name_visible("M1", true);
+    scene.set_purpose_visible(ViewLayerPurpose::TERMINAL, false);
+    EXPECT_FALSE(scene.is_view_layer_visible("M1", ViewLayerPurpose::TERMINAL));
+    // OBSTRUCTION on the same layer is unaffected by the TERMINAL toggle.
+    EXPECT_TRUE(scene.is_view_layer_visible("M1", ViewLayerPurpose::OBSTRUCTION));
+
+    // Both axes on again -> visible.
+    scene.set_purpose_visible(ViewLayerPurpose::TERMINAL, true);
+    EXPECT_TRUE(scene.is_view_layer_visible("M1", ViewLayerPurpose::TERMINAL));
+}
+
+TEST(Scene, VisibilityVersionBumpsOnSetLayerNameVisibleAndSetPurposeVisible)
 {
     Scene scene;
     EXPECT_EQ(scene.visibility_version(), 0u);
 
-    scene.set_layer_visible(ViewLayerId{3, 0}, false);
+    scene.set_layer_name_visible("M1", false);
     EXPECT_EQ(scene.visibility_version(), 1u);
 
-    scene.set_layer_visible(ViewLayerId{3, 0}, true);
+    scene.set_purpose_visible(ViewLayerPurpose::OBSTRUCTION, false);
     EXPECT_EQ(scene.visibility_version(), 2u);
 
     // Unrelated state (viewport) must not bump it.
     scene.set_pan(Point{5, 5});
     EXPECT_EQ(scene.visibility_version(), 2u);
+}
+
+TEST(Scene, LayerNameSelectabilityDefaultsToTrueUntilSet)
+{
+    Scene scene;
+
+    EXPECT_TRUE(scene.is_layer_name_selectable("M1"));
+
+    scene.set_layer_name_selectable("M1", false);
+    EXPECT_FALSE(scene.is_layer_name_selectable("M1"));
+
+    scene.set_layer_name_selectable("M1", true);
+    EXPECT_TRUE(scene.is_layer_name_selectable("M1"));
+
+    EXPECT_TRUE(scene.is_layer_name_selectable("M2"));
+}
+
+TEST(Scene, PurposeSelectabilityDefaultsToTrueUntilSet)
+{
+    Scene scene;
+
+    EXPECT_TRUE(scene.is_purpose_selectable(ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_purpose_selectable(ViewLayerPurpose::OBSTRUCTION, false);
+    EXPECT_FALSE(scene.is_purpose_selectable(ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_purpose_selectable(ViewLayerPurpose::OBSTRUCTION, true);
+    EXPECT_TRUE(scene.is_purpose_selectable(ViewLayerPurpose::OBSTRUCTION));
+
+    EXPECT_TRUE(scene.is_purpose_selectable(ViewLayerPurpose::TERMINAL));
+}
+
+TEST(Scene, IsViewLayerSelectableIsTheAndOfBothAxes)
+{
+    Scene scene;
+    EXPECT_TRUE(scene.is_view_layer_selectable("M1", ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_layer_name_selectable("M1", false);
+    EXPECT_FALSE(scene.is_view_layer_selectable("M1", ViewLayerPurpose::OBSTRUCTION));
+
+    scene.set_layer_name_selectable("M1", true);
+    scene.set_purpose_selectable(ViewLayerPurpose::OBSTRUCTION, false);
+    EXPECT_FALSE(scene.is_view_layer_selectable("M1", ViewLayerPurpose::OBSTRUCTION));
+}
+
+TEST(Scene, SetLayerNameSelectableAndSetPurposeSelectableDoNotBumpVisibilityVersion)
+{
+    // Selectability isn't consumed by Pipeline/Renderer caching (unlike
+    // visibility) - it must not bump visibility_version(), or every
+    // selectability toggle would force an unnecessary re-render.
+    Scene scene;
+    EXPECT_EQ(scene.visibility_version(), 0u);
+
+    scene.set_layer_name_selectable("M1", false);
+    EXPECT_EQ(scene.visibility_version(), 0u);
+
+    scene.set_purpose_selectable(ViewLayerPurpose::OBSTRUCTION, false);
+    EXPECT_EQ(scene.visibility_version(), 0u);
 }
 
 TEST(Scene, SelectDeselectAndClear)

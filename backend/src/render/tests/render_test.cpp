@@ -296,7 +296,7 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
     renderer.build_picture(pixel_shapes, scene, view_layers);
     EXPECT_EQ(renderer.picture_calls(), 1u);
 
-    scene.set_layer_visible(view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION), false);
+    scene.set_layer_name_visible("M1", false);
     renderer.build_picture(pixel_shapes, scene, view_layers);
     EXPECT_EQ(renderer.picture_calls(), 2u);
 }
