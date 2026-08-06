@@ -12,16 +12,16 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'LEF Editor',
-      home: MultiProvider(
-        providers: [ChangeNotifierProvider(create: (context) => LeProvider())],
-        child: const Home(),
+    return MultiProvider(
+      providers: [ChangeNotifierProvider(create: (context) => LeProvider())],
+      child: MaterialApp(
+        title: 'LEF Editor',
+        home: const Home(),
+        debugShowCheckedModeBanner: false,
+        themeMode: .dark,
+        darkTheme: .dark(),
+        theme: .light(),
       ),
-      debugShowCheckedModeBanner: false,
-      themeMode: .dark,
-      darkTheme: .dark(),
-      theme: .light(),
     );
   }
 }

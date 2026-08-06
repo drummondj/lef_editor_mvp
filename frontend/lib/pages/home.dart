@@ -1,5 +1,8 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:lef_editor/components/layer_manager.dart';
+import 'package:lef_editor/components/library_browser.dart';
 import 'package:lef_editor/providers/le_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -12,11 +15,14 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   Size? _lastViewportSize;
+  Offset _currentMousePosition = Offset.zero;
+  final FocusNode _textureFocusNode = FocusNode();
 
   @override
   void initState() {
     super.initState();
     context.read<LeProvider>().init();
+    _textureFocusNode.skipTraversal = true;
   }
 
   void _handleViewportResize(BoxConstraints constraints) {
@@ -28,7 +34,7 @@ class _HomeState extends State<Home> {
     });
   }
 
-  Future<void> openFilePicker() async {
+  Future<void> _openFilePicker() async {
     const typeGroup = XTypeGroup(label: 'LEF files', extensions: ['lef']);
     final files = await openFiles(acceptedTypeGroups: [typeGroup]);
     if (files.isEmpty || !mounted) return;
@@ -38,8 +44,28 @@ class _HomeState extends State<Home> {
     }
   }
 
-  void openDesign(int index) async {
-    await context.read<LeProvider>().openDesign(index);
+  void _openLibraryBrowser() async {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          child: SizedBox(width: 500, height: 400, child: LibraryBrowser()),
+        );
+      },
+    );
+  }
+
+  void _loadTestData() async {
+    var provider = context.read<LeProvider>();
+    await provider.readLef(
+      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_tech.lef",
+    );
+    await provider.readLef(
+      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_stdcell.lef",
+    );
+    await provider.readLef(
+      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/fakeram45_1024x32.lef",
+    );
   }
 
   @override
@@ -56,39 +82,26 @@ class _HomeState extends State<Home> {
                     child: Padding(
                       padding: const EdgeInsets.all(8.0),
                       child: Column(
-                        crossAxisAlignment: .center,
+                        crossAxisAlignment: .start,
+                        spacing: 8,
                         children: [
-                          FilledButton.icon(
+                          TextButton.icon(
                             icon: Icon(Icons.folder_open),
-                            onPressed: openFilePicker,
-                            label: Text("Open LEF ..."),
+                            onPressed: _openFilePicker,
+                            label: Text("Import LEF ..."),
+                          ),
+                          TextButton.icon(
+                            icon: Icon(Icons.list),
+                            onPressed: _openLibraryBrowser,
+                            label: Text("Library Browser ..."),
+                          ),
+                          TextButton.icon(
+                            icon: Icon(Icons.my_library_books_sharp),
+                            onPressed: _loadTestData,
+                            label: Text("Load test data"),
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  Expanded(
-                    flex: 1,
-                    child: Column(
-                      mainAxisAlignment: .start,
-                      mainAxisSize: .min,
-                      children: [
-                        if (provider.openDesigns.isEmpty) ...[
-                          Text("No designs loaded"),
-                        ],
-                        Expanded(
-                          child: ListView.builder(
-                            itemCount: provider.openDesigns.length,
-                            itemBuilder: (context, index) {
-                              var designName = provider.openDesigns[index];
-                              return ListTile(
-                                title: Text(designName),
-                                onTap: () => openDesign(index),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
                     ),
                   ),
                   Expanded(
@@ -96,23 +109,60 @@ class _HomeState extends State<Home> {
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         _handleViewportResize(constraints);
-                        return SizedBox(
-                          width: constraints.maxWidth,
-                          height: constraints.maxHeight,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey),
+                        return MouseRegion(
+                          onHover: (event) {
+                            setState(() {
+                              _currentMousePosition = event.localPosition;
+                            });
+                          },
+                          onEnter: (event) {
+                            _textureFocusNode.requestFocus();
+                          },
+                          child: Focus(
+                            focusNode: _textureFocusNode,
+                            onKeyEvent: (node, value) {
+                              if (value is KeyDownEvent ||
+                                  value is KeyRepeatEvent) {
+                                if (value.character == "z") {
+                                  provider.zoomIn(_currentMousePosition);
+                                  return KeyEventResult.handled;
+                                } else if (value.character == "Z") {
+                                  provider.zoomOut(_currentMousePosition);
+                                  return KeyEventResult.handled;
+                                } else if (value.character == "f") {
+                                  provider.fit();
+                                  return KeyEventResult.handled;
+                                } else if (value.physicalKey == .arrowLeft) {
+                                  provider.panLeft();
+                                  return KeyEventResult.handled;
+                                } else if (value.physicalKey == .arrowRight) {
+                                  provider.panRight();
+                                  return KeyEventResult.handled;
+                                } else if (value.physicalKey == .arrowDown) {
+                                  provider.panDown();
+                                  return KeyEventResult.handled;
+                                } else if (value.physicalKey == .arrowUp) {
+                                  provider.panUp();
+                                  return KeyEventResult.handled;
+                                }
+                              }
+                              return KeyEventResult.ignored;
+                            },
+                            child: SizedBox(
+                              width: constraints.maxWidth,
+                              height: constraints.maxHeight,
+                              child: provider.texture != null
+                                  ? Texture(
+                                      textureId: provider.texture!.textureId,
+                                    )
+                                  : null,
                             ),
-                            child: provider.texture != null
-                                ? Texture(
-                                    textureId: provider.texture!.textureId,
-                                  )
-                                : null,
                           ),
                         );
                       },
                     ),
                   ),
+                  LayerManager(),
                 ],
               ),
             );
