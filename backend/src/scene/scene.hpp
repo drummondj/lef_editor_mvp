@@ -33,6 +33,21 @@ namespace le
         Shape outline;
     };
 
+    /// @brief One selected object (UPDATES.md 7) - which Terminal/
+    /// Obstruction, plus optionally the exact piece of geometry that was
+    /// clicked to select it. `piece` is a dbu-space copy of just one
+    /// rect/polygon/path (same shape/reasoning as HoverTarget::outline -
+    /// from Pipeline::hit_test_point's own HoverTarget, when a click hit
+    /// one), or nullopt when no single piece applies (drag-select, which
+    /// enclosure-tests whole objects, not individual pieces) - nullopt
+    /// falls back to highlighting/reporting the whole object, matching
+    /// this feature's original (pre-piece-tracking) behavior.
+    struct SelectedObject
+    {
+        SelectionRef origin;
+        std::optional<Shape> piece;
+    };
+
     /// @brief Per-handle mutable view state: which Abstract is displayed,
     /// the viewport transform, per-layer visibility, and selection. Distinct
     /// from the persistent Root database - the pipeline reads from this,
@@ -443,26 +458,56 @@ namespace le
 
         // --- Selection ---
         // Renderer draws a white outline around every selected shape (see
-        // Renderer::build_picture/draw_selection_outline) -
-        // selection_version_ lets build_picture's cache know when the
+        // Renderer::build_picture/build_overlay_picture,
+        // draw_selection_outline/draw_selected_piece_outline) -
+        // selection_version_ lets build_picture's (and, since piece
+        // tracking, build_overlay_picture's) cache know when the
         // selection changes, decoupled from viewport_version_/
         // visibility_version_ (selection is neither a viewport nor a
         // layer-visibility concern). Only bumped on an actual change, not
         // a redundant no-op call (matches clear_mouse_position's own
         // convention) - a no-op bump would invalidate the design picture
         // cache for nothing.
-        void select(SelectionRef ref)
+        //
+        // `piece` (default nullopt) records the specific rect/polygon/
+        // path a click hit (see SelectedObject) - le_mouse_up's click
+        // branch passes one straight from Pipeline::hit_test_point's own
+        // HoverTarget; its drag-select branch leaves it nullopt (rule 5
+        // enclosure-tests whole objects). Uniqueness is by (origin,
+        // piece) together, not origin alone - shift-clicking a second,
+        // distinct piece of an already-selected object adds a second
+        // entry (so both pieces end up independently highlighted/
+        // reportable - see UPDATES.md 7), rather than replacing the
+        // first one. Reselecting a piece with *identical* geometry to an
+        // existing entry (see same_piece) is a no-op, matching the old
+        // plain-SelectionRef dedup behavior for the piece-less (whole-
+        // object/drag-select) case: repeatedly selecting the same origin
+        // with no piece stays a single entry, since every no-piece call
+        // matches every other no-piece call for that origin.
+        void select(SelectionRef origin, std::optional<Shape> piece = std::nullopt)
         {
-            if (!is_selected(ref))
+            auto same_entry = [&](const SelectedObject &selected)
             {
-                selection_.push_back(ref);
+                if (!(selected.origin == origin))
+                    return false;
+                if (!piece)
+                    return !selected.piece.has_value();
+                return selected.piece.has_value() && same_piece(*piece, *selected.piece);
+            };
+
+            if (std::none_of(selection_.begin(), selection_.end(), same_entry))
+            {
+                selection_.push_back(SelectedObject{.origin = origin, .piece = std::move(piece)});
                 ++selection_version_;
             }
         }
 
-        void deselect(SelectionRef ref)
+        void deselect(SelectionRef origin)
         {
-            if (std::erase(selection_, ref) > 0)
+            const auto removed = std::erase_if(selection_,
+                                                 [&](const SelectedObject &selected)
+                                                 { return selected.origin == origin; });
+            if (removed > 0)
                 ++selection_version_;
         }
 
@@ -475,15 +520,69 @@ namespace le
             }
         }
 
-        bool is_selected(SelectionRef ref) const
+        bool is_selected(SelectionRef origin) const
         {
-            return std::find(selection_.begin(), selection_.end(), ref) != selection_.end();
+            return std::find_if(selection_.begin(), selection_.end(),
+                                 [&](const SelectedObject &selected)
+                                 { return selected.origin == origin; }) != selection_.end();
         }
 
-        const std::vector<SelectionRef> &selection() const { return selection_; }
+        /// True if `origin` is selected with no specific piece tracked
+        /// (i.e. should be highlighted/reported as a whole object) -
+        /// false both when unselected and when selected with a specific
+        /// piece (see SelectedObject; Renderer::build_picture's own
+        /// whole-object outline pass gates on this).
+        bool is_selected_as_whole_object(SelectionRef origin) const
+        {
+            const auto it = std::find_if(selection_.begin(), selection_.end(),
+                                          [&](const SelectedObject &selected)
+                                          { return selected.origin == origin; });
+            return it != selection_.end() && !it->piece;
+        }
+
+        const std::vector<SelectedObject> &selection() const { return selection_; }
         uint64_t selection_version() const { return selection_version_; }
 
     private:
+        // Structural equality for one selection "piece" - used only by
+        // select()'s dedup check. Shape has no operator==, and its
+        // generated to_string() reports list *sizes* only (e.g.
+        // "rects=1"), not their contents (see property.hpp/schema.py's
+        // list-fields-are-counts convention), so it can't distinguish
+        // two different single-rect pieces either - this compares actual
+        // coordinates instead. A "piece" (see SelectedObject/HoverTarget)
+        // is always a single-piece Shape by construction
+        // (Geometry::find_hit_piece's own contract: exactly one rect, one
+        // polygon, or one path, never a mix) - so comparing just that one
+        // element is sufficient, no need for a general Shape equality.
+        static bool same_piece(const Shape &a, const Shape &b)
+        {
+            auto same_point = [](const Point &x, const Point &y)
+            { return x.x == y.x && x.y == y.y; };
+            auto same_polygon = [&](const Polygon &x, const Polygon &y)
+            {
+                if (x.points.size() != y.points.size())
+                    return false;
+                for (size_t i = 0; i < x.points.size(); ++i)
+                    if (!same_point(x.points[i], y.points[i]))
+                        return false;
+                return true;
+            };
+
+            if (a.layer_name != b.layer_name)
+                return false;
+            if (a.rects.size() != b.rects.size() || a.polygons.size() != b.polygons.size() || a.paths.size() != b.paths.size())
+                return false;
+            if (!a.rects.empty() && !(same_point(a.rects.front().ll, b.rects.front().ll) && same_point(a.rects.front().ur, b.rects.front().ur)))
+                return false;
+            if (!a.polygons.empty() && !same_polygon(a.polygons.front(), b.polygons.front()))
+                return false;
+            if (!a.paths.empty() && (a.paths.front().width != b.paths.front().width || !same_polygon(a.paths.front().polygon, b.paths.front().polygon)))
+                return false;
+            return true;
+        }
+
+
         AbstractId current_abstract_;
         Point pan_{0, 0};
         double scale_ = 1.0;
@@ -506,7 +605,7 @@ namespace le
         uint64_t visibility_version_ = 0;
         std::unordered_map<std::string, bool> layer_name_selectable_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_selectable_;
-        std::vector<SelectionRef> selection_;
+        std::vector<SelectedObject> selection_;
         uint64_t selection_version_ = 0;
     };
 }

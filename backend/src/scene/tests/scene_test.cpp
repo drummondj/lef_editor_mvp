@@ -79,6 +79,130 @@ TEST(Scene, SettingTheSameCurrentAbstractAgainIsANoOp)
     EXPECT_EQ(scene.selection_version(), 1u);
 }
 
+TEST(Scene, SelectWithNoPieceHighlightsAndReportsTheWholeObject)
+{
+    Scene scene;
+    scene.select(TerminalId{1, 0});
+
+    EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
+    EXPECT_TRUE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
+    ASSERT_FALSE(scene.selection().empty());
+    EXPECT_FALSE(scene.selection().front().piece.has_value());
+}
+
+TEST(Scene, SelectWithAPieceIsNotSelectedAsAWholeObject)
+{
+    Scene scene;
+    Shape piece;
+    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    scene.select(TerminalId{1, 0}, piece);
+
+    EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
+    EXPECT_FALSE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
+    ASSERT_FALSE(scene.selection().empty());
+    ASSERT_TRUE(scene.selection().front().piece.has_value());
+    EXPECT_EQ(to_string(*scene.selection().front().piece), to_string(piece));
+}
+
+TEST(Scene, SelectingADifferentPieceOfAnAlreadySelectedOriginAddsASecondEntry)
+{
+    // The actual reported bug: shift-clicking a second shape within the
+    // same Terminal/Obstruction must add a second selection entry - both
+    // pieces end up independently selected/highlighted/reportable - not
+    // replace the first one or no-op against it.
+    Scene scene;
+    Shape piece_a;
+    piece_a.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    Shape piece_b;
+    piece_b.rects.push_back(Rect{.ll = {20, 20}, .ur = {30, 30}});
+
+    scene.select(TerminalId{1, 0}, piece_a);
+    ASSERT_EQ(scene.selection_version(), 1u);
+    ASSERT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}, piece_b); // shift-clicking a different piece of the same Terminal
+    EXPECT_EQ(scene.selection_version(), 2u);
+    ASSERT_EQ(scene.selection().size(), 2u); // both pieces are now separately selected
+
+    ASSERT_TRUE(scene.selection()[0].piece.has_value());
+    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(piece_a));
+    ASSERT_TRUE(scene.selection()[1].piece.has_value());
+    EXPECT_EQ(to_string(*scene.selection()[1].piece), to_string(piece_b));
+}
+
+TEST(Scene, ReselectingTheExactSamePieceOfTheSameOriginIsANoOp)
+{
+    Scene scene;
+    Shape piece;
+    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+
+    scene.select(TerminalId{1, 0}, piece);
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.select(TerminalId{1, 0}, piece); // identical geometry, not a new piece
+    EXPECT_EQ(scene.selection_version(), 1u);
+    EXPECT_EQ(scene.selection().size(), 1u);
+}
+
+TEST(Scene, SelectingWithNoPieceAfterAPieceWasAlreadySelectedAddsAWholeObjectEntryWithoutDisturbingThePiece)
+{
+    // e.g. a shift-drag that happens to re-enclose an object a previous
+    // click already recorded a specific piece for - the drag path has no
+    // single piece to offer (Pipeline::hit_test_rect has no per-piece
+    // result). This adds a second, whole-object entry rather than
+    // erasing or being absorbed into the earlier click's piece entry -
+    // select()'s dedup only ever collapses two calls that agree on both
+    // origin *and* piece.
+    Scene scene;
+    Shape piece;
+    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+
+    scene.select(TerminalId{1, 0}, piece);
+    ASSERT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}); // no piece - as le_mouse_up's drag branch calls it
+    EXPECT_EQ(scene.selection().size(), 2u);
+
+    ASSERT_TRUE(scene.selection()[0].piece.has_value()); // original piece entry untouched
+    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(piece));
+    EXPECT_FALSE(scene.selection()[1].piece.has_value()); // new whole-object entry
+}
+
+TEST(Scene, SelectingWithNoPieceTwiceForTheSameOriginStaysOneEntry)
+{
+    // Mirrors Pipeline::hit_test_rect's own behavior - it can push the
+    // same origin more than once (once per fully-enclosed RenderedShape
+    // piece of a multi-port Terminal), and those must still collapse
+    // into a single whole-object selection entry, not one per push.
+    Scene scene;
+    scene.select(TerminalId{1, 0});
+    ASSERT_EQ(scene.selection().size(), 1u);
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.select(TerminalId{1, 0});
+    EXPECT_EQ(scene.selection().size(), 1u);
+    EXPECT_EQ(scene.selection_version(), 1u);
+}
+
+TEST(Scene, IsSelectedAsWholeObjectIsFalseWhenNotSelectedAtAll)
+{
+    Scene scene;
+    EXPECT_FALSE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
+}
+
+TEST(Scene, DeselectRemovesAnEntryRegardlessOfWhetherItHasAPiece)
+{
+    Scene scene;
+    Shape piece;
+    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    scene.select(TerminalId{1, 0}, piece);
+    ASSERT_TRUE(scene.is_selected(TerminalId{1, 0}));
+
+    scene.deselect(TerminalId{1, 0});
+    EXPECT_FALSE(scene.is_selected(TerminalId{1, 0}));
+    EXPECT_TRUE(scene.selection().empty());
+}
+
 TEST(Scene, PanAndViewportRoundTrip)
 {
     Scene scene;

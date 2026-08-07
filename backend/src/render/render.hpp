@@ -227,10 +227,17 @@ namespace le
         /// comment on why that's kept, not dropped) has its whole group
         /// skipped here - there's no style to draw it with. A final pass
         /// draws a white outline (see draw_selection_outline, UPDATES.md
-        /// 7) around every PixelShape whose origin is currently selected
-        /// (Scene::is_selected) - after every group, so a selected
-        /// shape's outline is never obscured by a shape on a higher
-        /// layer, unlike its own per-group outline/fill.
+        /// 7) around every PixelShape whose origin is selected *as a
+        /// whole object* (Scene::is_selected_as_whole_object) - i.e.
+        /// selected without one specific piece recorded, which is what
+        /// drag-select's enclosure results produce (see
+        /// Scene::SelectedObject). A click-select that recorded a
+        /// specific piece is drawn instead by
+        /// build_overlay_picture/draw_selected_piece_outline, so it
+        /// doesn't also get the whole-object treatment here. Runs after
+        /// every group, so a selected shape's outline is never obscured
+        /// by a shape on a higher layer, unlike its own per-group
+        /// outline/fill.
         const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers, const Root &root)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
@@ -260,7 +267,7 @@ namespace le
                 {
                     for (const auto &[view_layer_id, group] : shapes)
                         for (const auto &pixel_shape : group)
-                            if (pixel_shape.origin && scene.is_selected(*pixel_shape.origin))
+                            if (pixel_shape.origin && scene.is_selected_as_whole_object(*pixel_shape.origin))
                                 draw_selection_outline(*canvas, pixel_shape);
                 }
 
@@ -270,14 +277,21 @@ namespace le
         /// @brief Records the mouse-driven overlay chrome - the live
         /// rubber-band drag-select rectangle if a drag is in progress
         /// (see draw_drag_rect), the grid-snap indicator box (see
-        /// draw_cursor), and, if a shape is currently hovered, its yellow
-        /// outline (see draw_hover_outline) - into its own small
-        /// SkPicture, cached independently of the (potentially
+        /// draw_cursor), if a shape is currently hovered its yellow
+        /// outline (see draw_hover_outline), and a white outline for
+        /// every selected object that has a specific piece recorded (see
+        /// draw_selected_piece_outline, Scene::SelectedObject -
+        /// build_picture's own selection pass handles whole-object
+        /// selections instead, so the two never overlap) - into its own
+        /// small SkPicture, cached independently of the (potentially
         /// design-sized, expensive) design picture above - keyed on
         /// viewport_version()/visibility_version() (grid spacing lives
-        /// there) and mouse_version(), deliberately *not* AbstractId: this
-        /// overlay is a pure viewport/mouse concern, not design content,
-        /// so switching Abstracts doesn't need to recompute it. Neither
+        /// there), mouse_version(), and selection_version() (piece
+        /// outlines are selection content), deliberately *not*
+        /// AbstractId: this overlay is a pure viewport/mouse/selection
+        /// concern, not design content, so switching Abstracts doesn't
+        /// need to recompute it (selection is cleared on an Abstract
+        /// switch anyway - see Scene::set_current_abstract). Neither
         /// hover state (Scene::hover()) nor drag state
         /// (Scene::is_dragging()/drag_rect_dbu()) needs its own cache key
         /// - set_hover/begin_drag/end_drag are only ever called alongside
@@ -288,10 +302,13 @@ namespace le
         /// project's answer to UPDATES.md 5.2's own flagged perf concern
         /// (recomputing this tiny picture on every mouse-move event is
         /// cheap; recomputing/re-rasterizing the whole design picture on
-        /// every mouse-move event would not be).
+        /// every mouse-move event would not be - and the same holds for
+        /// piece outlines, since this loops the *selection list*, not
+        /// the design's shapes, so its cost is bounded by how many
+        /// objects are selected, never by design size).
         const sk_sp<SkPicture> &build_overlay_picture(const Scene &scene)
         {
-            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
+            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version(), scene.selection_version()};
             return overlay_picture_.get(key, [&]
                                         {
                 SkPictureRecorder recorder;
@@ -304,6 +321,10 @@ namespace le
 
                 if (const auto &hover = scene.hover())
                     draw_hover_outline(*canvas, scene, *hover);
+
+                for (const auto &selected : scene.selection())
+                    if (selected.piece)
+                        draw_selected_piece_outline(*canvas, scene, *selected.piece);
 
                 return recorder.finishRecordingAsPicture(); });
         }
@@ -523,11 +544,13 @@ namespace le
 
         // Selection outline (UPDATES.md 7) - opaque white, distinct from
         // every other overlay color above (and from every layer's own
-        // default palette color, none of which are pure white). Unlike
-        // hover (one piece only), every piece belonging to a selected
-        // Terminal/Obstruction is outlined - once an object is actually
-        // selected, the whole thing reads as selected, not just whichever
-        // piece happened to be under the cursor at click time.
+        // default palette color, none of which are pure white). A click
+        // that hit a specific piece (Scene::SelectedObject::piece) only
+        // outlines that one piece (draw_selected_piece_outline); a
+        // drag-select result, which has no single piece, still outlines
+        // every piece belonging to the selected object
+        // (draw_selection_outline) - the two are mutually exclusive per
+        // selected object (see build_picture/build_overlay_picture).
         static constexpr Color kSelectionOutlineColor = {255, 255, 255, 255};
         static constexpr float kSelectionOutlineStrokeWidth = 2.0f;
         // A selected Path is stroked in white at its own width plus this
@@ -858,6 +881,81 @@ namespace le
                     stroke_polygon(buffered);
         }
 
+        // Draws a white outline (UPDATES.md 7) around `piece`'s own
+        // geometry - one selected object's specific clicked piece (see
+        // Scene::SelectedObject), not the whole Terminal/Obstruction's
+        // combined geometry. Same dbu->pixel transform as
+        // draw_hover_outline (`piece` is dbu-space, copied straight from
+        // Pipeline::hit_test_point's own HoverTarget::outline at click
+        // time), but the same rect/polygon/path-with-halo stroke style
+        // as draw_selection_outline (kSelectionOutlineColor/Width/
+        // PathHaloMarginPx) - a path is stroked along its own centerline
+        // at its own width plus a margin on each side, not retraced at
+        // hover's buffered-clickable-region outline, so a piece-selected
+        // path reads identically to a whole-object-selected one.
+        static void draw_selected_piece_outline(SkCanvas &canvas, const Scene &scene, const Shape &piece)
+        {
+            const double scale = scene.scale();
+            if (scale <= 0.0)
+                return;
+
+            const Point pan = scene.pan();
+            auto to_pixel = [&](const Point &p)
+            {
+                return SkPoint::Make(
+                    static_cast<SkScalar>((static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale),
+                    static_cast<SkScalar>((static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale));
+            };
+
+            SkPaint stroke;
+            stroke.setAntiAlias(true);
+            stroke.setStyle(SkPaint::kStroke_Style);
+            stroke.setStrokeWidth(kSelectionOutlineStrokeWidth);
+            stroke.setColor(to_sk_color(kSelectionOutlineColor));
+
+            auto stroke_polygon = [&](const Polygon &polygon)
+            {
+                if (polygon.points.empty())
+                    return;
+
+                SkPathBuilder builder;
+                builder.moveTo(to_pixel(polygon.points.front()));
+                for (size_t i = 1; i < polygon.points.size(); ++i)
+                    builder.lineTo(to_pixel(polygon.points[i]));
+                builder.close();
+                canvas.drawPath(builder.detach(), stroke);
+            };
+
+            for (const auto &rect : piece.rects)
+                stroke_polygon(Geometry::rect_to_polygon(rect));
+
+            for (const auto &polygon : piece.polygons)
+                stroke_polygon(polygon);
+
+            if (!piece.paths.empty())
+            {
+                SkPaint halo;
+                halo.setAntiAlias(true);
+                halo.setStyle(SkPaint::kStroke_Style);
+                halo.setStrokeCap(SkPaint::kButt_Cap);
+                halo.setColor(to_sk_color(kSelectionOutlineColor));
+
+                for (const auto &path : piece.paths)
+                {
+                    halo.setStrokeWidth(static_cast<SkScalar>(path.width) * static_cast<SkScalar>(scale) + 2.0f * kSelectionPathHaloMarginPx);
+
+                    SkPathBuilder builder;
+                    const auto &points = path.polygon.points;
+                    if (points.empty())
+                        continue;
+                    builder.moveTo(to_pixel(points.front()));
+                    for (size_t i = 1; i < points.size(); ++i)
+                        builder.lineTo(to_pixel(points[i]));
+                    canvas.drawPath(builder.detach(), halo);
+                }
+            }
+        }
+
         // Draws the live rubber-band drag-select rectangle (UPDATES.md
         // 7.1 item 5), in the same pre-flip pixel space as
         // draw_grid/draw_cursor/draw_hover_outline. No-op if no drag is
@@ -1185,7 +1283,7 @@ namespace le
 
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
-        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };

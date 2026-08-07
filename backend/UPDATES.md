@@ -94,7 +94,7 @@ Shape selection requires the following features:
 5. Mouse down, move and release selects all selectable shapes on all layers completely enclosed by the selection rectangle.
 6. Multiple shapes are selected with shift-click, without shift the current selection is replaced with the new selection.
 
-## 7.2 Selection results
+## 7.2 Selection results - DONE
 
 Each selected object and it's properties are sent to the frontend via the API, so the flutter GUI can display the data in a table.
 

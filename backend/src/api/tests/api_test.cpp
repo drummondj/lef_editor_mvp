@@ -1,5 +1,6 @@
 #include "../api.hpp"
 #include <gtest/gtest.h>
+#include <map>
 #include <string>
 
 namespace
@@ -1250,4 +1251,257 @@ TEST_F(ApiFixture, ClearAllKeysMakesSubsequentClicksReplaceRatherThanAddAgain)
     le_mouse_down(handle, 175, 25); // PIN B, plain click - should replace, not add
     le_mouse_up(handle, 175, 25);
     EXPECT_EQ(le_selection_count(handle), 1);
+}
+
+namespace
+{
+    // Shared by every selection-properties test below (UPDATES.md 7.2):
+    // reads pin_and_obstruction.lef (MACRO PINOBS, PIN A at (1,1)-(4,4)
+    // micron on M1, one OBS rect at (10,10)-(15,15) micron on M1 - see the
+    // fixture file), and zooms a 200x200 viewport to scale 0.01 with pan
+    // pinned at (0,0), same trick as load_two_shapes_at_known_scale. At
+    // that scale/pan (device/image pixel space, top-left origin, y down):
+    //   - PIN A occupies device (10,160)-(40,190) - center ~(25,175).
+    //   - The OBS rect occupies device (100,50)-(150,100) - center ~(125,75).
+    void load_pin_and_obstruction_at_known_scale(LeHandle *handle)
+    {
+        ASSERT_EQ(le_read_lef(handle, fixture_path("pin_and_obstruction.lef").c_str()), 0);
+        ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+        le_set_viewport_size(handle, 200, 200);
+        le_zoom(handle, 0.01 - 1.0, 0, 200);
+    }
+
+    // Scans a selected object's full property table into a name -> row
+    // map, so a test can look up "does this property exist and does it
+    // have this value" without hard-coding property order.
+    std::map<std::string, LeProperty> selected_object_properties(LeHandle *handle, int32_t selection_index)
+    {
+        std::map<std::string, LeProperty> properties;
+        const int32_t count = le_selected_object_property_count(handle, selection_index);
+        for (int32_t i = 0; i < count; ++i)
+        {
+            const LeProperty property = le_selected_object_property_at(handle, selection_index, i);
+            properties.emplace(property.name, property);
+        }
+        return properties;
+    }
+}
+
+TEST_F(ApiFixture, SelectedTerminalReportsItsKindNameDirectionAndPortCount)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("name"));
+    EXPECT_EQ(properties.at("name").type, LE_PROPERTY_TYPE_STRING);
+    EXPECT_STREQ(properties.at("name").string_value, "A");
+
+    ASSERT_TRUE(properties.contains("direction"));
+    EXPECT_EQ(properties.at("direction").type, LE_PROPERTY_TYPE_STRING);
+    EXPECT_STREQ(properties.at("direction").string_value, "INPUT");
+
+    ASSERT_TRUE(properties.contains("port_count"));
+    EXPECT_EQ(properties.at("port_count").type, LE_PROPERTY_TYPE_INT);
+    EXPECT_EQ(properties.at("port_count").int_value, 1);
+}
+
+TEST_F(ApiFixture, SelectedTerminalReportsItsBoundingBoxConvertedToMicrons)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A, (1,1)-(4,4) micron
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_EQ(properties.at("bbox_um").type, LE_PROPERTY_TYPE_STRING);
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "1 1 4 4");
+}
+
+TEST_F(ApiFixture, SelectedTerminalBoundingBoxTrimsTrailingZerosInWholeGroupsOfThree)
+{
+    // MACRO FRACPIN's PIN A is a RECT at (0.34,0.34)-(5.34,5.34) micron
+    // (see fractional_pin.lef) - std::to_string would format each as 6
+    // decimal digits ("0.340000"/"5.340000"); the trailing zeros should
+    // trim down to the last *significant* group of three ("0.340"), not
+    // strip further into the significant "340" group and not leave a
+    // partial group like "0.34".
+    ASSERT_EQ(le_read_lef(handle, fixture_path("fractional_pin.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 0.01 - 1.0, 0, 100);
+
+    le_mouse_down(handle, 28, 72); // inside the rect - dbu (2800,2800)
+    le_mouse_up(handle, 28, 72);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "0.340 0.340 5.340 5.340");
+}
+
+TEST_F(ApiFixture, SelectedObstructionReportsItsKindShapesCountAndBoundingBox)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 125, 75); // the OBS rect, (10,10)-(15,15) micron
+    le_mouse_up(handle, 125, 75);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_OBSTRUCTION);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("shapes_count"));
+    EXPECT_EQ(properties.at("shapes_count").type, LE_PROPERTY_TYPE_INT);
+    EXPECT_EQ(properties.at("shapes_count").int_value, 1);
+
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "10 10 15 15");
+
+    // Terminal-only property, should not leak onto an Obstruction's table.
+    EXPECT_FALSE(properties.contains("name"));
+}
+
+TEST_F(ApiFixture, SelectedObjectPropertiesDistinguishTwoSelectedObjectsByIndex)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_mouse_down(handle, 125, 75); // OBS, shift-click adds
+    le_mouse_up(handle, 125, 75);
+    ASSERT_EQ(le_selection_count(handle), 2);
+
+    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_OBSTRUCTION);
+
+    const std::map<std::string, LeProperty> terminal_properties = selected_object_properties(handle, 0);
+    EXPECT_STREQ(terminal_properties.at("name").string_value, "A");
+
+    const std::map<std::string, LeProperty> obstruction_properties = selected_object_properties(handle, 1);
+    EXPECT_EQ(obstruction_properties.at("shapes_count").int_value, 1);
+}
+
+TEST_F(ApiFixture, SelectedObjectKindAndPropertiesAreOutOfRangeSafe)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    EXPECT_EQ(le_selected_object_kind(handle, 0), -1); // nothing selected
+    EXPECT_EQ(le_selected_object_property_count(handle, 0), 0);
+
+    const LeProperty invalid = le_selected_object_property_at(handle, 0, 0);
+    EXPECT_EQ(invalid.name, nullptr);
+
+    le_mouse_down(handle, 25, 175); // select PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    EXPECT_EQ(le_selected_object_kind(handle, 1), -1); // out of range
+    EXPECT_EQ(le_selected_object_kind(handle, -1), -1);
+    EXPECT_EQ(le_selected_object_property_count(handle, 1), 0);
+
+    const LeProperty out_of_range_property = le_selected_object_property_at(handle, 0, 9999);
+    EXPECT_EQ(out_of_range_property.name, nullptr);
+}
+
+TEST_F(ApiFixture, SelectedObjectKindAndPropertiesWithNullHandleDoNotCrash)
+{
+    EXPECT_EQ(le_selected_object_kind(nullptr, 0), -1);
+    EXPECT_EQ(le_selected_object_property_count(nullptr, 0), 0);
+    const LeProperty property = le_selected_object_property_at(nullptr, 0, 0);
+    EXPECT_EQ(property.name, nullptr);
+}
+
+TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsBboxAndLayer)
+{
+    // PIN B has two ports on M1 - (16,1)-(19,4) and (16,16)-(19,19)
+    // micron (see pin_and_obstruction.lef) - device (10px/micron,
+    // pan (0,0)): port 1 occupies device (160,160)-(190,190) (center
+    // ~(175,175)), port 2 occupies device (160,10)-(190,40) (center
+    // ~(175,25)).
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 175, 175); // PIN B's first port only
+    le_mouse_up(handle, 175, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+    ASSERT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "16 1 19 4"); // just the clicked port, not the union of both
+
+    ASSERT_TRUE(properties.contains("layer_name"));
+    EXPECT_STREQ(properties.at("layer_name").string_value, "M1");
+
+    // Parent-level context is still present alongside the piece-scoped rows.
+    ASSERT_TRUE(properties.contains("name"));
+    EXPECT_STREQ(properties.at("name").string_value, "B");
+    ASSERT_TRUE(properties.contains("port_count"));
+    EXPECT_EQ(properties.at("port_count").int_value, 2);
+}
+
+TEST_F(ApiFixture, DragSelectingATwoPortTerminalStillReportsTheAggregateBboxWithNoLayerName)
+{
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    // Encloses both of PIN B's ports (device x:150-200 -> dbu 15-20
+    // micron) without touching PIN A or the OBS rect.
+    le_mouse_down(handle, 150, 0);
+    le_mouse_up(handle, 200, 200);
+    ASSERT_EQ(le_selection_count(handle), 1);
+    ASSERT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "16 1 19 19"); // union of both ports
+
+    EXPECT_FALSE(properties.contains("layer_name")); // no single piece - drag-select has none to report
+}
+
+TEST_F(ApiFixture, ShiftClickingTwoPiecesOfTheSameTerminalSelectsBothIndependently)
+{
+    // The actual reported bug: shift-clicking a second shape within the
+    // same Terminal must add a second, independently-selected/reportable
+    // entry, not replace or no-op against the first one.
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 175, 175); // PIN B's first port
+    le_mouse_up(handle, 175, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_mouse_down(handle, 175, 25); // PIN B's second port
+    le_mouse_up(handle, 175, 25);
+    le_key_up(handle, LE_KEY_SHIFT);
+    ASSERT_EQ(le_selection_count(handle), 2); // both pieces, not one
+
+    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_TERMINAL);
+
+    // Copy each bbox_um value out as its own std::string immediately -
+    // LeProperty::string_value is only valid until the next
+    // le_selected_object_property_at()/_count() call *for the same
+    // selection_index* (see its doc comment); querying a different
+    // index (as `second`'s query below does) invalidates `first`'s
+    // pointers.
+    const std::map<std::string, LeProperty> first_properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(first_properties.contains("bbox_um"));
+    const std::string first_bbox = first_properties.at("bbox_um").string_value;
+
+    const std::map<std::string, LeProperty> second_properties = selected_object_properties(handle, 1);
+    ASSERT_TRUE(second_properties.contains("bbox_um"));
+    const std::string second_bbox = second_properties.at("bbox_um").string_value;
+
+    EXPECT_NE(first_bbox, second_bbox); // genuinely distinct pieces
+    EXPECT_EQ(first_bbox, "16 1 19 4");
+    EXPECT_EQ(second_bbox, "16 16 19 19");
 }

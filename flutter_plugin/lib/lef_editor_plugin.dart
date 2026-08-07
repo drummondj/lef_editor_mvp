@@ -14,6 +14,11 @@ import 'lef_editor_plugin_bindings_generated.dart';
 /// no need to wrap it in a hand-written type first.
 export 'lef_editor_plugin_bindings_generated.dart' show LeKeyCode;
 
+/// Re-exported for the same reason as [LeKeyCode] - see
+/// [LeEditor.selectedObjectKind]/[LeSelectedProperty.type].
+export 'lef_editor_plugin_bindings_generated.dart'
+    show LeSelectionKind, LePropertyType;
+
 /// Re-exported so callers get the pointer/key convenience layer
 /// (handlePointerEvent/handleKeyEvent) from the same import used for
 /// LeEditor itself - see lef_editor_input.dart.
@@ -182,6 +187,23 @@ class LeSnappedMouse {
 
   final double xUm;
   final double yUm;
+}
+
+/// One name/value row of a selected object's property table (UPDATES.md
+/// 7.2) - see [LeEditor.selectedObjectProperties]. [value] is a `String`,
+/// `int`, or `double` matching [type] (LE_PROPERTY_TYPE_STRING/_INT/
+/// _DOUBLE respectively) - coordinates are always microns (double),
+/// converted from the database's own dbu by the backend.
+class LeSelectedProperty {
+  const LeSelectedProperty({
+    required this.name,
+    required this.type,
+    required this.value,
+  });
+
+  final String name;
+  final LePropertyType type;
+  final Object value;
 }
 
 /// One editor instance: owns a native `LeHandle*` (a Root/ViewLayerSet/
@@ -614,13 +636,61 @@ class LeEditor {
     _bindings.le_mouse_up(_handle, x, y);
   }
 
-  /// Number of currently selected objects. A minimal placeholder ahead of
-  /// a fuller selection-results API - exists so [mouseDown]/[mouseUp]'s
-  /// selection behavior is independently observable, not a preview of a
-  /// richer API to come.
+  /// Number of currently selected objects. Indexes [selectedObjectKind]/
+  /// [selectedObjectProperties]' own `selectionIndex` parameter,
+  /// 0..this-1, in the same (insertion) order as the selection itself.
   int get selectionCount {
     _checkNotDisposed();
     return _bindings.le_selection_count(_handle);
+  }
+
+  /// Which database class the selected object at [selectionIndex] is, or
+  /// null if [selectionIndex] is out of range (0..[selectionCount] - 1).
+  LeSelectionKind? selectedObjectKind(int selectionIndex) {
+    _checkNotDisposed();
+    final kind = _bindings.le_selected_object_kind(_handle, selectionIndex);
+    return kind < 0 ? null : LeSelectionKind.fromValue(kind);
+  }
+
+  /// Every property row (UPDATES.md 7.2) for the selected object at
+  /// [selectionIndex] - e.g. a Terminal's name/direction/port count or an
+  /// Obstruction's shape count, plus a shapes bounding box in microns for
+  /// either, when one is available (see api.hpp's
+  /// `le_selected_object_property_at` doc comment for the exact row
+  /// list). Empty if [selectionIndex] is out of range.
+  List<LeSelectedProperty> selectedObjectProperties(int selectionIndex) {
+    _checkNotDisposed();
+    final count = _bindings.le_selected_object_property_count(
+      _handle,
+      selectionIndex,
+    );
+    return [
+      for (var propertyIndex = 0; propertyIndex < count; propertyIndex++)
+        _selectedObjectProperty(selectionIndex, propertyIndex),
+    ];
+  }
+
+  LeSelectedProperty _selectedObjectProperty(
+    int selectionIndex,
+    int propertyIndex,
+  ) {
+    final row = _bindings.le_selected_object_property_at(
+      _handle,
+      selectionIndex,
+      propertyIndex,
+    );
+    final type = LePropertyType.fromValue(row.type);
+    final Object value = switch (type) {
+      LePropertyType.LE_PROPERTY_TYPE_STRING =>
+        row.string_value.cast<pkg_ffi.Utf8>().toDartString(),
+      LePropertyType.LE_PROPERTY_TYPE_INT => row.int_value,
+      LePropertyType.LE_PROPERTY_TYPE_DOUBLE => row.double_value,
+    };
+    return LeSelectedProperty(
+      name: row.name.cast<pkg_ffi.Utf8>().toDartString(),
+      type: type,
+      value: value,
+    );
   }
 
   /// Runs the full pipeline+render chain for the currently selected Design

@@ -495,12 +495,111 @@ extern "C"
     void le_mouse_up(LeHandle *handle, int32_t x, int32_t y);
 
     /// @brief Number of currently selected objects (Scene::selection()).
-    /// A minimal placeholder ahead of UPDATES.md 7.2's own fuller
-    /// selection-results API (each selected object's properties) - exists
-    /// purely so le_mouse_down/le_mouse_up's selection behavior is
-    /// independently observable/testable now, not a preview of that
-    /// richer API. Returns 0 if handle is null.
+    /// Indexes the `selection_index` parameter of le_selected_object_kind()/
+    /// le_selected_object_property_count()/le_selected_object_property_at()
+    /// below - 0..le_selection_count()-1, in Scene::selection()'s own
+    /// (insertion) order. Returns 0 if handle is null.
     int32_t le_selection_count(LeHandle *handle);
+
+    /// @brief Which database class the selected object at `selection_index`
+    /// is (Scene::SelectionRef's variant alternative) - lets a caller
+    /// decide how to label/group a row before even looking at its
+    /// properties. Returns -1 if handle is null or selection_index is out
+    /// of range (see le_selection_count).
+    typedef enum LeSelectionKind
+    {
+        LE_SELECTION_KIND_TERMINAL = 0,
+        LE_SELECTION_KIND_OBSTRUCTION = 1,
+    } LeSelectionKind;
+    int32_t le_selected_object_kind(LeHandle *handle, int32_t selection_index);
+
+    /// @brief Which field of LeProperty is meaningful for a given row -
+    /// see LeProperty's own comment.
+    typedef enum LePropertyType
+    {
+        LE_PROPERTY_TYPE_STRING = 0,
+        LE_PROPERTY_TYPE_INT = 1,
+        LE_PROPERTY_TYPE_DOUBLE = 2,
+    } LePropertyType;
+
+    /// @brief One name/value row of a selected object's property table
+    /// (UPDATES.md 7.2) - a caller reads `type` to know which of
+    /// string_value/int_value/double_value to use; the other two are
+    /// unspecified. `name`/`string_value` point into memory owned by the
+    /// LeHandle - valid only until the next le_selected_object_property_at()
+    /// or le_selected_object_property_count() call *for the same
+    /// selection_index* (a different selection_index, or a selection
+    /// change, may invalidate them sooner) - same "valid until the next
+    /// call" convention as LePixelBuffer, never owned by the caller and
+    /// never to be freed by it. `name` is null (and every other field 0/
+    /// unspecified) if this row is invalid (out-of-range selection_index/
+    /// property_index or null handle).
+    typedef struct LeProperty
+    {
+        const char *name;
+        int32_t type; // LePropertyType
+        const char *string_value;
+        int64_t int_value;
+        double double_value;
+    } LeProperty;
+
+    /// @brief Number of property rows the selected object at
+    /// `selection_index` has (see LeProperty) - indexes
+    /// le_selected_object_property_at()'s own `property_index` parameter,
+    /// 0..this-1. Varies by LeSelectionKind and by whether the object has
+    /// any shapes yet (an empty Terminal/Obstruction has no bounding box
+    /// to report - see le_selected_object_property_at). Returns 0 if
+    /// handle is null or selection_index is out of range.
+    int32_t le_selected_object_property_count(LeHandle *handle, int32_t selection_index);
+
+    /// @brief The property row at `property_index`
+    /// (0..le_selected_object_property_count(selection_index)-1) for the
+    /// selected object at `selection_index`. Per UPDATES.md 7.2: simple
+    /// fields (name, direction, counts of list fields rather than the
+    /// lists themselves) are sent as-is; any coordinate is always
+    /// converted from dbu to microns first (via the same single shared/
+    /// global Technology::database_units_microns as
+    /// le_snapped_mouse_position - omitted if no Technology has been read
+    /// yet). Every plain/enum field on the underlying database class
+    /// itself (e.g. Terminal's "name"/"direction") comes from cmg's
+    /// schema-generated `le::to_properties()` (see schema.py's Field
+    /// reflection helpers and generated/property.hpp) - new plain fields
+    /// added to schema.py appear here automatically, no api.cpp change
+    /// needed. Only what's genuinely derived (not a stored field) is
+    /// hand-appended: a schema-tracked list field's own size, named
+    /// "<field>_count" (e.g. Obstruction's "shapes" list ->
+    /// "shapes_count"), plus a child list that isn't a struct field at
+    /// all in INDEXED_POOLS style (Terminal's "port_count", from Root's
+    /// own port index - "ports" itself never appears), plus "bbox_um"
+    /// (string, "ll_x ll_y ur_x ur_y" space-separated, mirroring how a
+    /// LEF RECT statement itself lists four coordinates, since a bbox is
+    /// computed from nested geometry, never a stored field). Each
+    /// coordinate is formatted with trailing zeros trimmed in whole
+    /// groups of three - never a partial group - down to whichever
+    /// group first has a non-zero digit (or entirely, dropping the
+    /// decimal point, if every digit is zero): 1.0 -> "1", 0.34 ->
+    /// "0.340" (the next group, "340", isn't all zero, so it stays),
+    /// 0.123456 unchanged (no trimmable trailing zero group at all). If
+    /// the
+    /// selection came from a click that hit one specific rect/polygon/
+    /// path (as opposed to a drag-select, which selects whole objects -
+    /// see le_mouse_up), "bbox_um" covers just that piece, not the whole
+    /// object's union, and a "layer_name" (string) row is added for it -
+    /// useful since a Terminal can have ports on different layers.
+    /// Otherwise (drag-select, or no Technology available) "bbox_um"
+    /// covers the whole object and there's no "layer_name" row. Current
+    /// rows:
+    ///
+    /// - LE_SELECTION_KIND_TERMINAL: "name" (string), "direction" (string,
+    ///   e.g. "INPUT"), "port_count" (int), then "bbox_um" (string) and,
+    ///   if piece-scoped, "layer_name" (string), if the Terminal has any
+    ///   shapes and a Technology is available.
+    /// - LE_SELECTION_KIND_OBSTRUCTION: "shapes_count" (int), then the
+    ///   same "bbox_um"/"layer_name" rows under the same conditions.
+    ///
+    /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+    /// handle is null or either index is out of range.
+    LeProperty le_selected_object_property_at(LeHandle *handle, int32_t selection_index, int32_t property_index);
 
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently

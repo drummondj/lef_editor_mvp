@@ -387,6 +387,73 @@ TEST_F(RenderFixture, BuildPictureOutlinesEveryPieceOfASelectedTerminalNotJustOn
     EXPECT_TRUE(is_white(59, 70)); // second rect's left edge
 }
 
+TEST_F(RenderFixture, BuildPictureOmitsTheWholeObjectOutlineWhenAPieceIsSelected)
+{
+    // Once a click records a specific piece (Scene::SelectedObject::piece,
+    // set via Scene::select's second argument), build_picture's own
+    // whole-object pass must skip that origin entirely - the piece gets
+    // its outline from build_overlay_picture/draw_selected_piece_outline
+    // instead (see ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWholeObject).
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape first_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {first_piece}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, first_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    auto is_white = [&](int x, int y)
+    {
+        const SkColor c = sample_pixel(picture, 100, 100, x, y);
+        return SkColorGetR(c) == 255 && SkColorGetG(c) == 255 && SkColorGetB(c) == 255 && SkColorGetA(c) > 200;
+    };
+
+    EXPECT_FALSE(is_white(9, 20));  // first rect's left edge - drawn by the overlay now, not here
+    EXPECT_FALSE(is_white(59, 70)); // second rect's left edge - not selected at all
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWholeObject)
+{
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape first_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {first_piece}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, first_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+
+    // Post-flip (see the Y-flip comment on
+    // ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore) -
+    // first rect's left edge (preflip x=9,y=20) -> post-flip y = 100-20 = 80;
+    // second rect's left edge (preflip x=59,y=70) -> post-flip y = 100-70 = 30.
+    auto is_white = [&](int x, int y)
+    {
+        const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+        return p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 200;
+    };
+
+    EXPECT_TRUE(is_white(9, 80));   // first rect's left edge - the selected piece
+    EXPECT_FALSE(is_white(59, 30)); // second rect's left edge - same Terminal, not the selected piece
+}
+
 TEST_F(RenderFixture, BuildPictureReusesCacheUntilSelectionVersionChanges)
 {
     const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});

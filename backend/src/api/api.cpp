@@ -21,6 +21,15 @@ struct LeHandle
     le::Scene scene;
     le::Pipeline pipeline;
     le::Renderer renderer;
+
+    // Single-slot cache backing le_selected_object_property_count/
+    // le_selected_object_property_at - rebuilt whenever a different
+    // selection_index is requested (see build_selected_object_properties).
+    // le::PropertyValue (generated/property.hpp) doubles as LeProperty's
+    // string-owning backing store directly - no separate wrapper type
+    // needed, its shape already matches LeProperty field-for-field.
+    int32_t cached_property_selection_index = -1;
+    std::vector<le::PropertyValue> cached_properties;
 };
 
 namespace
@@ -45,6 +54,168 @@ namespace
     constexpr double kKeyZoomFactor = 0.3;
     constexpr int32_t kKeyFitPaddingPx = 10;
     constexpr double kKeyPanFactor = 0.25;
+
+    // Maps le::PropertyValue::Type (generated/property.hpp) to the C API's
+    // LePropertyType - kept as an explicit switch rather than a bare
+    // static_cast so a future reordering of either enum fails to compile
+    // here instead of silently mislabeling a row's type.
+    int32_t to_c_property_type(le::PropertyValue::Type type)
+    {
+        switch (type)
+        {
+        case le::PropertyValue::Type::STRING:
+            return LE_PROPERTY_TYPE_STRING;
+        case le::PropertyValue::Type::INT:
+            return LE_PROPERTY_TYPE_INT;
+        case le::PropertyValue::Type::DOUBLE:
+            return LE_PROPERTY_TYPE_DOUBLE;
+        }
+        return LE_PROPERTY_TYPE_STRING;
+    }
+
+    // Single shared/global Technology, same assumption
+    // le_snapped_mouse_position's own lookup makes - nullopt if none has
+    // been read yet (le_read_lef) or it has no usable scale.
+    std::optional<double> database_units_microns(const le::Root &root)
+    {
+        const auto technology_ids = root.get_technology_ids();
+        if (technology_ids.empty())
+            return std::nullopt;
+
+        const le::TechnologyData *technology = root.get_technology(technology_ids.front());
+        if (!technology || technology->database_units_microns <= 0.0)
+            return std::nullopt;
+
+        return technology->database_units_microns;
+    }
+
+    // Formats a coordinate value the way UPDATES.md 7.2 wants it shown:
+    // std::to_string's own fixed 6 decimal digits, then trailing zeros
+    // stripped in whole groups of three - never a partial group - down
+    // to whichever group first contains a non-zero digit (or entirely,
+    // dropping the decimal point too, if every digit is zero). So an
+    // exact-micron value like 1.0 collapses to "1", a 3-decimal-precise
+    // value like 0.34 collapses to "0.340" (one trailing zero kept,
+    // since the next group of three - "340" - isn't all zero), and a
+    // value that genuinely needs the full 6 digits of precision is left
+    // alone. Groups of three (not one at a time) since that's this
+    // project's own dbu/um convention - a DATABASE MICRONS value like
+    // 1000 gives exactly 3 significant decimal digits, so a *partial*
+    // trim (e.g. "0.34" instead of "0.340") would misrepresent that
+    // precision as coarser than it is.
+    std::string format_coordinate_um(double value)
+    {
+        std::string formatted = std::to_string(value); // always exactly 6 decimal digits
+        const size_t dot = formatted.find('.');
+        if (dot == std::string::npos)
+            return formatted;
+
+        size_t end = formatted.size();
+        while (end - dot - 1 >= 3 && formatted.compare(end - 3, 3, "000") == 0)
+            end -= 3;
+
+        if (end == dot + 1) // stripped every decimal digit - drop the bare "." too
+            end = dot;
+
+        return formatted.substr(0, end);
+    }
+
+    // Appends a single "bbox_um" row ("ll_x ll_y ur_x ur_y", space-
+    // separated, matching how e.g. a LEF RECT statement itself lists four
+    // coordinates) if `bbox` and `dbu_per_um` are both present - silently
+    // omitted otherwise (an object with no shapes yet, or no Technology
+    // loaded), rather than reporting a misleading all-zero box. Always
+    // hand-written, never schema-generated: a shape's own bounding box is
+    // computed from nested geometry (TerminalPort/Obstruction shapes),
+    // not a stored field on Terminal/Obstruction itself, so no amount of
+    // struct-field reflection can produce it.
+    void push_bbox_property(std::vector<le::PropertyValue> &properties, const std::optional<le::Rect> &bbox, std::optional<double> dbu_per_um)
+    {
+        if (!bbox || !dbu_per_um)
+            return;
+
+        const double ll_x = static_cast<double>(bbox->ll.x) / *dbu_per_um;
+        const double ll_y = static_cast<double>(bbox->ll.y) / *dbu_per_um;
+        const double ur_x = static_cast<double>(bbox->ur.x) / *dbu_per_um;
+        const double ur_y = static_cast<double>(bbox->ur.y) / *dbu_per_um;
+        properties.push_back(le::PropertyValue::make_string(
+            "bbox_um",
+            format_coordinate_um(ll_x) + " " + format_coordinate_um(ll_y) + " " + format_coordinate_um(ur_x) + " " + format_coordinate_um(ur_y)));
+    }
+
+    // Builds the full property-row list (UPDATES.md 7.2) for one selected
+    // object - see le_selected_object_property_at's doc comment for the
+    // exact row list per LeSelectionKind. Every plain/enum field on
+    // TerminalData/ObstructionData itself (schema.py's Field metadata)
+    // comes for free from the generated le::to_properties() - this only
+    // hand-appends what's genuinely derived and can never be schema-
+    // generated: child-list counts that need Root's own index (ports
+    // isn't a struct field at all in INDEXED_POOLS style - see
+    // get_struct_fields()'s child-reference filtering) and the bbox_um
+    // computed from nested geometry (see push_bbox_property).
+    //
+    // If `selected.piece` is set (a click hit one specific rect/polygon/
+    // path - see SelectedObject), bbox_um is scoped to just that piece
+    // instead of the whole object's union, and a "layer_name" row is
+    // added from the piece's own Shape::layer_name - meaningful now that
+    // bbox is piece-scoped, since a Terminal can have ports on different
+    // layers. Name/direction/port_count (or shapes_count) stay parent-
+    // level context either way, so the table still says *which*
+    // Terminal/pin this piece belongs to.
+    std::vector<le::PropertyValue> build_selected_object_properties(const le::Root &root, const le::SelectedObject &selected)
+    {
+        std::vector<le::PropertyValue> properties;
+        const std::optional<double> dbu_per_um = database_units_microns(root);
+
+        if (const le::TerminalId *terminal_id = std::get_if<le::TerminalId>(&selected.origin))
+        {
+            const le::TerminalData *terminal = root.get_terminal(*terminal_id);
+            if (!terminal)
+                return properties;
+
+            properties = le::to_properties(*terminal); // name, direction
+
+            const std::vector<le::TerminalPortId> &port_ids = root.get_terminal_ports(*terminal_id);
+            properties.push_back(le::PropertyValue::make_int("port_count", static_cast<int64_t>(port_ids.size())));
+
+            if (selected.piece)
+            {
+                push_bbox_property(properties, le::Geometry::bbox(*selected.piece), dbu_per_um);
+                properties.push_back(le::PropertyValue::make_string("layer_name", selected.piece->layer_name));
+            }
+            else
+            {
+                std::vector<le::Shape> shapes;
+                for (const le::TerminalPortId port_id : port_ids)
+                {
+                    const le::TerminalPortData *port = root.get_terminal_port(port_id);
+                    if (port)
+                        shapes.insert(shapes.end(), port->shapes.begin(), port->shapes.end());
+                }
+                push_bbox_property(properties, le::Geometry::bbox(shapes), dbu_per_um);
+            }
+        }
+        else if (const le::ObstructionId *obstruction_id = std::get_if<le::ObstructionId>(&selected.origin))
+        {
+            const le::ObstructionData *obstruction = root.get_obstruction(*obstruction_id);
+            if (!obstruction)
+                return properties;
+
+            properties = le::to_properties(*obstruction); // shapes_count
+
+            if (selected.piece)
+            {
+                push_bbox_property(properties, le::Geometry::bbox(*selected.piece), dbu_per_um);
+                properties.push_back(le::PropertyValue::make_string("layer_name", selected.piece->layer_name));
+            }
+            else
+            {
+                push_bbox_property(properties, le::Geometry::bbox(obstruction->shapes), dbu_per_um);
+            }
+        }
+
+        return properties;
+    }
 }
 
 extern "C"
@@ -514,7 +685,7 @@ extern "C"
             // ordering against.
             const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
             if (hit)
-                handle->scene.select(hit->origin);
+                handle->scene.select(hit->origin, hit->outline);
         }
         else
         {
@@ -535,6 +706,63 @@ extern "C"
     int32_t le_selection_count(LeHandle *handle)
     {
         return handle ? static_cast<int32_t>(handle->scene.selection().size()) : 0;
+    }
+
+    int32_t le_selected_object_kind(LeHandle *handle, int32_t selection_index)
+    {
+        if (!handle || selection_index < 0)
+            return -1;
+
+        const std::vector<le::SelectedObject> &selection = handle->scene.selection();
+        if (static_cast<size_t>(selection_index) >= selection.size())
+            return -1;
+
+        return std::holds_alternative<le::TerminalId>(selection[static_cast<size_t>(selection_index)].origin)
+                   ? LE_SELECTION_KIND_TERMINAL
+                   : LE_SELECTION_KIND_OBSTRUCTION;
+    }
+
+    int32_t le_selected_object_property_count(LeHandle *handle, int32_t selection_index)
+    {
+        if (!handle || selection_index < 0)
+            return 0;
+
+        const std::vector<le::SelectedObject> &selection = handle->scene.selection();
+        if (static_cast<size_t>(selection_index) >= selection.size())
+            return 0;
+
+        handle->cached_properties = build_selected_object_properties(handle->root, selection[static_cast<size_t>(selection_index)]);
+        handle->cached_property_selection_index = selection_index;
+        return static_cast<int32_t>(handle->cached_properties.size());
+    }
+
+    LeProperty le_selected_object_property_at(LeHandle *handle, int32_t selection_index, int32_t property_index)
+    {
+        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
+        if (!handle || selection_index < 0 || property_index < 0)
+            return invalid;
+
+        const std::vector<le::SelectedObject> &selection = handle->scene.selection();
+        if (static_cast<size_t>(selection_index) >= selection.size())
+            return invalid;
+
+        if (handle->cached_property_selection_index != selection_index)
+        {
+            handle->cached_properties = build_selected_object_properties(handle->root, selection[static_cast<size_t>(selection_index)]);
+            handle->cached_property_selection_index = selection_index;
+        }
+
+        if (static_cast<size_t>(property_index) >= handle->cached_properties.size())
+            return invalid;
+
+        const le::PropertyValue &property = handle->cached_properties[static_cast<size_t>(property_index)];
+        return LeProperty{
+            .name = property.name.c_str(),
+            .type = to_c_property_type(property.type),
+            .string_value = property.string_value.c_str(),
+            .int_value = property.int_value,
+            .double_value = property.double_value,
+        };
     }
 
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)
