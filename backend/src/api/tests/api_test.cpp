@@ -42,6 +42,40 @@ namespace
         return false;
     }
 
+    // The hover outline is drawn pure opaque yellow (see
+    // Renderer::kHoverOutlineColor) - distinct from the cursor box (red),
+    // origin marker (amber), and grid (gray/white), so "clearly
+    // yellow-dominant and opaque" reliably detects it without depending
+    // on exact stroke antialiasing.
+    bool region_has_yellow_hover_pixel(const LePixelBuffer &buffer, int x0, int y0, int x1, int y1)
+    {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+            {
+                const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+                if (p[0] > 200 && p[1] > 200 && p[2] < 50 && p[3] > 200)
+                    return true;
+            }
+        return false;
+    }
+
+    // The selection outline is drawn pure opaque white (see
+    // Renderer::kSelectionOutlineColor) - distinct from every other
+    // overlay/grid color and from every default layer palette color (none
+    // of which are pure white), so "R/G/B all near max and opaque"
+    // reliably detects it without depending on exact stroke antialiasing.
+    bool region_has_white_selection_pixel(const LePixelBuffer &buffer, int x0, int y0, int x1, int y1)
+    {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+            {
+                const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+                if (p[0] > 250 && p[1] > 250 && p[2] > 250 && p[3] > 200)
+                    return true;
+            }
+        return false;
+    }
+
     struct ApiFixture : public ::testing::Test
     {
         void SetUp() override { handle = le_create(); }
@@ -582,7 +616,7 @@ TEST_F(ApiFixture, RenderPixelBufferShowsRedCursorBoxAtSnappedMousePosition)
     // Screen pixel (50,50), top-left origin/y-down (same convention as
     // le_zoom's x/y) -> dbu (25,25), already a multiple of the default
     // 5dbu minor grid, so it snaps to itself and the box lands centered
-    // on screen pixel (50,50) after compose_with_cursor's Y-flip.
+    // on screen pixel (50,50) after compose_with_overlays's Y-flip.
     le_set_mouse_position(handle, 50, 50);
 
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
@@ -691,6 +725,128 @@ TEST_F(ApiFixture, PanShiftsContentOutOfView)
     EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79));
 }
 
+TEST_F(ApiFixture, KeyDownZoomZoomsInAnchoredAtTheCurrentMousePosition)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0); PIN A at device (20,20)-(80,80)
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_FALSE(region_has_opaque_pixel(before, 13, 48, 17, 52)); // just outside the pin's left edge
+
+    le_set_mouse_position(handle, 50, 50); // center of the macro/pin
+    le_key_down(handle, LE_KEY_ZOOM);
+
+    // Zooming in (factor +0.3, scale 0.01 -> 0.013) grows the pin's
+    // half-width from 30px to 39px around the same (50,50) anchor - the
+    // sample window that was just outside it before is now inside.
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(after, 13, 48, 17, 52));
+}
+
+TEST_F(ApiFixture, KeyDownZoomWithShiftHeldZoomsOutInstead)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0); PIN A at device (20,20)-(80,80)
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 23, 48, 27, 52)); // inside the pin, near its left edge
+
+    le_set_mouse_position(handle, 50, 50);
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_ZOOM);
+
+    // Zooming out (factor -0.3, scale 0.01 -> 0.007) shrinks the pin's
+    // half-width from 30px to 21px around the same anchor - the sample
+    // window that was inside it before is now outside. Sampled at x:18-22
+    // rather than reusing the "before" window (23-27): the mouse position
+    // set above also puts the pin under hover, and its outline's stroke
+    // antialiasing extends a pixel or two past the pin's own new edge
+    // (~x=29) toward the old window, so 23-27 isn't a clean miss anymore.
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_FALSE(region_has_opaque_pixel(after, 18, 48, 22, 52));
+}
+
+TEST_F(ApiFixture, KeyDownZoomWithoutAMousePositionSetDoesNotCrash)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+
+    le_key_down(handle, LE_KEY_ZOOM); // no le_set_mouse_position call first - anchors at the default (0,0)
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    EXPECT_NE(buffer.data, nullptr);
+}
+
+TEST_F(ApiFixture, KeyDownFitFitsTheViewportToContent)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 200, 200);
+    le_key_down(handle, LE_KEY_FIT);
+
+    // Mirrors FitSceneFillsTheViewportWithThePinVisible, triggered via
+    // le_key_down instead of le_fit_scene directly.
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 80, 80, 120, 120));
+}
+
+TEST_F(ApiFixture, KeyDownPanLeftShiftsContentOutOfView)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0)
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79));
+
+    // kKeyPanFactor (0.25) per press - 8 presses covers 2 full viewport
+    // widths, the same margin PanShiftsContentOutOfView uses directly.
+    for (int i = 0; i < 8; ++i)
+        le_key_down(handle, LE_KEY_PAN_LEFT);
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_FALSE(region_has_opaque_pixel(after, 21, 21, 79, 79));
+}
+
+TEST_F(ApiFixture, KeyDownPanDirectionsAreEachOthersOpposite)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79));
+
+    le_key_down(handle, LE_KEY_PAN_LEFT);
+    le_key_down(handle, LE_KEY_PAN_RIGHT); // undoes the left pan
+    le_key_down(handle, LE_KEY_PAN_UP);
+    le_key_down(handle, LE_KEY_PAN_DOWN); // undoes the up pan
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(after, 21, 21, 79, 79));
+}
+
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
@@ -720,4 +876,378 @@ TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
     // fully transparent.
     const uint8_t *outside = buffer.data + static_cast<size_t>(5) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(5) * 4;
     EXPECT_EQ(outside[3], 0);
+}
+
+TEST_F(ApiFixture, MouseMoveOverASelectableShapeShowsAYellowHoverOutline)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    // Same pan/scale as RenderPixelBufferDrawsThePinRectAtItsExpectedLocation -
+    // PIN A's rect ends up at device pixel (20,20)-(80,80).
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    le_set_mouse_position(handle, 50, 50); // well inside PIN A's rect
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52)); // left edge of the hovered pin's outline
+}
+
+TEST_F(ApiFixture, MouseMoveAwayFromAnyShapeClearsTheHoverOutline)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    le_set_mouse_position(handle, 50, 50); // over the pin
+    le_set_mouse_position(handle, 95, 95); // now off every shape
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_FALSE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52));
+}
+
+TEST_F(ApiFixture, ClearMousePositionAlsoClearsTheHoverOutline)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    le_set_mouse_position(handle, 50, 50);
+    le_clear_mouse_position(handle);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_FALSE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52));
+}
+
+TEST_F(ApiFixture, MouseMoveOverAnUnselectableLayerNeverShowsAHoverOutline)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+    le_set_layer_name_selectable(handle, "M1", 0);
+
+    le_set_mouse_position(handle, 50, 50); // over the pin, but M1 is unselectable
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_FALSE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52));
+}
+
+TEST_F(ApiFixture, KeyDownThenIsKeyHeldReturnsTrue)
+{
+    EXPECT_EQ(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+
+    le_key_down(handle, LE_KEY_SHIFT);
+    EXPECT_NE(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+}
+
+TEST_F(ApiFixture, KeyUpClearsAHeldKey)
+{
+    le_key_down(handle, LE_KEY_SHIFT);
+    ASSERT_NE(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+
+    le_key_up(handle, LE_KEY_SHIFT);
+    EXPECT_EQ(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+}
+
+TEST_F(ApiFixture, KeyUpWithoutAPrecedingKeyDownIsANoOp)
+{
+    le_key_up(handle, LE_KEY_SHIFT);
+    EXPECT_EQ(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+}
+
+TEST_F(ApiFixture, KeyStateFunctionsWithNullHandleDoNotCrash)
+{
+    le_key_down(nullptr, LE_KEY_SHIFT);
+    le_key_up(nullptr, LE_KEY_SHIFT);
+    EXPECT_EQ(le_is_key_held(nullptr, LE_KEY_SHIFT), 0);
+    le_clear_all_keys(nullptr);
+}
+
+TEST_F(ApiFixture, ClearAllKeysReleasesAHeldShift)
+{
+    le_key_down(handle, LE_KEY_SHIFT);
+    ASSERT_NE(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+
+    le_clear_all_keys(handle);
+    EXPECT_EQ(le_is_key_held(handle, LE_KEY_SHIFT), 0);
+}
+
+
+namespace
+{
+    // Shared by every click/drag-select test below: reads two_shapes.lef
+    // (MACRO TWOSHAPES, PIN A at (1,1)-(4,4) micron, PIN B at
+    // (16,16)-(19,19) micron - see the fixture file), and zooms a 200x200
+    // viewport to scale 0.01 (10px/micron) with pan pinned at (0,0), same
+    // "anchor at the bottom-left image corner" trick as other tests in
+    // this file. At that scale/pan (device/image pixel space, top-left
+    // origin, y down):
+    //   - PIN A occupies device (10,160)-(40,190) - center ~(25,175).
+    //   - PIN B occupies device (160,10)-(190,40) - center ~(175,25).
+    //   - (100,100) device is empty space (10,10 micron - inside the
+    //     macro, outside both pins).
+    void load_two_shapes_at_known_scale(LeHandle *handle)
+    {
+        ASSERT_EQ(le_read_lef(handle, fixture_path("two_shapes.lef").c_str()), 0);
+        ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+        le_set_viewport_size(handle, 200, 200);
+        le_zoom(handle, 0.01 - 1.0, 0, 200);
+    }
+}
+
+TEST_F(ApiFixture, MouseDownThenUpAsAClickSelectsTheHitShape)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+
+    EXPECT_EQ(le_selection_count(handle), 1);
+}
+
+TEST_F(ApiFixture, SmallMovementBetweenDownAndUpIsStillTreatedAsAClick)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 26, 176); // well under the click/drag threshold
+
+    EXPECT_EQ(le_selection_count(handle), 1);
+}
+
+TEST_F(ApiFixture, ClickOnEmptySpaceClearsTheSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_mouse_down(handle, 100, 100); // empty space
+    le_mouse_up(handle, 100, 100);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, PlainClickReplacesThePreviousSelectionRatherThanAddingToIt)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_mouse_down(handle, 175, 25); // PIN B, no shift
+    le_mouse_up(handle, 175, 25);
+    EXPECT_EQ(le_selection_count(handle), 1); // still just one - B replaced A, not added
+}
+
+TEST_F(ApiFixture, ShiftClickAddsToTheSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_mouse_down(handle, 175, 25); // PIN B, with shift
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_mouse_up(handle, 175, 25);
+    le_key_up(handle, LE_KEY_SHIFT);
+    EXPECT_EQ(le_selection_count(handle), 2);
+}
+
+TEST_F(ApiFixture, ShiftClickOnEmptySpaceIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_mouse_down(handle, 100, 100); // empty space, with shift
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_mouse_up(handle, 100, 100);
+    le_key_up(handle, LE_KEY_SHIFT);
+    EXPECT_EQ(le_selection_count(handle), 1); // unchanged
+}
+
+TEST_F(ApiFixture, ClickOnAnUnselectableLayerSelectsNothing)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_layer_name_selectable(handle, "M1", 0);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, DragSelectEnclosesEverySelectableShapeInTheRectangle)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // Full-viewport drag - dbu (0,0) to (20,20) micron, the whole macro,
+    // enclosing both pins.
+    le_mouse_down(handle, 0, 200);
+    le_mouse_up(handle, 200, 0);
+
+    EXPECT_EQ(le_selection_count(handle), 2);
+}
+
+TEST_F(ApiFixture, DragSelectExcludesAShapeThatIsOnlyPartiallyEnclosed)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // dbu (0,0)-(2.5,5) micron - clips through the left portion of PIN A
+    // (1,1)-(4,4) micron without fully enclosing it, and nowhere near
+    // PIN B.
+    le_mouse_down(handle, 0, 150);
+    le_mouse_up(handle, 25, 200);
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, ShiftDragAddsToTheExistingSelectionRatherThanReplacingIt)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A, plain click
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    // Small rect tightly around just PIN B, with shift.
+    le_mouse_down(handle, 155, 5);
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_mouse_up(handle, 195, 45);
+    le_key_up(handle, LE_KEY_SHIFT);
+    EXPECT_EQ(le_selection_count(handle), 2);
+}
+
+TEST_F(ApiFixture, DragSelectOnAnUnselectableLayerSelectsNothing)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_layer_name_selectable(handle, "M1", 0);
+
+    le_mouse_down(handle, 0, 200);
+    le_mouse_up(handle, 200, 0);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, MouseDownAloneDoesNotChangeTheSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175);
+    EXPECT_EQ(le_selection_count(handle), 0); // nothing committed until mouse-up
+}
+
+TEST_F(ApiFixture, MouseUpWithoutAPrecedingMouseDownIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_up(handle, 25, 175);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, MouseDownAndUpWithNullHandleDoNotCrash)
+{
+    le_mouse_down(nullptr, 25, 175);
+    le_mouse_up(nullptr, 25, 175);
+    EXPECT_EQ(le_selection_count(nullptr), 0);
+}
+
+TEST_F(ApiFixture, ClickSelectingAShapeShowsAWhiteOutlineInTheRenderedBuffer)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // Regression: render once *before* selecting anything, so
+    // rasterize_frame/compose_with_overlays's caches are already warm at
+    // {AbstractId, viewport_version, visibility_version} - none of which
+    // change when a selection is made. Their cache keys used to stop
+    // there, so this exact sequence (render, then select, then render
+    // again) returned the pre-selection frame unchanged: build_picture
+    // correctly produced a new SkPicture with the outline baked in, but
+    // downstream, CachedStage::get only ever compares the key tuple, not
+    // the SkPicture argument itself, so the stale frame from the first
+    // render won. selection_version now closes that gap.
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_FALSE(region_has_white_selection_pixel(before, 8, 170, 12, 180));
+
+    le_mouse_down(handle, 25, 175); // PIN A, device (10,160)-(40,190)
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_TRUE(region_has_white_selection_pixel(after, 8, 170, 12, 180)); // PIN A's left edge
+}
+
+TEST_F(ApiFixture, ClearingTheSelectionRemovesTheWhiteOutline)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    // Render with the selection active first (and warm every downstream
+    // cache at this selection_version), matching a real frontend that
+    // redraws after every gesture - not just once at the very end.
+    LePixelBuffer selected = le_render_pixel_buffer(handle);
+    ASSERT_NE(selected.data, nullptr);
+    ASSERT_TRUE(region_has_white_selection_pixel(selected, 8, 170, 12, 180));
+
+    le_mouse_down(handle, 100, 100); // empty space - clears the selection
+    le_mouse_up(handle, 100, 100);
+    ASSERT_EQ(le_selection_count(handle), 0);
+
+    LePixelBuffer cleared = le_render_pixel_buffer(handle);
+    ASSERT_NE(cleared.data, nullptr);
+    EXPECT_FALSE(region_has_white_selection_pixel(cleared, 8, 170, 12, 180));
+}
+
+TEST_F(ApiFixture, SwitchingToADifferentDesignClearsTheSelection)
+{
+    load_two_shapes_at_known_scale(handle); // design 0 = TWOSHAPES
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0); // design 1 = TESTCELL
+
+    le_mouse_down(handle, 25, 175); // PIN A on TWOSHAPES
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    ASSERT_EQ(le_set_current_design(handle, 1), 0); // switch to TESTCELL
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, ClearAllKeysMakesSubsequentClicksReplaceRatherThanAddAgain)
+{
+    // The exact reported bug: a stuck shift (e.g. from a missed key-up on
+    // focus loss) made every later plain click behave like a shift-click.
+    // le_clear_all_keys is the escape hatch - simulates a focus-loss
+    // recovery.
+    load_two_shapes_at_known_scale(handle);
+
+    le_key_down(handle, LE_KEY_SHIFT); // shift held, then "stuck" (no key-up)
+
+    le_mouse_down(handle, 25, 175); // PIN A, shift-click
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_clear_all_keys(handle); // e.g. called from a focus-loss handler
+
+    le_mouse_down(handle, 175, 25); // PIN B, plain click - should replace, not add
+    le_mouse_up(handle, 175, 25);
+    EXPECT_EQ(le_selection_count(handle), 1);
 }

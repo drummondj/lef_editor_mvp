@@ -74,6 +74,13 @@ namespace le
         std::vector<PixelPolygon> polygons;
         std::vector<PixelPath> paths;
         std::vector<PixelText> texts;
+
+        /// Mirrors RenderedShape::origin (pipeline.hpp) - nullopt for the
+        /// BOUNDARY shape. Carried through transform_to_pixels unchanged
+        /// (no coordinate transform needed) so build_picture can draw a
+        /// selection outline (UPDATES.md 7) without needing the
+        /// dbu-space RenderedShape map too.
+        std::optional<SelectionRef> origin;
     };
 
     /// @brief Raw RGBA8888 pixel data for one rasterized frame, produced by
@@ -157,6 +164,7 @@ namespace le
                     for (const auto &rs : group)
                     {
                         PixelShape ps;
+                        ps.origin = rs.origin;
 
                         ps.rects.reserve(rs.shape.rects.size());
                         for (const auto &r : rs.shape.rects)
@@ -217,10 +225,15 @@ namespace le
         /// Color) comes from `view_layers`; a ViewLayerId that doesn't
         /// resolve to a known ViewLayer (see Pipeline's layer filter
         /// comment on why that's kept, not dropped) has its whole group
-        /// skipped here - there's no style to draw it with.
+        /// skipped here - there's no style to draw it with. A final pass
+        /// draws a white outline (see draw_selection_outline, UPDATES.md
+        /// 7) around every PixelShape whose origin is currently selected
+        /// (Scene::is_selected) - after every group, so a selected
+        /// shape's outline is never obscured by a shape on a higher
+        /// layer, unlike its own per-group outline/fill.
         const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers, const Root &root)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
             return picture_.get(key, [&]
                                 {
                 SkPictureRecorder recorder;
@@ -243,32 +256,54 @@ namespace le
                     draw_group(*canvas, group, view_layer->style);
                 }
 
+                if (!scene.selection().empty())
+                {
+                    for (const auto &[view_layer_id, group] : shapes)
+                        for (const auto &pixel_shape : group)
+                            if (pixel_shape.origin && scene.is_selected(*pixel_shape.origin))
+                                draw_selection_outline(*canvas, pixel_shape);
+                }
+
                 return recorder.finishRecordingAsPicture(); });
         }
 
-        /// @brief Records just the grid-snap indicator box (see
-        /// draw_cursor) into its own small SkPicture, cached independently
-        /// of the (potentially design-sized, expensive) design picture
-        /// above - keyed on viewport_version()/visibility_version() (grid
-        /// spacing lives there) and mouse_version(), deliberately *not*
-        /// AbstractId: the cursor overlay is a pure viewport/mouse concern,
-        /// not design content, so switching Abstracts doesn't need to
-        /// recompute it. See compose_with_cursor for how this combines
-        /// with the design picture without re-rasterizing it - this
+        /// @brief Records the mouse-driven overlay chrome - the live
+        /// rubber-band drag-select rectangle if a drag is in progress
+        /// (see draw_drag_rect), the grid-snap indicator box (see
+        /// draw_cursor), and, if a shape is currently hovered, its yellow
+        /// outline (see draw_hover_outline) - into its own small
+        /// SkPicture, cached independently of the (potentially
+        /// design-sized, expensive) design picture above - keyed on
+        /// viewport_version()/visibility_version() (grid spacing lives
+        /// there) and mouse_version(), deliberately *not* AbstractId: this
+        /// overlay is a pure viewport/mouse concern, not design content,
+        /// so switching Abstracts doesn't need to recompute it. Neither
+        /// hover state (Scene::hover()) nor drag state
+        /// (Scene::is_dragging()/drag_rect_dbu()) needs its own cache key
+        /// - set_hover/begin_drag/end_drag are only ever called alongside
+        /// set_mouse_position (or bump mouse_version_ themselves, for
+        /// begin_drag/end_drag), which already bumps mouse_version() on
+        /// every call - see compose_with_overlays for how this combines
+        /// with the design picture without re-rasterizing it, this
         /// project's answer to UPDATES.md 5.2's own flagged perf concern
         /// (recomputing this tiny picture on every mouse-move event is
         /// cheap; recomputing/re-rasterizing the whole design picture on
         /// every mouse-move event would not be).
-        const sk_sp<SkPicture> &build_cursor_picture(const Scene &scene)
+        const sk_sp<SkPicture> &build_overlay_picture(const Scene &scene)
         {
             const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
-            return cursor_picture_.get(key, [&]
-                                       {
+            return overlay_picture_.get(key, [&]
+                                        {
                 SkPictureRecorder recorder;
                 SkCanvas *canvas = recorder.beginRecording(
                     SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
 
+                draw_drag_rect(*canvas, scene);
+
                 draw_cursor(*canvas, scene);
+
+                if (const auto &hover = scene.hover())
+                    draw_hover_outline(*canvas, scene, *hover);
 
                 return recorder.finishRecordingAsPicture(); });
         }
@@ -278,8 +313,8 @@ namespace le
         /// the full Y-flip/format rationale (this is a thin wrapper over
         /// it, discarding the RasterizedFrame's surface and keeping just
         /// its PixelBuffer view). Kept as its own entry point (rather than
-        /// only exposing compose_with_cursor below) since not every
-        /// caller wants a cursor overlay composited in - render_preview.cpp
+        /// only exposing compose_with_overlays below) since not every
+        /// caller wants the overlay composited in - render_preview.cpp
         /// and this class's own tests call it directly.
         const PixelBuffer &rasterize(const sk_sp<SkPicture> &picture, const Scene &scene)
         {
@@ -288,31 +323,39 @@ namespace le
 
         /// @brief Composites the design picture's cached, already-rasterized
         /// frame (from rasterize_frame - the expensive step for a large
-        /// design) with the cheap cursor-overlay picture (see
-        /// build_cursor_picture) into one final RGBA8888 buffer, without
+        /// design) with the cheap mouse-overlay picture (see
+        /// build_overlay_picture) into one final RGBA8888 buffer, without
         /// re-rasterizing the design's own vector content on every call.
         /// Reuses the design's cached raster surface via a cheap SkImage
         /// snapshot + blit (`SkCanvas::drawImage`, a bitmap copy - not a
         /// re-walk of the design's draw ops) rather than recording both
         /// pictures into one fresh canvas, which would re-execute every
-        /// shape's draw calls again on every mouse move. `cursor_picture`
+        /// shape's draw calls again on every mouse move. `overlay_picture`
         /// is drawn through the same whole-canvas Y-flip rasterize_frame
         /// applies to the design (translate + scale(1,-1) - see its own
-        /// comment for why that flip exists), since build_cursor_picture
+        /// comment for why that flip exists), since build_overlay_picture
         /// records pre-flip pixel-space coordinates, the same convention
         /// build_picture's own shapes use.
         ///
-        /// Cached on all four of AbstractId/viewport_version/
-        /// visibility_version/mouse_version - unlike rasterize_frame's own
-        /// cache, a mouse-only change *does* invalidate this entry, but
-        /// recomputing it only costs one full-viewport image blit plus the
-        /// tiny cursor picture, not anything proportional to design
-        /// complexity - this project's answer to UPDATES.md 5.2's own
-        /// flagged perf concern (a naive single-picture-per-frame design
-        /// would re-rasterize the whole design on every mouse-move event).
-        const PixelBuffer &compose_with_cursor(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &cursor_picture, const Scene &scene)
+        /// Cached on all five of AbstractId/viewport_version/
+        /// visibility_version/selection_version/mouse_version - a
+        /// superset of rasterize_frame's own key (selection_version
+        /// included here for the same reason it's in rasterize_frame's
+        /// key: `design_picture`'s content depends on it, and
+        /// CachedStage's key comparison is the only thing that decides
+        /// whether to recompute - it never inspects `design_picture`
+        /// itself, so a key that doesn't change would silently return a
+        /// stale composited buffer even though a *different* picture was
+        /// passed in). A mouse-only change *does* invalidate this entry,
+        /// but recomputing it only costs one full-viewport image blit
+        /// plus the tiny overlay picture, not anything proportional to
+        /// design complexity - this project's answer to UPDATES.md 5.2's
+        /// own flagged perf concern (a naive single-picture-per-frame
+        /// design would re-rasterize the whole design on every
+        /// mouse-move event).
+        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &overlay_picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version(), scene.mouse_version()};
             return composed_.get(key, [&]
                                  {
                 const RasterizedFrame &design_frame = rasterize_frame(design_picture, scene);
@@ -334,7 +377,7 @@ namespace le
 
                 canvas->translate(0, static_cast<SkScalar>(height));
                 canvas->scale(1, -1);
-                canvas->drawPicture(cursor_picture);
+                canvas->drawPicture(overlay_picture);
 
                 SkPixmap pixmap;
                 surface->peekPixels(&pixmap);
@@ -355,7 +398,7 @@ namespace le
         // to make cache hits/misses observable in tests.
         uint64_t transform_calls() const { return pixel_shapes_.call_count(); }
         uint64_t picture_calls() const { return picture_.call_count(); }
-        uint64_t cursor_picture_calls() const { return cursor_picture_.call_count(); }
+        uint64_t overlay_picture_calls() const { return overlay_picture_.call_count(); }
         uint64_t rasterize_calls() const { return rasterized_.call_count(); }
         uint64_t compose_calls() const { return composed_.call_count(); }
 
@@ -469,6 +512,38 @@ namespace le
         static constexpr Color kCursorBoxColor = {255, 0, 0, 255};
         static constexpr float kCursorBoxStrokeWidth = 1.0f;
         static constexpr float kCursorBoxSizePx = 7.0f;
+
+        // Hover outline (UPDATES.md 7.1 item 1) - opaque yellow, distinct
+        // from the grid/origin marker/cursor box colors above. Traces the
+        // actual geometry of the hovered piece (see draw_hover_outline),
+        // so unlike the cursor box/origin marker this isn't a fixed
+        // on-screen size - it scales with the shape like real geometry.
+        static constexpr Color kHoverOutlineColor = {255, 255, 0, 255};
+        static constexpr float kHoverOutlineStrokeWidth = 2.0f;
+
+        // Selection outline (UPDATES.md 7) - opaque white, distinct from
+        // every other overlay color above (and from every layer's own
+        // default palette color, none of which are pure white). Unlike
+        // hover (one piece only), every piece belonging to a selected
+        // Terminal/Obstruction is outlined - once an object is actually
+        // selected, the whole thing reads as selected, not just whichever
+        // piece happened to be under the cursor at click time.
+        static constexpr Color kSelectionOutlineColor = {255, 255, 255, 255};
+        static constexpr float kSelectionOutlineStrokeWidth = 2.0f;
+        // A selected Path is stroked in white at its own width plus this
+        // margin on each side (not just retraced at the same width) so it
+        // reads as a highlighted halo rather than simply recoloring the
+        // wire white.
+        static constexpr float kSelectionPathHaloMarginPx = 2.0f;
+
+        // Rubber-band drag-select rectangle (UPDATES.md 7.1 item 5) - a
+        // translucent fill so covered shapes stay visible underneath, plus
+        // a solid stroke for a crisp edge. Blue, a color family not
+        // already used by the grid/origin marker/cursor box/hover outline
+        // above.
+        static constexpr Color kDragRectFillColor = {80, 160, 255, 60};
+        static constexpr Color kDragRectStrokeColor = {80, 160, 255, 220};
+        static constexpr float kDragRectStrokeWidth = 2.0f;
 
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
@@ -729,6 +804,104 @@ namespace le
             canvas.drawRect(rect, paint);
         }
 
+        // Draws the hover outline (UPDATES.md 7.1 item 1) - a yellow
+        // stroke around `hover.outline`'s own geometry, in the same
+        // pre-flip pixel space as draw_grid/draw_cursor/draw_origin_marker
+        // (not PixelShape's already-transformed space - `hover.outline`
+        // is dbu-space, copied straight from a RenderedShape by
+        // Pipeline::hit_test_point). Rects/polygons are stroked along
+        // their own boundary; paths are stroked along their *buffered*
+        // outline (Geometry::path_to_polygons), matching exactly what
+        // Geometry::contains itself tested against, so the highlight
+        // traces what's actually clickable, not an invisible centerline.
+        static void draw_hover_outline(SkCanvas &canvas, const Scene &scene, const HoverTarget &hover)
+        {
+            const double scale = scene.scale();
+            if (scale <= 0.0)
+                return;
+
+            const Point pan = scene.pan();
+            auto to_pixel = [&](const Point &p)
+            {
+                return SkPoint::Make(
+                    static_cast<SkScalar>((static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale),
+                    static_cast<SkScalar>((static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale));
+            };
+
+            SkPaint paint;
+            paint.setAntiAlias(true);
+            paint.setStyle(SkPaint::kStroke_Style);
+            paint.setStrokeWidth(kHoverOutlineStrokeWidth);
+            paint.setColor(to_sk_color(kHoverOutlineColor));
+
+            auto stroke_polygon = [&](const Polygon &polygon)
+            {
+                if (polygon.points.empty())
+                    return;
+
+                SkPathBuilder builder;
+                builder.moveTo(to_pixel(polygon.points.front()));
+                for (size_t i = 1; i < polygon.points.size(); ++i)
+                    builder.lineTo(to_pixel(polygon.points[i]));
+                builder.close();
+                canvas.drawPath(builder.detach(), paint);
+            };
+
+            for (const auto &rect : hover.outline.rects)
+                stroke_polygon(Geometry::rect_to_polygon(rect));
+
+            for (const auto &polygon : hover.outline.polygons)
+                stroke_polygon(polygon);
+
+            for (const auto &path : hover.outline.paths)
+                for (const auto &buffered : Geometry::path_to_polygons(path))
+                    stroke_polygon(buffered);
+        }
+
+        // Draws the live rubber-band drag-select rectangle (UPDATES.md
+        // 7.1 item 5), in the same pre-flip pixel space as
+        // draw_grid/draw_cursor/draw_hover_outline. No-op if no drag is
+        // in progress or no mouse position has been set yet (see
+        // Scene::drag_rect_dbu) - the same rect le_mouse_up will
+        // eventually hit-test against (Pipeline::hit_test_rect), so what
+        // the user sees while dragging matches what actually gets
+        // selected on release.
+        static void draw_drag_rect(SkCanvas &canvas, const Scene &scene)
+        {
+            const double scale = scene.scale();
+            if (scale <= 0.0)
+                return;
+
+            const std::optional<Rect> drag_rect = scene.drag_rect_dbu();
+            if (!drag_rect)
+                return;
+
+            const Point pan = scene.pan();
+            auto to_pixel = [&](const Point &p)
+            {
+                return SkPoint::Make(
+                    static_cast<SkScalar>((static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale),
+                    static_cast<SkScalar>((static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale));
+            };
+
+            const SkRect rect = SkRect::MakeLTRB(
+                to_pixel(drag_rect->ll).x(), to_pixel(drag_rect->ll).y(),
+                to_pixel(drag_rect->ur).x(), to_pixel(drag_rect->ur).y());
+
+            SkPaint fill;
+            fill.setAntiAlias(true);
+            fill.setStyle(SkPaint::kFill_Style);
+            fill.setColor(to_sk_color(kDragRectFillColor));
+            canvas.drawRect(rect, fill);
+
+            SkPaint stroke;
+            stroke.setAntiAlias(true);
+            stroke.setStyle(SkPaint::kStroke_Style);
+            stroke.setStrokeWidth(kDragRectStrokeWidth);
+            stroke.setColor(to_sk_color(kDragRectStrokeColor));
+            canvas.drawRect(rect, stroke);
+        }
+
         // Draws an X spanning `bounds` - CUT layers' FillPattern::CROSS,
         // drawn directly rather than tiled since CUT geometry (vias) is
         // almost always one small rect per shape, not a large area a
@@ -862,11 +1035,53 @@ namespace le
             }
         }
 
+        // Draws a white outline around every piece of `shape` (UPDATES.md
+        // 7) - rects/polygons stroked along their own boundary; paths
+        // stroked along their centerline at their own width plus a margin
+        // on each side (kSelectionPathHaloMarginPx), so a selected wire
+        // reads as highlighted rather than simply recolored white. Called
+        // once per selected PixelShape, in a pass that runs after every
+        // group has already been drawn (see build_picture) so the
+        // outline is never obscured by a shape on a higher layer.
+        static void draw_selection_outline(SkCanvas &canvas, const PixelShape &shape)
+        {
+            SkPaint stroke;
+            stroke.setAntiAlias(true);
+            stroke.setStyle(SkPaint::kStroke_Style);
+            stroke.setStrokeWidth(kSelectionOutlineStrokeWidth);
+            stroke.setColor(to_sk_color(kSelectionOutlineColor));
+
+            for (const auto &r : shape.rects)
+            {
+                const SkRect rect = SkRect::MakeLTRB(static_cast<SkScalar>(r.ll.x), static_cast<SkScalar>(r.ll.y),
+                                                      static_cast<SkScalar>(r.ur.x), static_cast<SkScalar>(r.ur.y));
+                canvas.drawRect(rect, stroke);
+            }
+
+            for (const auto &poly : shape.polygons)
+                canvas.drawPath(to_sk_path(poly, /*close=*/true), stroke);
+
+            if (!shape.paths.empty())
+            {
+                SkPaint halo;
+                halo.setAntiAlias(true);
+                halo.setStyle(SkPaint::kStroke_Style);
+                halo.setStrokeCap(SkPaint::kButt_Cap);
+                halo.setColor(to_sk_color(kSelectionOutlineColor));
+
+                for (const auto &p : shape.paths)
+                {
+                    halo.setStrokeWidth(static_cast<SkScalar>(p.width) + 2.0f * kSelectionPathHaloMarginPx);
+                    canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), halo);
+                }
+            }
+        }
+
         // Bundles the PixelBuffer view together with the raster surface
         // that owns its backing memory, so the CachedStage below keeps
         // that memory alive for as long as the cache entry is valid -
         // PixelBuffer itself holds no ownership, just a view into this.
-        // Also what makes compose_with_cursor's cheap image-snapshot reuse
+        // Also what makes compose_with_overlays's cheap image-snapshot reuse
         // possible - the surface has to still be alive to snapshot it.
         struct RasterizedFrame
         {
@@ -875,7 +1090,7 @@ namespace le
         };
 
         /// @brief The actual rasterize implementation - `rasterize()` and
-        /// `compose_with_cursor()` are both thin callers, the latter using
+        /// `compose_with_overlays()` are both thin callers, the latter using
         /// the returned RasterizedFrame's `surface` directly (not just its
         /// `buffer`) to snapshot it cheaply rather than re-drawing
         /// `picture`. dbu-space y increases upward (physical layout
@@ -913,9 +1128,22 @@ namespace le
         /// e.g. render_preview.cpp's defensive check): it's documented to
         /// always succeed for a surface this function itself just created
         /// via `SkSurfaces::Raster`.
+        ///
+        /// Cache key is `{AbstractId, viewport_version, visibility_version,
+        /// selection_version}` - every one of `picture`'s own upstream
+        /// triggers (`build_picture`'s cache key exactly). This has to be
+        /// kept in sync with `build_picture`'s key by hand: CachedStage's
+        /// `get` only ever compares the key tuple, never `picture` itself,
+        /// so if `picture`'s content can change for a reason this key
+        /// doesn't capture, this returns a stale frame for a *different*
+        /// picture than the one just passed in - exactly what happened
+        /// before `selection_version` was added here (build_picture
+        /// correctly recomputed a new SkPicture with the selection
+        /// outline baked in, but this cache still matched on the old key
+        /// and returned the pre-selection rasterized bytes).
         const RasterizedFrame &rasterize_frame(const sk_sp<SkPicture> &picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
             return rasterized_.get(key, [&]
                                    {
                 const int width = scene.viewport_width_px();
@@ -956,9 +1184,9 @@ namespace le
         }
 
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
-        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> cursor_picture_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };
 }

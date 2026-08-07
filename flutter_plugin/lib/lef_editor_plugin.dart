@@ -6,6 +6,19 @@ import 'package:flutter/services.dart';
 
 import 'lef_editor_plugin_bindings_generated.dart';
 
+/// Re-exported so callers of [LeEditor.keyDown]/[LeEditor.keyUp]/
+/// [LeEditor.isKeyHeld] can reference key codes (e.g.
+/// `LeKeyCode.LE_KEY_SHIFT`) without importing the generated bindings
+/// file themselves - it's a plain generated enum (no ffi.Struct/native
+/// pointer involved), so unlike `LePixelBuffer`/`LeLibraryId`/etc. there's
+/// no need to wrap it in a hand-written type first.
+export 'lef_editor_plugin_bindings_generated.dart' show LeKeyCode;
+
+/// Re-exported so callers get the pointer/key convenience layer
+/// (handlePointerEvent/handleKeyEvent) from the same import used for
+/// LeEditor itself - see lef_editor_input.dart.
+export 'lef_editor_input.dart' show LeEditorInput;
+
 const String _libName = 'lef_editor_plugin';
 
 /// Method channel used only to hand a texture id back and forth with
@@ -512,17 +525,22 @@ class LeEditor {
   /// Sets the current mouse position, in the same pixel space as
   /// [renderPixelBuffer]'s output (top-left origin, y increasing downward)
   /// and [zoom]'s x/y - feed straight from a pointer-move event. Drives
-  /// the grid-snap indicator box [renderPixelBuffer] draws. Cheap to call
-  /// on every pointer-move event - it does not invalidate the
-  /// (potentially design-sized) rasterized design cache, only the small
-  /// cursor overlay.
+  /// the grid-snap indicator box [renderPixelBuffer] draws, and updates
+  /// which selectable shape (if any) is hovered - drawn with a yellow
+  /// outline - via a hit-test against the shapes currently on screen.
+  /// Never invalidates the (potentially design-sized) rasterized design
+  /// cache, only the small overlay picture, but the hit-test itself is
+  /// bounded by the number of shapes currently visible (already
+  /// viewport-culled), not the whole design - see backend/BENCHMARKS.md
+  /// for measured cost on a large design.
   void setMousePosition(int x, int y) {
     _checkNotDisposed();
     _bindings.le_set_mouse_position(_handle, x, y);
   }
 
   /// Clears the current mouse position (e.g. on a pointer-leave event) so
-  /// the grid-snap indicator box stops showing at the last known position.
+  /// the grid-snap indicator box and any hover outline stop showing at/for
+  /// the last known position.
   void clearMousePosition() {
     _checkNotDisposed();
     _bindings.le_clear_mouse_position(_handle);
@@ -538,6 +556,71 @@ class LeEditor {
     final result = _bindings.le_snapped_mouse_position(_handle);
     if (result.has_position == 0) return null;
     return LeSnappedMouse(xUm: result.x_um, yUm: result.y_um);
+  }
+
+  /// Marks [keyCode] as currently held, e.g. on a key-down event - queried
+  /// internally by gesture commands (e.g. [mouseUp]'s shift-click/
+  /// shift-drag behavior).
+  void keyDown(LeKeyCode keyCode) {
+    _checkNotDisposed();
+    _bindings.le_key_down(_handle, keyCode.value);
+  }
+
+  /// Marks [keyCode] as no longer held, e.g. on a key-up event.
+  void keyUp(LeKeyCode keyCode) {
+    _checkNotDisposed();
+    _bindings.le_key_up(_handle, keyCode.value);
+  }
+
+  /// Whether [keyCode] is currently held (see [keyDown]).
+  bool isKeyHeld(LeKeyCode keyCode) {
+    _checkNotDisposed();
+    return _bindings.le_is_key_held(_handle, keyCode.value) != 0;
+  }
+
+  /// Clears every currently-held key at once - call when the widget
+  /// receiving key events loses focus (e.g. a `Focus` widget's
+  /// `onFocusChange(false)`, see `LeEditorInput`/the example app). A
+  /// key's matching key-up event is not guaranteed to still reach a
+  /// widget that no longer has focus by the time the physical key is
+  /// released, so without calling this on a focus loss, a modifier held
+  /// at that moment stays "held" indefinitely - silently turning every
+  /// later plain click into a shift-click until that same key happens to
+  /// be pressed and released again while focused.
+  void clearAllKeys() {
+    _checkNotDisposed();
+    _bindings.le_clear_all_keys(_handle);
+  }
+
+  /// Begins a mouse gesture at [x]/[y] (same pixel space as
+  /// [setMousePosition]/[zoom]), e.g. on a pointer-down event. Records the
+  /// gesture's anchor point; [mouseUp] later decides whether the gesture
+  /// was a click or a rubber-band drag-select by comparing the down/up
+  /// pixel distance against a small threshold.
+  void mouseDown(int x, int y) {
+    _checkNotDisposed();
+    _bindings.le_mouse_down(_handle, x, y);
+  }
+
+  /// Ends a mouse gesture at [x]/[y], e.g. on a pointer-up event. A no-op
+  /// if there was no matching [mouseDown] call first. Click (small down/up
+  /// distance) hit-tests the single point; drag-select (larger distance)
+  /// hit-tests every selectable shape on every layer fully enclosed by the
+  /// down/up rectangle - either way, replaces the current selection unless
+  /// [LeKeyCode.LE_KEY_SHIFT] is currently held ([isKeyHeld]), in which
+  /// case the results are added to it instead.
+  void mouseUp(int x, int y) {
+    _checkNotDisposed();
+    _bindings.le_mouse_up(_handle, x, y);
+  }
+
+  /// Number of currently selected objects. A minimal placeholder ahead of
+  /// a fuller selection-results API - exists so [mouseDown]/[mouseUp]'s
+  /// selection behavior is independently observable, not a preview of a
+  /// richer API to come.
+  int get selectionCount {
+    _checkNotDisposed();
+    return _bindings.le_selection_count(_handle);
   }
 
   /// Runs the full pipeline+render chain for the currently selected Design
@@ -612,8 +695,8 @@ class LeEditor {
 /// Renderer aren't documented as thread-safe (see backend/CLAUDE.md), so a
 /// [LeEditor] setter (`zoom`/`pan`/`setViewportSize`/`fitScene`/
 /// `minorGridSpacing`/`majorGridSpacing`/`setMousePosition`/
-/// `clearMousePosition`/`setCurrentDesign`/`readLef`) racing a pending,
-/// not-yet-rendered
+/// `clearMousePosition`/`keyDown`/`keyUp`/`mouseDown`/`mouseUp`/
+/// `setCurrentDesign`/`readLef`) racing a pending, not-yet-rendered
 /// [markFrameAvailable] is a genuine data race, not just a hypothetical
 /// one. Not solved at this layer - a real fix needs a lock inside the C
 /// API itself, guarding every `le_*` call on a handle regardless of which

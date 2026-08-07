@@ -155,6 +155,35 @@ static void BM_RunReused_VisibilityOnly(benchmark::State &state)
 }
 BENCHMARK(BM_RunReused_VisibilityOnly)->Unit(benchmark::kMillisecond);
 
+// UPDATES.md 7.1's mouse-hover feature calls Pipeline::hit_test_point on
+// every pointer-move event (see le_set_mouse_position in api.cpp) - unlike
+// the stages above, it's not CachedStage-backed (the query point changes
+// every call), so its real per-call cost matters directly, not just its
+// cold-vs-warm delta. Measures a worst-case miss (scans every visible
+// shape without ever finding a hit, since a real hit could short-circuit
+// early) at the center of make_scene's own visible viewport - the
+// candidate set is already viewport-culled/visibility-filtered by `run`,
+// not the full kTotalShapes design, which is the whole point of bounding
+// hit-testing to on-screen shapes rather than a full design scan.
+static void BM_HitTestPoint(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+
+    Pipeline setup;
+    const auto &shapes = setup.run(data.root, scene, data.view_layers);
+
+    const Point query{50'000'000, 50'000'000}; // center of make_scene's visible [0, 100,000,000) range
+
+    for (auto _ : state)
+    {
+        const auto hit = Pipeline::hit_test_point(shapes, data.view_layers, scene, query);
+        const auto *hit_ptr = &hit;
+        benchmark::DoNotOptimize(hit_ptr);
+    }
+}
+BENCHMARK(BM_HitTestPoint)->Unit(benchmark::kMicrosecond);
+
 // render module benchmarks - Renderer also caches internally per-instance
 // (see render.hpp), so isolated-stage benchmarks need a fresh Renderer per
 // iteration too, same reasoning as the Pipeline benchmarks above.

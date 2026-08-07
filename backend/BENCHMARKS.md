@@ -233,3 +233,50 @@ isolated benchmark and the reused one aren't quite apples-to-apples (fixed
 vs. varying pan value → different surviving shape counts each iteration).
 Not chased further — flagged prominently here and in README's reopened
 Threading question instead.
+
+## 2026-08-07 — Pipeline::hit_test_point (UPDATES.md 7.1 mouse hover)
+
+Unlike every stage above, `hit_test_point` isn't `CachedStage`-backed —
+it's called fresh on *every* pointer-move event (`le_set_mouse_position`
+in api.cpp), against the already viewport-culled/visibility-filtered
+shape set `Pipeline::run` produces, not the full 1M-shape design. The
+concern this benchmark was written to settle: is bounding the candidate
+set to on-screen shapes alone enough, or does per-candidate geometry cost
+also need optimizing?
+
+`BM_HitTestPoint` measures a worst-case miss (scans every visible
+candidate without ever finding a hit) at the center of the stress scene's
+visible viewport (`make_scene`'s own `[0, 100,000,000)` dbu range on each
+axis, roughly a quarter of the design's ~250K on-screen candidates after
+viewport culling and the M2-layer-hidden visibility filter).
+
+| Version | `BM_HitTestPoint` |
+| --- | --- |
+| Naive `Geometry::contains` (no bbox pre-check) | 16.9 ms |
+| With a cheap bbox pre-check before `bg::within`/`path_to_polygons` | **60.0 µs** |
+
+Bounding the candidate set to on-screen shapes alone was **not** enough -
+16.9ms/call would cap interactive hover responsiveness well below 60fps,
+confirmed by direct comparison against `BM_RunReused_PanOnly`'s 9.76ms
+(the cost of re-filtering the *entire* shape set on every viewport
+change) elsewhere in this file: hit-testing on every mouse pixel move was
+costing *more* than a full pipeline re-filter that only happens on
+pan/zoom. Root cause: `Geometry::contains` called `path_to_polygons`
+(a real Boost.Geometry buffer operation) on every visible path-shaped
+candidate regardless of whether the query point was anywhere near it -
+about a third of the stress design's shapes are paths.
+
+Fix: `Geometry::contains` now checks each polygon/path's own bbox first
+(a handful of integer comparisons, reusing the existing private
+`bbox_of` helper) and only falls through to `bg::within`/
+`path_to_polygons` if that cheap check passes - rects were already this
+cheap. 280x faster, comfortably under the frame budget, so the naive
+linear-scan design (bounded to on-screen shapes) stands without needing
+a spatial index - confirming the plan's "benchmark before optimizing
+further" approach rather than building an R-tree speculatively.
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_COVERAGE=OFF
+cmake --build build --target pipeline_benchmarks
+./build/pipeline_benchmarks --benchmark_filter=BM_HitTestPoint --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
+```

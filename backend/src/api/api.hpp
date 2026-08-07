@@ -363,16 +363,22 @@ extern "C"
     /// le_render_pixel_buffer()'s output image (top-left origin, y
     /// increasing downward) and le_zoom()'s x/y - meant to be fed straight
     /// from a pointer-move event. Drives the grid-snap indicator box drawn
-    /// by le_render_pixel_buffer() (see Renderer::draw_cursor) - a no-op
-    /// if handle is null. Cheap to call on every pointer-move event: it
-    /// does not invalidate the (potentially design-sized) rasterized
-    /// design cache, only the small cursor overlay - see
-    /// Renderer::compose_with_cursor.
+    /// by le_render_pixel_buffer() (see Renderer::draw_cursor), and
+    /// updates which selectable shape (if any) is hovered (UPDATES.md
+    /// 7.1 item 1 - Renderer::draw_hover_outline draws its yellow
+    /// outline) via a hit-test against the shapes currently on screen. A
+    /// no-op if handle is null. Never invalidates the (potentially
+    /// design-sized) rasterized design cache - only the small overlay
+    /// picture, see Renderer::compose_with_overlays - but unlike before
+    /// hover was added, this is no longer O(1): the hit-test is bounded
+    /// by the number of shapes currently visible (already viewport-culled
+    /// by Pipeline), not the whole design. See BENCHMARKS.md for measured
+    /// cost on a 1M-shape design.
     void le_set_mouse_position(LeHandle *handle, int32_t x, int32_t y);
 
     /// @brief Clear the current mouse position (e.g. on a pointer-leave
-    /// event) so the grid-snap indicator box stops showing at the last
-    /// known position. A no-op if handle is null.
+    /// event) so the grid-snap indicator box and any hover outline stop
+    /// showing at/for the last known position. A no-op if handle is null.
     void le_clear_mouse_position(LeHandle *handle);
 
     /// @brief The current mouse position's coordinates in microns, snapped
@@ -384,6 +390,118 @@ extern "C"
     /// position set, no Technology read yet).
     LeSnappedMousePosition le_snapped_mouse_position(LeHandle *handle);
 
+    /// @brief Named logical keys this API tracks the held/released state
+    /// of via le_key_down()/le_key_up() - stable across platforms, so
+    /// this API's meaning doesn't depend on OS/Flutter scan codes; the
+    /// frontend maps its own key values to these before calling in.
+    /// Extend as future commands need to know about more keys (UPDATES.md
+    /// 7's other interaction modes will need their own shortcuts).
+    ///
+    /// LE_KEY_ZOOM/LE_KEY_FIT/LE_KEY_PAN_* are canvas-navigation
+    /// commands, not modifiers - le_key_down() triggers the
+    /// corresponding action immediately (see its own doc comment) rather
+    /// than only recording held state. Frontends map a single physical
+    /// key to each regardless of shift (e.g. both "z" and "Z" - the same
+    /// LogicalKeyboardKey.keyZ in Flutter - map to LE_KEY_ZOOM); shift's
+    /// own held state (LE_KEY_SHIFT, tracked exactly like any other key)
+    /// decides zoom in vs. out, the same "backend reads modifier state
+    /// rather than the frontend pre-deciding" split as le_mouse_up's
+    /// shift-click/shift-drag.
+    enum LeKeyCode
+    {
+        LE_KEY_SHIFT = 1,
+        LE_KEY_ZOOM = 2,
+        LE_KEY_FIT = 3,
+        LE_KEY_PAN_LEFT = 4,
+        LE_KEY_PAN_RIGHT = 5,
+        LE_KEY_PAN_UP = 6,
+        LE_KEY_PAN_DOWN = 7,
+    };
+
+    /// @brief Mark `key_code` (an LeKeyCode value) as currently held,
+    /// e.g. on a key-down *or* key-repeat event - queried internally by
+    /// commands that care (e.g. le_mouse_up's shift-click/shift-drag
+    /// behavior). For the canvas-navigation codes (LE_KEY_ZOOM/
+    /// LE_KEY_FIT/LE_KEY_PAN_*), also triggers that action immediately,
+    /// once per call - so a held key that keeps re-delivering key-repeat
+    /// events (e.g. an arrow key auto-repeating) keeps panning/zooming
+    /// once per repeat, matching a real keyboard's own repeat behavior,
+    /// not a one-shot trigger on first press only:
+    ///
+    /// - LE_KEY_ZOOM: le_zoom() by a fixed factor, anchored at the
+    ///   current mouse position (Scene::mouse_x_px/mouse_y_px - i.e.
+    ///   wherever le_set_mouse_position was last called for); zooms in,
+    ///   or out if LE_KEY_SHIFT is currently held (le_is_key_held).
+    /// - LE_KEY_FIT: le_fit_scene() with a fixed padding.
+    /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
+    ///   viewport-fraction step in the corresponding direction.
+    ///
+    /// A no-op if handle is null.
+    void le_key_down(LeHandle *handle, int32_t key_code);
+
+    /// @brief Mark `key_code` as no longer held, e.g. on a key-up event.
+    /// A no-op if handle is null.
+    void le_key_up(LeHandle *handle, int32_t key_code);
+
+    /// @brief True (nonzero) if `key_code` is currently held (see
+    /// le_key_down). Returns 0 if handle is null.
+    int32_t le_is_key_held(LeHandle *handle, int32_t key_code);
+
+    /// @brief Clear every currently-held key at once - call when the
+    /// widget/window receiving key events loses focus (e.g. a Flutter
+    /// `Focus` widget's `onFocusChange(false)`). A key's matching
+    /// key-up event is not guaranteed to still reach a widget that no
+    /// longer has focus by the time the physical key is released, so
+    /// without calling this on a focus loss, a modifier (e.g. shift)
+    /// held at that moment stays "held" from this API's point of view
+    /// indefinitely - silently changing the behavior of every later
+    /// gesture that consults it (le_mouse_up's shift-click/shift-drag
+    /// decision) until that same key happens to be pressed and released
+    /// again while focused. A no-op if handle is null.
+    void le_clear_all_keys(LeHandle *handle);
+
+    /// @brief Begin a mouse gesture at the given pixel position (top-left
+    /// origin, y down - same convention as le_set_mouse_position/le_zoom),
+    /// e.g. on a pointer-down event. Records the gesture's anchor point;
+    /// le_mouse_up() later decides whether the gesture was a click or a
+    /// rubber-band drag-select by comparing the down/up pixel distance
+    /// against a small threshold (UPDATES.md 7.1 items 2-6). A no-op if
+    /// handle is null.
+    void le_mouse_down(LeHandle *handle, int32_t x, int32_t y);
+
+    /// @brief End a mouse gesture at the given pixel position, e.g. on a
+    /// pointer-up event. A no-op if handle is null or there was no
+    /// matching le_mouse_down() call first (a stray/duplicate mouse-up).
+    /// Two outcomes, both subject to Pipeline::hit_test_point/
+    /// hit_test_rect's own topmost-layer-first (click) / all-layers
+    /// (drag) and layer-selectability rules, and both consulting
+    /// LE_KEY_SHIFT's current held state (see le_key_down) rather than
+    /// taking it as a parameter here:
+    ///
+    /// - **Click** (down/up pixel distance below a small threshold): hit-
+    ///   tests the single point. Without shift held, replaces the
+    ///   current selection with the hit shape, or clears it if nothing
+    ///   was hit; with shift held, adds the hit to the current selection
+    ///   (a no-op if nothing was hit).
+    /// - **Drag-select** (distance above the threshold): hit-tests every
+    ///   selectable shape, on every layer, fully enclosed by the
+    ///   rectangle between the down and up points. Without shift held,
+    ///   replaces the current selection with the results; with shift
+    ///   held, adds them to it.
+    ///
+    /// Either way, ends the in-progress drag gesture (Scene::end_drag) -
+    /// see le_mouse_down's own doc comment for the live rubber-band
+    /// rectangle this also stops showing.
+    void le_mouse_up(LeHandle *handle, int32_t x, int32_t y);
+
+    /// @brief Number of currently selected objects (Scene::selection()).
+    /// A minimal placeholder ahead of UPDATES.md 7.2's own fuller
+    /// selection-results API (each selected object's properties) - exists
+    /// purely so le_mouse_down/le_mouse_up's selection behavior is
+    /// independently observable/testable now, not a preview of that
+    /// richer API. Returns 0 if handle is null.
+    int32_t le_selection_count(LeHandle *handle);
+
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently
     /// selected Design and viewport, returning the resulting pixel
@@ -393,7 +511,7 @@ extern "C"
     /// this again with nothing changed since the last call is close to
     /// free; only viewport/selection/mouse-position changes actually
     /// recompute, and a mouse-position-only change is itself cheap (see
-    /// Renderer::compose_with_cursor), not proportional to design size.
+    /// Renderer::compose_with_overlays), not proportional to design size.
     /// Returns an all-zero/null LePixelBuffer if handle is null. No
     /// Design selected (le_set_current_design was never called) degrades
     /// gracefully to an empty (but correctly-sized, non-null) buffer

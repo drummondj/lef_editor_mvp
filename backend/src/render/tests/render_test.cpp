@@ -3,6 +3,7 @@
 #include "include/core/SkColor.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkSurface.h"
+#include <array>
 #include <gtest/gtest.h>
 
 using namespace le;
@@ -311,6 +312,147 @@ TEST_F(RenderFixture, BuildPictureSkipsShapesWithUnresolvedViewLayer)
     EXPECT_EQ(SkColorGetA(pixel), 0); // nothing drawn - no style to draw it with
 }
 
+TEST_F(RenderFixture, BuildPictureDrawsWhiteOutlineAroundASelectedShape)
+{
+    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    // Rect (10,10)-(30,30) at pan(0,0)/scale 1.0 -> same pixel coords.
+    // Selection outline stroke (2px, centered on the boundary) fully
+    // covers pixel column 9 (continuous [9,10) within the [9,11] band).
+    const SkColor edge = sample_pixel(picture, 100, 100, 9, 20);
+    EXPECT_EQ(SkColorGetR(edge), 255);
+    EXPECT_EQ(SkColorGetG(edge), 255);
+    EXPECT_EQ(SkColorGetB(edge), 255);
+    EXPECT_GT(SkColorGetA(edge), 200);
+}
+
+TEST_F(RenderFixture, BuildPictureHasNoSelectionOutlineWhenNothingIsSelected)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    const SkColor edge = sample_pixel(picture, 100, 100, 9, 20);
+    EXPECT_FALSE(SkColorGetR(edge) == 255 && SkColorGetG(edge) == 255 && SkColorGetB(edge) == 255);
+}
+
+TEST_F(RenderFixture, BuildPictureOutlinesEveryPieceOfASelectedTerminalNotJustOne)
+{
+    // Unlike hover (which isolates a single piece - see UPDATES.md 7.1's
+    // own bugfix), selecting a Terminal highlights the whole object: two
+    // separate Ports' own Shapes (not merged together, since
+    // merge_overlapping_fills only combines rects/polygons *within* one
+    // Shape) both outline when their shared Terminal is selected.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}}});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    auto is_white = [&](int x, int y)
+    {
+        const SkColor c = sample_pixel(picture, 100, 100, x, y);
+        return SkColorGetR(c) == 255 && SkColorGetG(c) == 255 && SkColorGetB(c) == 255 && SkColorGetA(c) > 200;
+    };
+
+    EXPECT_TRUE(is_white(9, 20));  // first rect's left edge
+    EXPECT_TRUE(is_white(59, 70)); // second rect's left edge
+}
+
+TEST_F(RenderFixture, BuildPictureReusesCacheUntilSelectionVersionChanges)
+{
+    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    EXPECT_EQ(renderer.picture_calls(), 1u);
+
+    scene.select(terminal_id);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    EXPECT_EQ(renderer.picture_calls(), 2u);
+}
+
+TEST_F(RenderFixture, RasterizeReflectsASelectionChangeEvenWhenRasterizedOnceBefore)
+{
+    // Regression: build_picture correctly produces a new SkPicture when
+    // the selection changes (see BuildPictureReusesCacheUntilSelectionVersionChanges),
+    // but rasterize()/rasterize_frame()'s own cache used to be keyed only
+    // on {AbstractId, viewport_version, visibility_version} - CachedStage
+    // never inspects the `picture` argument itself, only the key, so
+    // rasterizing once *before* selecting anything (warming that cache),
+    // then again after selecting, returned the pre-selection bytes
+    // unchanged even though a different (correct) SkPicture was passed
+    // the second time. This is exactly the "I select things but never
+    // see a white outline" bug report this test guards against.
+    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    auto render_and_sample_edge = [&]
+    {
+        const auto &shapes = pipeline.run(root, scene, view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+        const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+        // rasterize() Y-flips: pre-flip rect (10,10)-(30,30) at
+        // pan(0,0)/scale 1.0 ends up at device rows [100-30,100-10] =
+        // [70,90] - column 9 (unaffected by the flip) is still the left
+        // edge's own fully-covered stroke column.
+        const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
+        return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
+    };
+
+    const auto before = render_and_sample_edge(); // warms rasterize_frame's cache with no selection
+    scene.select(terminal_id);
+    const auto after = render_and_sample_edge();
+
+    EXPECT_NE(before, after);
+    EXPECT_EQ(after[0], 255);
+    EXPECT_EQ(after[1], 255);
+    EXPECT_EQ(after[2], 255);
+    EXPECT_GT(after[3], 200);
+}
+
 TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
 {
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
@@ -452,7 +594,7 @@ TEST_F(RenderFixture, BuildPictureOmitsOriginMarkerWhenNoAbstractIsSelected)
     EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 5, 5)), 0);
 }
 
-TEST_F(RenderFixture, BuildCursorPictureDrawsAFixedSizeBoxCenteredOnTheSnappedMousePosition)
+TEST_F(RenderFixture, BuildOverlayPictureDrawsAFixedSizeBoxCenteredOnTheSnappedMousePosition)
 {
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -471,13 +613,13 @@ TEST_F(RenderFixture, BuildCursorPictureDrawsAFixedSizeBoxCenteredOnTheSnappedMo
     // covered.
     scene.set_mouse_position(40, 40);
 
-    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
 
-    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 36, 60)), 0); // left edge of the fixed-size box
-    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 40, 60)), 0); // interior (stroke only, no fill) - where the grid dot itself shows through
+    EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 36, 60)), 0); // left edge of the fixed-size box
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 40, 60)), 0); // interior (stroke only, no fill) - where the grid dot itself shows through
 }
 
-TEST_F(RenderFixture, BuildCursorPictureBoxStaysFixedPixelSizeAtHighZoomInsteadOfBallooningWithTheGridCell)
+TEST_F(RenderFixture, BuildOverlayPictureBoxStaysFixedPixelSizeAtHighZoomInsteadOfBallooningWithTheGridCell)
 {
     // Regression: the box used to be sized in dbu-space (+-minor_spacing/2
     // around the snapped point), so at high zoom it ballooned along with
@@ -496,23 +638,23 @@ TEST_F(RenderFixture, BuildCursorPictureBoxStaysFixedPixelSizeAtHighZoomInsteadO
     // covered pixel (210,200); the new fixed-size box does not.
     scene.set_mouse_position(200, 200);
 
-    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
 
-    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 400, 400, 196, 200)), 0); // just inside the fixed box's edge
-    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 400, 400, 210, 200)), 0); // far outside the fixed box, but well within where the old dbu-sized box would have drawn
+    EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 400, 400, 196, 200)), 0); // just inside the fixed box's edge
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 400, 400, 210, 200)), 0); // far outside the fixed box, but well within where the old dbu-sized box would have drawn
 }
 
-TEST_F(RenderFixture, BuildCursorPictureIsEmptyWhenNoMousePositionSet)
+TEST_F(RenderFixture, BuildOverlayPictureIsEmptyWhenNoMousePositionSet)
 {
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_viewport_size(100, 100);
 
-    const auto &cursor_picture = renderer.build_cursor_picture(scene);
-    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 50, 50)), 0);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 50, 50)), 0);
 }
 
-TEST_F(RenderFixture, BuildCursorPictureDrawsEvenWhenTheMinorGridIsTooDenseToShowDots)
+TEST_F(RenderFixture, BuildOverlayPictureDrawsEvenWhenTheMinorGridIsTooDenseToShowDots)
 {
     // Unlike draw_grid's own dots (which hide below a density floor), the
     // mouse marker is meant to stay visible at all times regardless of
@@ -527,17 +669,111 @@ TEST_F(RenderFixture, BuildCursorPictureDrawsEvenWhenTheMinorGridIsTooDenseToSho
     // a multiple of the default 5dbu minor spacing, so it snaps to itself.
     scene.set_mouse_position(50, 50);
 
-    const auto &cursor_picture = renderer.build_cursor_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
 
-    EXPECT_GT(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 46, 50)), 0); // left edge of the fixed-size box
-    EXPECT_EQ(SkColorGetA(sample_pixel(cursor_picture, 100, 100, 50, 50)), 0); // interior (stroke only, no fill)
+    EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 46, 50)), 0); // left edge of the fixed-size box
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 50, 50)), 0); // interior (stroke only, no fill)
 }
 
-TEST_F(RenderFixture, ComposeWithCursorDoesNotReRasterizeDesignWhenOnlyMouseMoves)
+TEST_F(RenderFixture, BuildOverlayPictureDrawsHoverOutlineAroundTheHoveredShape)
 {
-    // This is the whole point of the design/cursor-picture split (see
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(100, 100);
+
+    Shape outline;
+    outline.rects.push_back(Rect{.ll = {10, 10}, .ur = {20, 20}});
+    scene.set_hover(HoverTarget{.origin = TerminalId{1, 0}, .outline = outline});
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+
+    // dbu rect (10,10)-(20,20) -> pixel (20,20)-(40,40) at this pan/scale
+    // (build_overlay_picture's own pre-flip pixel space). Sampled on the
+    // left edge, away from any corner.
+    const SkColor edge_color = sample_pixel(overlay_picture, 100, 100, 20, 30);
+    EXPECT_EQ(SkColorGetR(edge_color), 255);
+    EXPECT_EQ(SkColorGetG(edge_color), 255);
+    EXPECT_EQ(SkColorGetB(edge_color), 0);
+    EXPECT_GT(SkColorGetA(edge_color), 0);
+
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 30, 30)), 0); // interior - stroke only, no fill
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureHasNoHoverOutlineWhenNothingIsHovered)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_mouse_position(50, 50); // mouse set, but no hover target
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+
+    // Would show a yellow outline at this pixel if a stale hover target
+    // leaked through - nothing here, since scene.hover() is unset.
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 20, 30)), 0);
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureDrawsTheLiveDragRectangleWhileDragging)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(200, 200);
+
+    scene.begin_drag(40, 160);        // dbu (20, 20)
+    scene.set_mouse_position(160, 40); // dbu (80, 80)
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+
+    // Normalized drag rect dbu (20,20)-(80,80) -> pixel (40,40)-(160,160)
+    // at this pan/scale (build_overlay_picture's own pre-flip pixel
+    // space). Left edge stroke (2px, centered on x=40) spans continuous
+    // [39,41], so pixel column 39 is fully covered.
+    const SkColor edge = sample_pixel(overlay_picture, 200, 200, 39, 100);
+    EXPECT_GT(SkColorGetA(edge), 200);          // stroke is close to fully opaque
+    EXPECT_GT(SkColorGetB(edge), SkColorGetR(edge)); // blue-dominant
+
+    const SkColor interior = sample_pixel(overlay_picture, 200, 200, 100, 100);
+    EXPECT_GT(SkColorGetA(interior), 0);   // translucent fill present
+    EXPECT_LT(SkColorGetA(interior), 200); // clearly less opaque than the stroke - it's a fill, not a solid block
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureHasNoDragRectangleWhenNotDragging)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(200, 200);
+    scene.set_mouse_position(160, 40); // mouse set, but no drag in progress
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 200, 200, 100, 100)), 0);
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureHasNoDragRectangleWhileDraggingWithoutAMousePositionYet)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(200, 200);
+    scene.begin_drag(40, 160); // drag started, but set_mouse_position was never called
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 200, 200, 100, 100)), 0);
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMoves)
+{
+    // This is the whole point of the design/overlay-picture split (see
     // UPDATES.md 5.2's own flagged perf concern, and Renderer::
-    // compose_with_cursor's doc comment): a mouse-move must not force a
+    // compose_with_overlays's doc comment): a mouse-move must not force a
     // full re-rasterize of a potentially design-sized picture on every
     // pointer event, only the cheap composite step.
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
@@ -553,21 +789,62 @@ TEST_F(RenderFixture, ComposeWithCursorDoesNotReRasterizeDesignWhenOnlyMouseMove
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     scene.set_mouse_position(10, 10);
-    const auto &cursor_picture_1 = renderer.build_cursor_picture(scene);
-    renderer.compose_with_cursor(design_picture, cursor_picture_1, scene);
+    const auto &overlay_picture_1 = renderer.build_overlay_picture(scene);
+    renderer.compose_with_overlays(design_picture, overlay_picture_1, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
-    ASSERT_EQ(renderer.cursor_picture_calls(), 1u);
+    ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.compose_calls(), 1u);
 
     // Move the mouse only - viewport/visibility versions (and therefore
     // the design content itself) are untouched.
     scene.set_mouse_position(20, 20);
-    const auto &cursor_picture_2 = renderer.build_cursor_picture(scene);
-    renderer.compose_with_cursor(design_picture, cursor_picture_2, scene);
+    const auto &overlay_picture_2 = renderer.build_overlay_picture(scene);
+    renderer.compose_with_overlays(design_picture, overlay_picture_2, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
-    EXPECT_EQ(renderer.cursor_picture_calls(), 2u); // cheap cursor overlay did recompute
+    EXPECT_EQ(renderer.overlay_picture_calls(), 2u); // cheap overlay picture did recompute
     EXPECT_EQ(renderer.compose_calls(), 2u);        // cheap composite did recompute
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore)
+{
+    // Regression: le_render_pixel_buffer (api.cpp) calls exactly this
+    // build_picture -> build_overlay_picture -> compose_with_overlays
+    // chain - compose_with_overlays's own cache used to be keyed on
+    // {AbstractId, viewport_version, visibility_version, mouse_version},
+    // missing selection_version, so composing once before selecting
+    // (warming the cache) then again after selecting returned the
+    // pre-selection composited bytes unchanged, even with a correctly
+    // updated design_picture passed in both times.
+    const ObstructionId obstruction_id = add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    auto compose_and_sample_edge = [&]
+    {
+        const auto &shapes = pipeline.run(root, scene, view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+        // Same Y-flip as rasterize() - see RasterizeReflectsASelectionChangeEvenWhenRasterizedOnceBefore's comment.
+        const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
+        return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
+    };
+
+    const auto before = compose_and_sample_edge(); // warms compose_with_overlays's cache with no selection
+    scene.select(obstruction_id);
+    const auto after = compose_and_sample_edge();
+
+    EXPECT_NE(before, after);
+    EXPECT_EQ(after[0], 255);
+    EXPECT_EQ(after[1], 255);
+    EXPECT_EQ(after[2], 255);
+    EXPECT_GT(after[3], 200);
 }
 
 TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -18,6 +19,20 @@ namespace le
     // exists) become selectable.
     using SelectionRef = std::variant<TerminalId, ObstructionId>;
 
+    /// @brief The result of a point hit-test (UPDATES.md 7.1): which
+    /// selectable object was hit, plus a copy of the specific piece of
+    /// geometry that was actually hit (one RenderedShape's own Shape, not
+    /// the whole Terminal/Obstruction's combined geometry - hover
+    /// highlighting currently outlines just this piece; see
+    /// Pipeline::hit_test_point). Stored as a geometry copy (not just
+    /// `origin`) so Renderer can redraw the outline without needing Root
+    /// access.
+    struct HoverTarget
+    {
+        SelectionRef origin;
+        Shape outline;
+    };
+
     /// @brief Per-handle mutable view state: which Abstract is displayed,
     /// the viewport transform, per-layer visibility, and selection. Distinct
     /// from the persistent Root database - the pipeline reads from this,
@@ -26,7 +41,27 @@ namespace le
     {
     public:
         // --- Currently displayed Abstract ---
-        void set_current_abstract(AbstractId id) { current_abstract_ = id; }
+        // Switching Abstracts clears selection and hover - both hold
+        // TerminalId/ObstructionId values scoped to whichever Abstract
+        // they were selected/hovered in (they're plain {index,generation}
+        // pool handles, not namespaced by Abstract), so leaving them set
+        // after switching risks a stale reference that, at best, matches
+        // nothing in the new Abstract (id from the old one simply isn't
+        // present) and at worst - since Terminals/Obstructions across all
+        // Abstracts share the same underlying Pool - happens to collide
+        // with an unrelated object's reused pool slot in the new one,
+        // highlighting/selecting the wrong shape entirely. A no-op (no
+        // clear, no version bumps) if `id` is the same Abstract already
+        // displayed.
+        void set_current_abstract(AbstractId id)
+        {
+            if (id == current_abstract_)
+                return;
+
+            current_abstract_ = id;
+            clear_selection();
+            clear_hover();
+        }
         AbstractId current_abstract() const { return current_abstract_; }
 
         // --- Viewport transform: pixel = (dbu - pan) * scale ---
@@ -151,8 +186,8 @@ namespace le
         // Renderer's own pre-Y-flip pixel space. Deliberately its own
         // version counter, not visibility_version - a mouse move must not
         // invalidate Renderer's (expensive, design-sized) rasterized
-        // picture cache; see Renderer::compose_with_cursor for how the
-        // cursor overlay stays cheap to redraw independently of it.
+        // picture cache; see Renderer::compose_with_overlays for how the
+        // mouse overlay stays cheap to redraw independently of it.
         void set_mouse_position(int32_t x_px, int32_t y_px)
         {
             mouse_x_px_ = x_px;
@@ -176,22 +211,44 @@ namespace le
         bool has_mouse_position() const { return has_mouse_position_; }
         uint64_t mouse_version() const { return mouse_version_; }
 
+        // The raw stored pixel position (screen/image space - see
+        // set_mouse_position) - 0/0 if has_mouse_position() is false.
+        // Exposed for callers that need the pixel coordinate itself, not
+        // just its dbu equivalent (mouse_dbu_position) - e.g. a
+        // keyboard-triggered zoom (le_key_down's LE_KEY_ZOOM) anchored at
+        // "wherever the mouse currently is", the same anchor semantics
+        // le_zoom's own x/y parameter already has.
+        int32_t mouse_x_px() const { return mouse_x_px_; }
+        int32_t mouse_y_px() const { return mouse_y_px_; }
+
+        // Converts a screen/image pixel coordinate (top-left origin, y
+        // down - same convention as set_mouse_position) to dbu space,
+        // undoing rasterize()'s Y-flip the same way le_zoom's own
+        // pixel->dbu conversion does - see render.hpp's PixelShape/
+        // Renderer::rasterize comments for why pan/scale describe the
+        // pre-flip transform while a screen pixel coordinate is
+        // post-flip. scale_ is always positive by construction
+        // (set_scale rejects non-positive values), so no divide-by-zero
+        // guard is needed here. Shared by mouse_dbu_position() (the
+        // currently stored mouse position) and click/drag-select
+        // handling (an arbitrary x/y from a mouse-down/up event, not
+        // necessarily the currently stored position - see
+        // le_mouse_down/le_mouse_up).
+        Point pixel_to_dbu(int32_t x_px, int32_t y_px) const
+        {
+            const double dbu_x = static_cast<double>(pan_.x) + static_cast<double>(x_px) / scale_;
+            const double dbu_y = static_cast<double>(pan_.y) + (static_cast<double>(viewport_height_px_) - static_cast<double>(y_px)) / scale_;
+            return Point{static_cast<int64_t>(dbu_x), static_cast<int64_t>(dbu_y)};
+        }
+
         // The dbu point currently under the mouse - nullopt if no position
-        // has been set yet (see has_mouse_position). Undoes rasterize()'s
-        // Y-flip the same way le_zoom's own pixel->dbu conversion does -
-        // see render.hpp's PixelShape/Renderer::rasterize comments for why
-        // pan/scale describe the pre-flip transform while a screen pixel
-        // coordinate is post-flip. scale_ is always positive by
-        // construction (set_scale rejects non-positive values), so no
-        // divide-by-zero guard is needed here.
+        // has been set yet (see has_mouse_position).
         std::optional<Point> mouse_dbu_position() const
         {
             if (!has_mouse_position_)
                 return std::nullopt;
 
-            const double dbu_x = static_cast<double>(pan_.x) + static_cast<double>(mouse_x_px_) / scale_;
-            const double dbu_y = static_cast<double>(pan_.y) + (static_cast<double>(viewport_height_px_) - static_cast<double>(mouse_y_px_)) / scale_;
-            return Point{static_cast<int64_t>(dbu_x), static_cast<int64_t>(dbu_y)};
+            return pixel_to_dbu(mouse_x_px_, mouse_y_px_);
         }
 
         // mouse_dbu_position() rounded to the nearest multiple of the
@@ -211,6 +268,99 @@ namespace le
             };
             return Point{snap(dbu->x), snap(dbu->y)};
         }
+
+        // --- Drag-select gesture (UPDATES.md 7.1 items 5-6) ---
+        // Tracks a mouse-down-to-mouse-up rubber-band gesture in screen
+        // pixels (top-left origin, y down - same convention as
+        // set_mouse_position). The frontend calls begin_drag on
+        // mouse-down and end_drag on mouse-up (see le_mouse_down/
+        // le_mouse_up), which decide there whether the gesture was a
+        // plain click or an actual drag (by comparing the down/up pixel
+        // distance against a small threshold) and perform the
+        // corresponding selection - Scene itself doesn't know which
+        // interpretation applies, it just tracks the raw gesture state
+        // and derives drag_rect_dbu() from it plus the current mouse
+        // position.
+        void begin_drag(int32_t x_px, int32_t y_px)
+        {
+            dragging_ = true;
+            drag_start_x_px_ = x_px;
+            drag_start_y_px_ = y_px;
+            ++mouse_version_; // so the drag-rect overlay (Renderer, see UPDATES.md 7.1 item 5's live rectangle) starts showing immediately
+        }
+
+        void end_drag()
+        {
+            dragging_ = false;
+            ++mouse_version_; // so the drag-rect overlay stops showing
+        }
+
+        bool is_dragging() const { return dragging_; }
+        int32_t drag_start_x_px() const { return drag_start_x_px_; }
+        int32_t drag_start_y_px() const { return drag_start_y_px_; }
+
+        // The drag rectangle in dbu space, normalized (ll <= ur regardless
+        // of which direction the drag went) - nullopt if no drag is in
+        // progress, or no mouse position has been set yet (the drag's
+        // "current" corner - mirrors mouse_dbu_position()'s own nullopt
+        // condition).
+        std::optional<Rect> drag_rect_dbu() const
+        {
+            if (!dragging_)
+                return std::nullopt;
+
+            const std::optional<Point> current = mouse_dbu_position();
+            if (!current)
+                return std::nullopt;
+
+            const Point start = pixel_to_dbu(drag_start_x_px_, drag_start_y_px_);
+            return Rect{
+                .ll = Point{std::min(start.x, current->x), std::min(start.y, current->y)},
+                .ur = Point{std::max(start.x, current->x), std::max(start.y, current->y)},
+            };
+        }
+
+        // --- Held keys (UPDATES.md 7) ---
+        // A generic set of currently-held key codes, set by the frontend
+        // via press_key/release_key (see le_key_down/le_key_up) on every
+        // key-down/key-up event - decoupled from any specific gesture
+        // (mouse clicks, future keyboard shortcuts) so those can query
+        // "is X held" internally without needing modifier/key state
+        // threaded through their own call's parameter list (e.g.
+        // le_mouse_up reading is_key_held for shift-click/shift-drag,
+        // rather than taking a shift parameter itself). Key codes are
+        // opaque ints here - api.hpp's LeKeyCode enum gives them stable,
+        // platform-independent meaning at the C API boundary; Scene
+        // itself doesn't interpret them.
+        void press_key(int32_t key_code) { held_keys_.insert(key_code); }
+        void release_key(int32_t key_code) { held_keys_.erase(key_code); }
+        bool is_key_held(int32_t key_code) const { return held_keys_.contains(key_code); }
+
+        // Call when the widget/window receiving key events loses focus
+        // (see le_clear_all_keys) - a key's matching release is not
+        // guaranteed to still reach a widget that no longer has focus by
+        // the time the physical key comes up, so without this a modifier
+        // held at the moment of a focus loss would stay "held" from this
+        // API's point of view indefinitely, silently changing later
+        // gestures that consult it (e.g. every future click reading as
+        // shift-click) until that same key happens to be pressed and
+        // released again while focused.
+        void clear_all_keys() { held_keys_.clear(); }
+
+        // --- Hover (UPDATES.md 7.1) ---
+        // Which selectable object (if any) the mouse currently sits over,
+        // set by the frontend's pointer-move handler via a hit-test
+        // against the currently rendered shapes (see le_set_mouse_position
+        // and Pipeline::hit_test_point). No separate version counter,
+        // unlike mouse position - set_hover/clear_hover are only ever
+        // called from within le_set_mouse_position, which already
+        // unconditionally bumps mouse_version_ on every call, so
+        // Renderer's overlay picture (keyed on mouse_version_) already
+        // redraws on every pointer move; a second counter would be
+        // redundant bookkeeping for no extra invalidation precision.
+        void set_hover(std::optional<HoverTarget> hover) { hovered_ = std::move(hover); }
+        void clear_hover() { hovered_.reset(); }
+        const std::optional<HoverTarget> &hover() const { return hovered_; }
 
         // --- Layer visibility (defaults to visible until toggled) ---
         // Two independent axes, deliberately *not* per-ViewLayerId: by
@@ -292,18 +442,38 @@ namespace le
         }
 
         // --- Selection ---
+        // Renderer draws a white outline around every selected shape (see
+        // Renderer::build_picture/draw_selection_outline) -
+        // selection_version_ lets build_picture's cache know when the
+        // selection changes, decoupled from viewport_version_/
+        // visibility_version_ (selection is neither a viewport nor a
+        // layer-visibility concern). Only bumped on an actual change, not
+        // a redundant no-op call (matches clear_mouse_position's own
+        // convention) - a no-op bump would invalidate the design picture
+        // cache for nothing.
         void select(SelectionRef ref)
         {
             if (!is_selected(ref))
+            {
                 selection_.push_back(ref);
+                ++selection_version_;
+            }
         }
 
         void deselect(SelectionRef ref)
         {
-            std::erase(selection_, ref);
+            if (std::erase(selection_, ref) > 0)
+                ++selection_version_;
         }
 
-        void clear_selection() { selection_.clear(); }
+        void clear_selection()
+        {
+            if (!selection_.empty())
+            {
+                selection_.clear();
+                ++selection_version_;
+            }
+        }
 
         bool is_selected(SelectionRef ref) const
         {
@@ -311,6 +481,7 @@ namespace le
         }
 
         const std::vector<SelectionRef> &selection() const { return selection_; }
+        uint64_t selection_version() const { return selection_version_; }
 
     private:
         AbstractId current_abstract_;
@@ -325,11 +496,17 @@ namespace le
         int32_t mouse_y_px_ = 0;
         bool has_mouse_position_ = false;
         uint64_t mouse_version_ = 0;
+        bool dragging_ = false;
+        int32_t drag_start_x_px_ = 0;
+        int32_t drag_start_y_px_ = 0;
+        std::unordered_set<int32_t> held_keys_;
+        std::optional<HoverTarget> hovered_;
         std::unordered_map<std::string, bool> layer_name_visible_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_visible_;
         uint64_t visibility_version_ = 0;
         std::unordered_map<std::string, bool> layer_name_selectable_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_selectable_;
         std::vector<SelectionRef> selection_;
+        uint64_t selection_version_ = 0;
     };
 }

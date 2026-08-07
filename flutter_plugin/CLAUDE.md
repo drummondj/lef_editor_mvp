@@ -58,25 +58,57 @@ Two separate paths call into the C API — not one:
   (`Pipeline::filter_by_layer_visibility`, combining both axes - see
   `Scene::is_view_layer_visible`); selectability is interaction-only — no
   hit-testing/click-to-select API exists yet to consult it.
-- **Grid display and mouse-position tracking** (UPDATES.md 5.1/5.2/5.3 —
-  5.4's origin marker isn't in the API yet): `le_minor_grid_spacing`/
-  `le_set_minor_grid_spacing` and the `le_major_grid_spacing` equivalents
-  (`LeEditor.minorGridSpacing`/`majorGridSpacing` getter+setter pairs, dbu,
-  defaulting to 5/50 — a 5nm/50nm grid under the common "1 dbu = 1nm"
-  Technology convention) drawn behind the design by `le_render_pixel_buffer`;
-  `le_set_mouse_position`/`le_clear_mouse_position`
+- **Grid display and mouse-position tracking** (UPDATES.md 5.1/5.2/5.3/5.4
+  all done): `le_minor_grid_spacing`/`le_set_minor_grid_spacing` and the
+  `le_major_grid_spacing` equivalents (`LeEditor.minorGridSpacing`/
+  `majorGridSpacing` getter+setter pairs, dbu, defaulting to 5/50 — a
+  5nm/50nm grid under the common "1 dbu = 1nm" Technology convention), plus
+  a fixed cross marker at the Abstract's own origin (5.4 — not
+  necessarily dbu (0,0), no dedicated API, always drawn by
+  `le_render_pixel_buffer` once a Design's selected), drawn behind the
+  design; `le_set_mouse_position`/`le_clear_mouse_position`
   (`LeEditor.setMousePosition()`/`clearMousePosition()`, same pixel space
   as `le_zoom`'s x/y - feed straight from a pointer-move/-leave event)
   drive a grid-snap indicator box also drawn by `le_render_pixel_buffer` -
   cheap to call every pointer-move since it only invalidates the small
-  cursor overlay, not the potentially design-sized rasterized design cache
-  (see `Renderer::compose_with_cursor`); `le_snapped_mouse_position`
+  overlay picture, not the potentially design-sized rasterized design
+  cache (see `Renderer::compose_with_overlays`); `le_snapped_mouse_position`
   (`LeEditor.snappedMousePosition` — the same minor-grid-snapped point the
   indicator box is centered on, converted dbu → microns, for a Flutter UI
   to display as coordinate text) returns null (not a `LeSnappedMouse`) if
   no position has been set or no Technology has been read yet to convert
   with — `has_position` is checked explicitly rather than a sentinel
-  coordinate, since 0/0 is otherwise a legitimate position.
+  coordinate, since 0/0 is otherwise a legitimate position. As of
+  UPDATES.md 7.1 item 1 (no new API surface — same two functions),
+  `setMousePosition`/`clearMousePosition` also drive a yellow hover
+  outline around whichever selectable shape is under the cursor, via a
+  hit-test bounded by the shapes currently on screen (viewport-culled),
+  not the whole design.
+- **Selection** (UPDATES.md 7.1 items 2-6; 7.2's fuller per-object
+  properties API isn't built yet - `le_selection_count`/
+  `LeEditor.selectionCount` is a minimal placeholder just to make the
+  behavior below independently testable) is driven by three calls, not
+  addressed by id like the browsers above: `le_key_down`/`le_key_up`/
+  `le_is_key_held` (`LeEditor.keyDown()`/`keyUp()`/`isKeyHeld()`, taking
+  the generated `LeKeyCode` enum — re-exported as-is from
+  `lef_editor_plugin_bindings_generated.dart` via `export … show
+  LeKeyCode` in `lib/lef_editor_plugin.dart`, since unlike
+  `LePixelBuffer`/`LeLibraryId`/etc. it's a plain enum with no
+  ffi.Struct/native-pointer baggage to wrap first) track modifier keys —
+  currently only `LE_KEY_SHIFT`, extend `LeKeyCode` in api.hpp as more
+  interaction modes need their own shortcuts; `le_mouse_down`/
+  `le_mouse_up` (`LeEditor.mouseDown()`/`mouseUp()`, same pixel space as
+  `setMousePosition`) implement click-vs-drag-select purely from the
+  down/up pixel distance (small threshold) and shift's currently-held
+  state (not a parameter) - click hit-tests one point topmost-layer-first;
+  drag-select hit-tests every selectable shape on every layer fully
+  enclosed by the down/up rectangle; either way replaces the selection,
+  or adds to it if shift is held. A consuming app doesn't have to
+  hand-roll this pixel-space/key-code translation itself —
+  `lib/lef_editor_input.dart`'s `LeEditorInput` extension
+  (`handlePointerEvent`/`handleKeyEvent`) converts standard Flutter
+  `PointerEvent`/`KeyEvent` input directly, for wiring straight into
+  `Listener`/`MouseRegion`/`Focus`.
 - **Native platform texture code** (macOS: `LeApiBridge`/`LeTexture` in
   `macos/Classes/`, implementing `FlutterTexture`; Linux: `FlLeTexture` in
   `linux/lef_texture.cc`, implementing `FlPixelBufferTexture`) calls
@@ -229,6 +261,15 @@ useful compile-time signal):
   `LeTexture` (a live platform texture — see its own doc comment for the
   lifetime/thread-safety constraints). `lib/lef_editor_plugin_bindings_generated.dart`
   — ffigen output, never hand-edit.
+- `lib/lef_editor_input.dart` — `extension LeEditorInput on LeEditor`
+  (re-exported from `lib/lef_editor_plugin.dart` via `export … show
+  LeEditorInput`, same pattern as `LeKeyCode`'s own re-export): converts
+  standard Flutter `PointerEvent`/`KeyEvent` input directly into the
+  Selection API's low-level calls (see Architecture below) —
+  `handlePointerEvent()` and `handleKeyEvent()` — so a consumer doesn't
+  have to hand-roll a `LogicalKeyboardKey` → `LeKeyCode` mapping or
+  pixel-space bookkeeping itself. `example/lib/main.dart` shows the
+  intended `Listener`/`MouseRegion`/`Focus` wiring.
 - `src/lef_editor_plugin.h` — `#include`s `../backend/src/api/api.hpp`
   directly (so this TU fails to compile if that header ever stops being
   C-parseable); `src/lef_editor_plugin.c` — empty, exists only because the

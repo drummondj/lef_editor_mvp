@@ -428,3 +428,124 @@ TEST(Geometry, LocalWidthAtOfEmptyShapeIsZero)
     Shape shape;
     EXPECT_DOUBLE_EQ(Geometry::local_width_at(shape, Point{0, 0}), 0.0);
 }
+
+TEST(Geometry, ContainsIsTrueInsideARectAndFalseOutside)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+
+    EXPECT_TRUE(Geometry::contains(shape, Point{5, 5}));
+    EXPECT_TRUE(Geometry::contains(shape, Point{0, 0})); // on the boundary counts
+    EXPECT_FALSE(Geometry::contains(shape, Point{11, 5}));
+}
+
+TEST(Geometry, ContainsUsesRealPointInPolygonNotBboxForAnLShape)
+{
+    // Same L-shaped polygon as LocalWidthAtLShapedPolygonUsesArmThicknessNotBbox:
+    // a point inside the overall 100x100 bbox but in the notch cut out of
+    // the L (not inside either arm) must not count as contained - a bbox
+    // check would wrongly say yes.
+    Shape shape;
+    shape.polygons.push_back(Polygon{.points = {
+                                          {0, 0},
+                                          {100, 0},
+                                          {100, 30},
+                                          {30, 30},
+                                          {30, 100},
+                                          {0, 100},
+                                      }});
+
+    EXPECT_TRUE(Geometry::contains(shape, Point{15, 70}));  // inside the vertical arm
+    EXPECT_TRUE(Geometry::contains(shape, Point{70, 15}));  // inside the horizontal arm
+    EXPECT_FALSE(Geometry::contains(shape, Point{70, 70})); // in the notch - within the bbox, outside the L
+}
+
+TEST(Geometry, ContainsUsesThePathsBufferedOutlineNotItsCenterline)
+{
+    // A horizontal path with width 10 centered on y=0: a point 3 above the
+    // centerline is inside the buffered/drawn outline (half-width 5) but
+    // would miss a naive "on the centerline" test.
+    Shape shape;
+    shape.paths.push_back(Path{.polygon = Polygon{.points = {{0, 0}, {100, 0}}}, .width = 10});
+
+    EXPECT_TRUE(Geometry::contains(shape, Point{50, 3}));
+    EXPECT_FALSE(Geometry::contains(shape, Point{50, 20})); // well outside the buffered width
+}
+
+TEST(Geometry, ContainsOfEmptyShapeIsFalse)
+{
+    Shape shape;
+    EXPECT_FALSE(Geometry::contains(shape, Point{0, 0}));
+}
+
+TEST(Geometry, FindHitPieceReturnsOnlyTheOneRectHitNotEveryRectInTheShape)
+{
+    // Regression: a Shape can bundle several rects together (e.g. several
+    // RECT statements in one LEF PORT) - hover highlighting must isolate
+    // just the one piece under the cursor, not the whole group (a real
+    // reported bug: hovering one rect highlighted every rect on the same
+    // Terminal).
+    Shape shape;
+    shape.layer_name = "M1";
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    shape.rects.push_back(Rect{.ll = {100, 100}, .ur = {110, 110}});
+
+    const auto piece = Geometry::find_hit_piece(shape, Point{5, 5});
+    ASSERT_TRUE(piece.has_value());
+    EXPECT_EQ(piece->layer_name, "M1");
+    ASSERT_EQ(piece->rects.size(), 1u);
+    EXPECT_EQ(piece->rects.front().ll.x, 0);
+    EXPECT_TRUE(piece->polygons.empty());
+    EXPECT_TRUE(piece->paths.empty());
+}
+
+TEST(Geometry, FindHitPieceReturnsOnlyTheOnePolygonHitNotEveryPolygonInTheShape)
+{
+    Shape shape;
+    shape.polygons.push_back(Polygon{.points = {{0, 0}, {10, 0}, {10, 10}, {0, 10}}});
+    shape.polygons.push_back(Polygon{.points = {{100, 100}, {110, 100}, {110, 110}, {100, 110}}});
+
+    const auto piece = Geometry::find_hit_piece(shape, Point{5, 5});
+    ASSERT_TRUE(piece.has_value());
+    ASSERT_EQ(piece->polygons.size(), 1u);
+    EXPECT_TRUE(piece->rects.empty());
+}
+
+TEST(Geometry, FindHitPieceReturnsNulloptOnAMiss)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+
+    EXPECT_FALSE(Geometry::find_hit_piece(shape, Point{500, 500}).has_value());
+}
+
+TEST(Geometry, FullyEnclosedIsTrueWhenShapeFitsEntirelyInsideTheContainer)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {10, 10}, .ur = {20, 20}});
+
+    EXPECT_TRUE(Geometry::fully_enclosed(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape));
+}
+
+TEST(Geometry, FullyEnclosedIsFalseWhenShapeOnlyPartiallyOverlaps)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {10, 10}, .ur = {20, 20}});
+
+    // Container only covers the left half of the shape's bbox.
+    EXPECT_FALSE(Geometry::fully_enclosed(Rect{.ll = {0, 0}, .ur = {15, 30}}, shape));
+}
+
+TEST(Geometry, FullyEnclosedIsFalseWhenShapeIsCompletelyOutsideTheContainer)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {100, 100}, .ur = {110, 110}});
+
+    EXPECT_FALSE(Geometry::fully_enclosed(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape));
+}
+
+TEST(Geometry, FullyEnclosedOfEmptyShapeIsFalse)
+{
+    Shape shape;
+    EXPECT_FALSE(Geometry::fully_enclosed(Rect{.ll = {0, 0}, .ur = {100, 100}}, shape));
+}

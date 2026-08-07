@@ -510,5 +510,97 @@ namespace le
 
             return best_width.value_or(0.0);
         }
+
+        /// @brief Like `contains`, but returns a copy of just the single
+        /// rect/polygon/path piece that contains `point` (as its own
+        /// one-piece Shape, same `layer_name`), not the whole `shape` -
+        /// `shape` can bundle several rects/polygons/paths together (e.g.
+        /// several RECT statements in one LEF PORT, or an OBS's array of
+        /// rects), and click/hover hit-testing must identify only the one
+        /// piece actually under `point`, not the whole group (UPDATES.md
+        /// 7.1 - highlighting every rect in the group when only one was
+        /// under the cursor was a real reported bug). nullopt if no piece
+        /// contains `point`.
+        ///
+        /// Polygons/paths are pre-checked against a cheap bbox (see
+        /// point_in_rect below, and bbox_of for paths - already accounts
+        /// for width) before the real `bg::within`/`path_to_polygons`
+        /// test - a real measured cost, not speculation: BM_HitTestPoint
+        /// (pipeline_benchmark.cpp) against the 1M-shape stress design
+        /// initially measured ~17ms/call without it (dominated by
+        /// path_to_polygons - a real Boost.Geometry buffer operation -
+        /// running on every visible path regardless of whether the query
+        /// point was anywhere near it), clearly too slow to run on every
+        /// pointer-move event (see le_set_mouse_position). With the
+        /// pre-check, most candidates are rejected by four integer
+        /// comparisons before any Boost.Geometry call - see
+        /// BENCHMARKS.md for the before/after numbers.
+        static std::optional<Shape> find_hit_piece(const Shape &shape, const Point &point)
+        {
+            auto point_in_rect = [&](const Rect &rect)
+            {
+                return point.x >= rect.ll.x && point.x <= rect.ur.x && point.y >= rect.ll.y && point.y <= rect.ur.y;
+            };
+
+            for (const auto &rect : shape.rects)
+            {
+                if (point_in_rect(rect))
+                    return Shape{.layer_name = shape.layer_name, .rects = {rect}};
+            }
+
+            for (const auto &polygon : shape.polygons)
+            {
+                if (!point_in_rect(bbox_of(polygon)))
+                    continue;
+
+                if (bg::within(point, to_boost_polygon(polygon)))
+                    return Shape{.layer_name = shape.layer_name, .polygons = {polygon}};
+            }
+
+            for (const auto &path : shape.paths)
+            {
+                if (!point_in_rect(bbox_of(path)))
+                    continue;
+
+                for (const auto &part : path_to_polygons(path))
+                {
+                    if (bg::within(point, to_boost_polygon(part)))
+                        return Shape{.layer_name = shape.layer_name, .paths = {path}};
+                }
+            }
+
+            return std::nullopt;
+        }
+
+        /// @brief True if `point` falls within `shape`'s actual drawn
+        /// geometry (any rect/polygon/path piece) - used where only a
+        /// yes/no answer is needed. See find_hit_piece for the same test
+        /// when the specific piece itself is also needed (e.g. hover
+        /// highlighting).
+        static bool contains(const Shape &shape, const Point &point)
+        {
+            return find_hit_piece(shape, point).has_value();
+        }
+
+        /// @brief True if `shape`'s bbox is entirely inside `container` -
+        /// used for rubber-band drag-select (UPDATES.md 7.1 item 5:
+        /// "completely enclosed by the selection rectangle"). Exact, not
+        /// an approximation: for an axis-aligned rectangle, "every point
+        /// of shape is inside container" and "shape's tightest bounding
+        /// box is inside container" are equivalent - if the bbox fits, so
+        /// does everything inside it; if any point of the shape were
+        /// outside, the bbox (being the tightest fit around the shape)
+        /// would be too. So no per-rect/polygon/path testing is needed
+        /// here, unlike `contains`. False for a shape with no geometry
+        /// (no bbox).
+        static bool fully_enclosed(const Rect &container, const Shape &shape)
+        {
+            const auto bbox = Geometry::bbox(shape);
+            if (!bbox)
+                return false;
+
+            return bbox->ll.x >= container.ll.x && bbox->ll.y >= container.ll.y &&
+                   bbox->ur.x <= container.ur.x && bbox->ur.y <= container.ur.y;
+        }
     };
 }

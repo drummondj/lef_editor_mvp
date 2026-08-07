@@ -6,6 +6,7 @@
 #include "../render/render.hpp"
 #include "../scene/scene.hpp"
 #include "../view_style/view_style.hpp"
+#include <algorithm>
 #include <filesystem>
 
 // The real, C++-only definition behind the opaque LeHandle - never exposed
@@ -29,6 +30,21 @@ namespace
     LeAbstractId to_c(le::AbstractId id) { return LeAbstractId{.index = id.index, .generation = id.generation}; }
 
     le::DesignId from_c(LeDesignId id) { return le::DesignId{.index = id.index, .generation = id.generation}; }
+
+    // Below this many pixels of down-to-up movement, le_mouse_up treats a
+    // gesture as a click rather than a drag-select - small enough that an
+    // intended click with a little hand tremor still registers as one,
+    // large enough that a real rubber-band drag never gets misread as a
+    // click. Not exposed/configurable - an implementation detail of the
+    // click-vs-drag decision, not a Scene-persistent concern.
+    constexpr int32_t kClickDragThresholdPx = 4;
+
+    // Fixed step sizes for the keyboard-triggered canvas-navigation
+    // commands (le_key_down's LE_KEY_ZOOM/LE_KEY_FIT/LE_KEY_PAN_*) - not
+    // exposed/configurable, same reasoning as kClickDragThresholdPx.
+    constexpr double kKeyZoomFactor = 0.3;
+    constexpr int32_t kKeyFitPaddingPx = 10;
+    constexpr double kKeyPanFactor = 0.25;
 }
 
 extern "C"
@@ -372,7 +388,11 @@ extern "C"
     {
         if (!handle)
             return;
+
         handle->scene.set_mouse_position(x, y);
+
+        const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
+        handle->scene.set_hover(le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, *handle->scene.mouse_dbu_position()));
     }
 
     void le_clear_mouse_position(LeHandle *handle)
@@ -380,6 +400,7 @@ extern "C"
         if (!handle)
             return;
         handle->scene.clear_mouse_position();
+        handle->scene.clear_hover();
     }
 
     LeSnappedMousePosition le_snapped_mouse_position(LeHandle *handle)
@@ -409,6 +430,113 @@ extern "C"
         };
     }
 
+    void le_key_down(LeHandle *handle, int32_t key_code)
+    {
+        if (!handle)
+            return;
+        handle->scene.press_key(key_code);
+
+        switch (key_code)
+        {
+        case LE_KEY_ZOOM:
+        {
+            const double factor = handle->scene.is_key_held(LE_KEY_SHIFT) ? -kKeyZoomFactor : kKeyZoomFactor;
+            le_zoom(handle, factor, handle->scene.mouse_x_px(), handle->scene.mouse_y_px());
+            break;
+        }
+        case LE_KEY_FIT:
+            le_fit_scene(handle, kKeyFitPaddingPx);
+            break;
+        case LE_KEY_PAN_LEFT:
+            le_pan(handle, -kKeyPanFactor, 0.0);
+            break;
+        case LE_KEY_PAN_RIGHT:
+            le_pan(handle, kKeyPanFactor, 0.0);
+            break;
+        case LE_KEY_PAN_UP:
+            le_pan(handle, 0.0, kKeyPanFactor);
+            break;
+        case LE_KEY_PAN_DOWN:
+            le_pan(handle, 0.0, -kKeyPanFactor);
+            break;
+        default:
+            break;
+        }
+    }
+
+    void le_key_up(LeHandle *handle, int32_t key_code)
+    {
+        if (!handle)
+            return;
+        handle->scene.release_key(key_code);
+    }
+
+    int32_t le_is_key_held(LeHandle *handle, int32_t key_code)
+    {
+        return handle && handle->scene.is_key_held(key_code) ? 1 : 0;
+    }
+
+    void le_clear_all_keys(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        handle->scene.clear_all_keys();
+    }
+
+    void le_mouse_down(LeHandle *handle, int32_t x, int32_t y)
+    {
+        if (!handle)
+            return;
+        handle->scene.begin_drag(x, y);
+    }
+
+    void le_mouse_up(LeHandle *handle, int32_t x, int32_t y)
+    {
+        if (!handle || !handle->scene.is_dragging())
+            return;
+
+        const int32_t dx = x - handle->scene.drag_start_x_px();
+        const int32_t dy = y - handle->scene.drag_start_y_px();
+        const bool is_click = dx * dx + dy * dy < kClickDragThresholdPx * kClickDragThresholdPx;
+
+        const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
+        const bool shift = handle->scene.is_key_held(LE_KEY_SHIFT);
+
+        if (!shift)
+            handle->scene.clear_selection();
+
+        if (is_click)
+        {
+            // Computed straight from this call's own x/y, not
+            // Scene::drag_rect_dbu()/mouse_dbu_position() - those read the
+            // separately-tracked *stored* mouse position (see
+            // le_set_mouse_position), which this call has no guaranteed
+            // ordering against.
+            const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
+            if (hit)
+                handle->scene.select(hit->origin);
+        }
+        else
+        {
+            const le::Point start = handle->scene.pixel_to_dbu(handle->scene.drag_start_x_px(), handle->scene.drag_start_y_px());
+            const le::Point end = handle->scene.pixel_to_dbu(x, y);
+            const le::Rect drag_rect{
+                .ll = le::Point{std::min(start.x, end.x), std::min(start.y, end.y)},
+                .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
+            };
+
+            for (const le::SelectionRef &ref : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
+                handle->scene.select(ref);
+        }
+
+        handle->scene.end_drag();
+    }
+
+    int32_t le_selection_count(LeHandle *handle)
+    {
+        return handle ? static_cast<int32_t>(handle->scene.selection().size()) : 0;
+    }
+
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)
     {
         if (!handle)
@@ -417,8 +545,8 @@ extern "C"
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
         const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
         const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers, handle->root);
-        const auto &cursor_picture = handle->renderer.build_cursor_picture(handle->scene);
-        const auto &buffer = handle->renderer.compose_with_cursor(picture, cursor_picture, handle->scene);
+        const auto &overlay_picture = handle->renderer.build_overlay_picture(handle->scene);
+        const auto &buffer = handle->renderer.compose_with_overlays(picture, overlay_picture, handle->scene);
 
         return LePixelBuffer{
             .data = buffer.data,

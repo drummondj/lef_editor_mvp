@@ -28,6 +28,57 @@ TEST(Scene, CurrentAbstractRoundTrips)
     EXPECT_EQ(scene.current_abstract(), id);
 }
 
+TEST(Scene, SwitchingToADifferentAbstractClearsSelectionAndHover)
+{
+    // Regression: TerminalId/ObstructionId are plain {index,generation}
+    // pool handles, not namespaced by Abstract - a selection/hover left
+    // over from the old Abstract could otherwise reference nothing (best
+    // case) or an unrelated object that happens to reuse the same pool
+    // slot in the new Abstract (worst case).
+    Scene scene;
+    scene.set_current_abstract(AbstractId{1, 0});
+
+    Shape outline;
+    outline.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    scene.select(TerminalId{1, 0});
+    scene.set_hover(HoverTarget{.origin = TerminalId{1, 0}, .outline = outline});
+    ASSERT_FALSE(scene.selection().empty());
+    ASSERT_TRUE(scene.hover().has_value());
+
+    scene.set_current_abstract(AbstractId{2, 0});
+    EXPECT_TRUE(scene.selection().empty());
+    EXPECT_FALSE(scene.hover().has_value());
+}
+
+TEST(Scene, SwitchingToADifferentAbstractBumpsSelectionVersionOnlyIfSelectionWasNonEmpty)
+{
+    Scene scene;
+    scene.set_current_abstract(AbstractId{1, 0});
+    EXPECT_EQ(scene.selection_version(), 0u);
+
+    // Nothing selected - switching must not bump the version for nothing.
+    scene.set_current_abstract(AbstractId{2, 0});
+    EXPECT_EQ(scene.selection_version(), 0u);
+
+    scene.select(TerminalId{1, 0});
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.set_current_abstract(AbstractId{3, 0});
+    EXPECT_EQ(scene.selection_version(), 2u);
+}
+
+TEST(Scene, SettingTheSameCurrentAbstractAgainIsANoOp)
+{
+    Scene scene;
+    scene.set_current_abstract(AbstractId{1, 0});
+    scene.select(TerminalId{1, 0});
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.set_current_abstract(AbstractId{1, 0}); // same Abstract already displayed
+    EXPECT_FALSE(scene.selection().empty());
+    EXPECT_EQ(scene.selection_version(), 1u);
+}
+
 TEST(Scene, PanAndViewportRoundTrip)
 {
     Scene scene;
@@ -132,8 +183,8 @@ TEST(Scene, MousePositionDefaultsToUnset)
 
 TEST(Scene, SetMousePositionBumpsMouseVersionNotViewportOrVisibilityVersion)
 {
-    // A mouse move must invalidate only the cheap cursor-overlay cache
-    // (see Renderer::build_cursor_picture/compose_with_cursor), not the
+    // A mouse move must invalidate only the cheap overlay-picture cache
+    // (see Renderer::build_overlay_picture/compose_with_overlays), not the
     // expensive design rasterize cache keyed on viewport/visibility
     // version - see scene.hpp's own comment on mouse_version_.
     Scene scene;
@@ -200,6 +251,201 @@ TEST(Scene, ClearMousePositionResetsHasMousePositionAndBumpsVersionOnlyIfItWasSe
     // version again (would otherwise invalidate caches for nothing).
     scene.clear_mouse_position();
     EXPECT_EQ(scene.mouse_version(), 2u);
+}
+
+TEST(Scene, PixelToDbuMatchesMouseDbuPositionsOwnFormula)
+{
+    // Same scenario as MouseDbuPositionUndoesPanScaleAndYFlip, but calling
+    // pixel_to_dbu directly with an arbitrary x/y rather than going
+    // through the stored mouse position - the two must agree exactly,
+    // since mouse_dbu_position() is defined in terms of pixel_to_dbu.
+    Scene scene;
+    scene.set_pan(Point{100, 200});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(50, 40);
+
+    const Point dbu = scene.pixel_to_dbu(10, 10);
+    EXPECT_EQ(dbu.x, 100 + 10 / 2);
+    EXPECT_EQ(dbu.y, 200 + (40 - 10) / 2);
+
+    scene.set_mouse_position(10, 10);
+    ASSERT_TRUE(scene.mouse_dbu_position().has_value());
+    EXPECT_EQ(scene.mouse_dbu_position()->x, dbu.x);
+    EXPECT_EQ(scene.mouse_dbu_position()->y, dbu.y);
+}
+
+TEST(Scene, DragDefaultsToNotDragging)
+{
+    Scene scene;
+    EXPECT_FALSE(scene.is_dragging());
+    EXPECT_FALSE(scene.drag_rect_dbu().has_value());
+}
+
+TEST(Scene, BeginDragSetsStateAndBumpsMouseVersionNotViewportOrVisibilityVersion)
+{
+    Scene scene;
+    const uint64_t viewport_version_before = scene.viewport_version();
+    const uint64_t visibility_version_before = scene.visibility_version();
+
+    scene.begin_drag(10, 20);
+    EXPECT_TRUE(scene.is_dragging());
+    EXPECT_EQ(scene.drag_start_x_px(), 10);
+    EXPECT_EQ(scene.drag_start_y_px(), 20);
+    EXPECT_EQ(scene.mouse_version(), 1u);
+    EXPECT_EQ(scene.viewport_version(), viewport_version_before);
+    EXPECT_EQ(scene.visibility_version(), visibility_version_before);
+}
+
+TEST(Scene, EndDragClearsDraggingAndBumpsMouseVersion)
+{
+    Scene scene;
+    scene.begin_drag(10, 20);
+    ASSERT_EQ(scene.mouse_version(), 1u);
+
+    scene.end_drag();
+    EXPECT_FALSE(scene.is_dragging());
+    EXPECT_EQ(scene.mouse_version(), 2u);
+}
+
+TEST(Scene, DragRectDbuIsNulloptWithoutAMousePositionEvenWhileDragging)
+{
+    Scene scene;
+    scene.begin_drag(10, 10);
+    EXPECT_FALSE(scene.drag_rect_dbu().has_value()); // no mouse position set yet
+}
+
+TEST(Scene, DragRectDbuNormalizesRegardlessOfDragDirection)
+{
+    // Dragging from bottom-right up to top-left (in pixel space) must
+    // still produce a rect with ll <= ur, not a rect with swapped/negative
+    // extents.
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    scene.begin_drag(80, 80); // dbu (80, 20)
+    scene.set_mouse_position(20, 20); // dbu (20, 80)
+
+    const std::optional<Rect> rect = scene.drag_rect_dbu();
+    ASSERT_TRUE(rect.has_value());
+    EXPECT_EQ(rect->ll.x, 20);
+    EXPECT_EQ(rect->ll.y, 20);
+    EXPECT_EQ(rect->ur.x, 80);
+    EXPECT_EQ(rect->ur.y, 80);
+}
+
+TEST(Scene, KeysDefaultToNotHeld)
+{
+    Scene scene;
+    EXPECT_FALSE(scene.is_key_held(1));
+}
+
+TEST(Scene, PressKeyThenIsKeyHeldReturnsTrue)
+{
+    Scene scene;
+    scene.press_key(1);
+    EXPECT_TRUE(scene.is_key_held(1));
+}
+
+TEST(Scene, ReleaseKeyClearsAHeldKey)
+{
+    Scene scene;
+    scene.press_key(1);
+    ASSERT_TRUE(scene.is_key_held(1));
+
+    scene.release_key(1);
+    EXPECT_FALSE(scene.is_key_held(1));
+}
+
+TEST(Scene, ReleaseKeyWithoutAPrecedingPressIsANoOp)
+{
+    Scene scene;
+    scene.release_key(1);
+    EXPECT_FALSE(scene.is_key_held(1));
+}
+
+TEST(Scene, DifferentKeyCodesAreTrackedIndependently)
+{
+    Scene scene;
+    scene.press_key(1);
+    EXPECT_TRUE(scene.is_key_held(1));
+    EXPECT_FALSE(scene.is_key_held(2));
+}
+
+TEST(Scene, ClearAllKeysReleasesEveryHeldKey)
+{
+    // The fix for a real reported bug: a modifier held at the moment a
+    // widget loses keyboard focus never gets its matching release event,
+    // so it would otherwise stay "held" forever, silently turning every
+    // later plain click into a shift-click.
+    Scene scene;
+    scene.press_key(1);
+    scene.press_key(2);
+    ASSERT_TRUE(scene.is_key_held(1));
+    ASSERT_TRUE(scene.is_key_held(2));
+
+    scene.clear_all_keys();
+    EXPECT_FALSE(scene.is_key_held(1));
+    EXPECT_FALSE(scene.is_key_held(2));
+}
+
+TEST(Scene, ClearAllKeysWithNothingHeldIsANoOp)
+{
+    Scene scene;
+    scene.clear_all_keys();
+    EXPECT_FALSE(scene.is_key_held(1));
+}
+
+TEST(Scene, HoverDefaultsToUnset)
+{
+    Scene scene;
+    EXPECT_FALSE(scene.hover().has_value());
+}
+
+TEST(Scene, HoverRoundTrips)
+{
+    Scene scene;
+    Shape outline;
+    outline.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+
+    scene.set_hover(HoverTarget{.origin = TerminalId{5, 1}, .outline = outline});
+
+    ASSERT_TRUE(scene.hover().has_value());
+    ASSERT_TRUE(std::holds_alternative<TerminalId>(scene.hover()->origin));
+    EXPECT_EQ(std::get<TerminalId>(scene.hover()->origin), (TerminalId{5, 1}));
+    ASSERT_EQ(scene.hover()->outline.rects.size(), 1u);
+    EXPECT_EQ(scene.hover()->outline.rects.front().ur.x, 10);
+}
+
+TEST(Scene, ClearHoverResetsToUnset)
+{
+    Scene scene;
+    Shape outline;
+    scene.set_hover(HoverTarget{.origin = ObstructionId{2, 0}, .outline = outline});
+    ASSERT_TRUE(scene.hover().has_value());
+
+    scene.clear_hover();
+    EXPECT_FALSE(scene.hover().has_value());
+}
+
+TEST(Scene, SetHoverAndClearHoverDoNotBumpViewportOrVisibilityVersion)
+{
+    // Hover is driven by every pointer-move event (see le_set_mouse_position)
+    // - it must not invalidate the expensive design rasterize cache, only
+    // the small mouse-overlay picture (already keyed on mouse_version,
+    // which set_mouse_position bumps independently - see scene.hpp's own
+    // comment on why set_hover needs no version counter of its own).
+    Scene scene;
+    const uint64_t viewport_version_before = scene.viewport_version();
+    const uint64_t visibility_version_before = scene.visibility_version();
+
+    Shape outline;
+    scene.set_hover(HoverTarget{.origin = TerminalId{1, 0}, .outline = outline});
+    scene.clear_hover();
+
+    EXPECT_EQ(scene.viewport_version(), viewport_version_before);
+    EXPECT_EQ(scene.visibility_version(), visibility_version_before);
 }
 
 TEST(Scene, LayerNameVisibilityDefaultsToTrueUntilSet)
@@ -426,4 +672,63 @@ TEST(Scene, SelectionDistinguishesObjectKindsWithTheSameRawId)
     scene.select(terminal);
     EXPECT_TRUE(scene.is_selected(terminal));
     EXPECT_FALSE(scene.is_selected(obstruction));
+}
+
+TEST(Scene, SelectBumpsSelectionVersionOnlyOnAnActualChange)
+{
+    Scene scene;
+    TerminalId terminal{5, 0};
+    EXPECT_EQ(scene.selection_version(), 0u);
+
+    scene.select(terminal);
+    EXPECT_EQ(scene.selection_version(), 1u);
+
+    // Already selected - a no-op, must not bump again.
+    scene.select(terminal);
+    EXPECT_EQ(scene.selection_version(), 1u);
+}
+
+TEST(Scene, DeselectBumpsSelectionVersionOnlyOnAnActualChange)
+{
+    Scene scene;
+    TerminalId terminal{5, 0};
+    scene.select(terminal);
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.deselect(terminal);
+    EXPECT_FALSE(scene.is_selected(terminal));
+    EXPECT_EQ(scene.selection_version(), 2u);
+
+    // Already gone - a no-op, must not bump again.
+    scene.deselect(terminal);
+    EXPECT_EQ(scene.selection_version(), 2u);
+}
+
+TEST(Scene, ClearSelectionBumpsSelectionVersionOnlyIfSelectionWasNonEmpty)
+{
+    Scene scene;
+    TerminalId terminal{5, 0};
+
+    scene.clear_selection(); // already empty - a no-op
+    EXPECT_EQ(scene.selection_version(), 0u);
+
+    scene.select(terminal);
+    ASSERT_EQ(scene.selection_version(), 1u);
+
+    scene.clear_selection();
+    EXPECT_TRUE(scene.selection().empty());
+    EXPECT_EQ(scene.selection_version(), 2u);
+}
+
+TEST(Scene, SelectionChangesDoNotBumpViewportOrVisibilityVersion)
+{
+    Scene scene;
+    const uint64_t viewport_version_before = scene.viewport_version();
+    const uint64_t visibility_version_before = scene.visibility_version();
+
+    scene.select(TerminalId{5, 0});
+    scene.clear_selection();
+
+    EXPECT_EQ(scene.viewport_version(), viewport_version_before);
+    EXPECT_EQ(scene.visibility_version(), visibility_version_before);
 }

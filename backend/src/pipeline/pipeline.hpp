@@ -16,6 +16,11 @@ namespace le
     {
         Shape shape;
         ViewLayerId view_layer;
+
+        /// The selectable object this Shape came from (UPDATES.md 7.1) -
+        /// nullopt for the BOUNDARY shape, which isn't tied to any
+        /// Terminal/Obstruction and isn't selectable.
+        std::optional<SelectionRef> origin;
     };
 
     /// @brief Remembers the last (key, value) pair produced by a single
@@ -178,7 +183,7 @@ namespace le
                             combined.polygons.insert(combined.polygons.end(), shape.polygons.begin(), shape.polygons.end());
                             combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
 
-                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL)});
+                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}});
                             // Merges the pushed copy's own rects/polygons in
                             // place (after combined's accumulated from the
                             // pre-merge shape above - get_label_location
@@ -211,7 +216,7 @@ namespace le
                     const auto *obstruction = root.get_obstruction(obstruction_id);
                     for (const auto &shape : obstruction->shapes)
                     {
-                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION)});
+                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}});
                         Geometry::merge_overlapping_fills(shapes.back().shape);
                     }
                 }
@@ -327,6 +332,78 @@ namespace le
             const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
             const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene);
             return filter_by_layer_visibility(viewport_filtered, scene, view_layers);
+        }
+
+        /// @brief Topmost-layer-first point hit-test (UPDATES.md 7.1 items
+        /// 1-3) against an already-filtered map (typically `run`'s own
+        /// output - already viewport-culled and visibility-filtered, so
+        /// this only ever scans what's actually on screen, not the whole
+        /// design). Not a CachedStage-backed stage like the methods
+        /// above - `dbu_point` changes on every call, so there's no
+        /// reusable output to cache. Reverse-iterates `shapes` (its
+        /// std::map key order is bottom-up stacking order - see
+        /// filter_by_layer_visibility's own comment - so reverse means
+        /// topmost first), skipping a ViewLayer the Scene has made
+        /// unselectable (Scene::is_view_layer_selectable) and any
+        /// RenderedShape with no `origin` (the BOUNDARY shape - not
+        /// selectable). Returns the first hit's origin plus a copy of
+        /// just the single rect/polygon/path piece that was actually hit
+        /// (Geometry::find_hit_piece) - not the whole RenderedShape's
+        /// Shape, which can bundle several rects/polygons/paths together
+        /// (e.g. several RECTs in one LEF PORT); hovering must highlight
+        /// only the one piece under the cursor, not the whole group.
+        /// First-match-within-a-layer wins for two overlapping shapes on
+        /// the same layer, an accepted MVP limitation. nullopt if nothing
+        /// was hit.
+        static std::optional<HoverTarget> hit_test_point(const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const ViewLayerSet &view_layers, const Scene &scene, Point dbu_point)
+        {
+            for (auto it = shapes.rbegin(); it != shapes.rend(); ++it)
+            {
+                const ViewLayerData *data = view_layers.get(it->first);
+                if (data && !scene.is_view_layer_selectable(data->layer_name, data->purpose))
+                    continue;
+
+                for (const auto &rs : it->second)
+                {
+                    if (!rs.origin)
+                        continue;
+
+                    if (auto piece = Geometry::find_hit_piece(rs.shape, dbu_point))
+                        return HoverTarget{.origin = *rs.origin, .outline = *piece};
+                }
+            }
+
+            return std::nullopt;
+        }
+
+        /// @brief Rubber-band enclosure hit-test (UPDATES.md 7.1 item 5:
+        /// "all selectable shapes on all layers completely enclosed by
+        /// the selection rectangle") against an already-filtered map
+        /// (typically `run`'s own output). Unlike hit_test_point, scans
+        /// every layer (no topmost-only restriction - rule 5 says "all
+        /// layers") and collects every match, in no particular order.
+        /// Same unselectable-layer/no-origin skip as hit_test_point.
+        static std::vector<SelectionRef> hit_test_rect(const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const ViewLayerSet &view_layers, const Scene &scene, Rect dbu_rect)
+        {
+            std::vector<SelectionRef> result;
+
+            for (const auto &[view_layer_id, group] : shapes)
+            {
+                const ViewLayerData *data = view_layers.get(view_layer_id);
+                if (data && !scene.is_view_layer_selectable(data->layer_name, data->purpose))
+                    continue;
+
+                for (const auto &rs : group)
+                {
+                    if (!rs.origin)
+                        continue;
+
+                    if (Geometry::fully_enclosed(dbu_rect, rs.shape))
+                        result.push_back(*rs.origin);
+                }
+            }
+
+            return result;
         }
 
         // Number of times each stage actually recomputed - exposed purely

@@ -492,3 +492,170 @@ TEST_F(PipelineFixture, RunOnAbstractChangeRecomputesAllThreeStages)
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
+
+TEST_F(PipelineFixture, HitTestPointReturnsTopmostLayerFirst)
+{
+    // Overlapping shapes at the same point on different layers - M1 was
+    // declared before M2 in SetUp(), so M2's ViewLayer sorts higher (see
+    // FilterByLayerVisibilityGroupsInBottomUpLayerOrder) - topmost.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+    const TerminalId m2_terminal = add_terminal_shape(Shape{.layer_name = "M2", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto hit = Pipeline::hit_test_point(shapes, view_layers, scene, Point{5, 5});
+
+    ASSERT_TRUE(hit.has_value());
+    ASSERT_TRUE(std::holds_alternative<TerminalId>(hit->origin));
+    EXPECT_EQ(std::get<TerminalId>(hit->origin), m2_terminal);
+}
+
+TEST_F(PipelineFixture, HitTestPointReturnsACopyOfTheHitShapesOwnGeometry)
+{
+    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto hit = Pipeline::hit_test_point(shapes, view_layers, scene, Point{5, 5});
+
+    ASSERT_TRUE(hit.has_value());
+    ASSERT_TRUE(std::holds_alternative<TerminalId>(hit->origin));
+    EXPECT_EQ(std::get<TerminalId>(hit->origin), terminal_id);
+    ASSERT_EQ(hit->outline.rects.size(), 1u);
+    EXPECT_EQ(hit->outline.rects.front().ur.x, 10);
+}
+
+TEST_F(PipelineFixture, HitTestPointHighlightsOnlyTheHitPieceNotEveryRectOnTheSameTerminal)
+{
+    // Regression: a single TerminalPort Shape can bundle several rects
+    // together (e.g. several RECT statements in one LEF PORT) - a real
+    // reported bug had hovering one rect highlight every rect on the same
+    // Terminal, because hit_test_point copied the whole RenderedShape
+    // instead of just the piece under the cursor.
+    //
+    // generate_shapes runs Geometry::merge_overlapping_fills on every
+    // pushed Shape (pipeline.hpp), which unconditionally converts a
+    // multi-rect Shape into polygons (even disjoint ones, like these two)
+    // before hit-testing ever sees it - so the hit piece below is a
+    // single polygon, not a rect; that conversion is pre-existing,
+    // unrelated behavior this test isn't re-litigating.
+    const TerminalId terminal_id = add_terminal_shape(Shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {0, 0}, .ur = {10, 10}},
+            Rect{.ll = {100, 100}, .ur = {110, 110}},
+        },
+    });
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto hit = Pipeline::hit_test_point(shapes, view_layers, scene, Point{5, 5});
+
+    ASSERT_TRUE(hit.has_value());
+    ASSERT_TRUE(std::holds_alternative<TerminalId>(hit->origin));
+    EXPECT_EQ(std::get<TerminalId>(hit->origin), terminal_id);
+    EXPECT_TRUE(hit->outline.rects.empty());
+    ASSERT_EQ(hit->outline.polygons.size(), 1u); // only the hit piece, not both
+
+    // Confirm it's the piece near (0,0), not the other one near (100,100).
+    const auto bbox = Geometry::bbox(hit->outline);
+    ASSERT_TRUE(bbox.has_value());
+    EXPECT_LT(bbox->ur.x, 50);
+}
+
+TEST_F(PipelineFixture, HitTestPointSkipsAnUnselectableLayer)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+    scene.set_layer_name_selectable("M1", false);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    EXPECT_FALSE(Pipeline::hit_test_point(shapes, view_layers, scene, Point{5, 5}).has_value());
+}
+
+TEST_F(PipelineFixture, HitTestPointReturnsNulloptOnAMiss)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    EXPECT_FALSE(Pipeline::hit_test_point(shapes, view_layers, scene, Point{500, 500}).has_value());
+}
+
+TEST_F(PipelineFixture, HitTestPointNeverHitsTheBoundaryShape)
+{
+    root.get_abstract(abstract_id)->boundary = {Polygon{.points = {{0, 0}, {0, 1000}, {1000, 1000}, {1000, 0}, {0, 0}}}};
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    EXPECT_FALSE(Pipeline::hit_test_point(shapes, view_layers, scene, Point{500, 500}).has_value());
+}
+
+TEST_F(PipelineFixture, HitTestRectFindsShapesFullyEnclosedAcrossAllLayers)
+{
+    const TerminalId inside_m1 = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}});
+    const ObstructionId inside_m2 = add_obstruction_shape(Shape{.layer_name = "M2", .rects = {Rect{.ll = {30, 30}, .ur = {40, 40}}}});
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {45, 45}, .ur = {60, 60}}}}); // straddles the rect's edge
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto hits = Pipeline::hit_test_rect(shapes, view_layers, scene, Rect{.ll = {0, 0}, .ur = {50, 50}});
+
+    auto has = [&](SelectionRef ref)
+    {
+        for (const auto &hit : hits)
+            if (hit == ref)
+                return true;
+        return false;
+    };
+
+    ASSERT_EQ(hits.size(), 2u);
+    EXPECT_TRUE(has(SelectionRef{inside_m1}));
+    EXPECT_TRUE(has(SelectionRef{inside_m2}));
+}
+
+TEST_F(PipelineFixture, HitTestRectSkipsAnUnselectableLayer)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+    scene.set_layer_name_selectable("M1", false);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    EXPECT_TRUE(Pipeline::hit_test_rect(shapes, view_layers, scene, Rect{.ll = {0, 0}, .ur = {50, 50}}).empty());
+}
+
+TEST_F(PipelineFixture, HitTestRectNeverReturnsTheBoundaryShape)
+{
+    root.get_abstract(abstract_id)->boundary = {Polygon{.points = {{0, 0}, {0, 1000}, {1000, 1000}, {1000, 0}, {0, 0}}}};
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    EXPECT_TRUE(Pipeline::hit_test_rect(shapes, view_layers, scene, Rect{.ll = {0, 0}, .ur = {1000, 1000}}).empty());
+}
