@@ -139,7 +139,7 @@ int main(int argc, char **argv)
 
         const auto &shapes = pipeline.run(root, scene, view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &buffer = renderer.rasterize(picture, scene);
 
         // The design's own library name (derived from whichever file's

@@ -416,7 +416,7 @@ extern "C"
 
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
         const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
-        const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers);
+        const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers, handle->root);
         const auto &cursor_picture = handle->renderer.build_cursor_picture(handle->scene);
         const auto &buffer = handle->renderer.compose_with_cursor(picture, cursor_picture, handle->scene);
 

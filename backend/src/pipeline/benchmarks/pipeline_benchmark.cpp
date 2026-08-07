@@ -191,7 +191,7 @@ static void BM_BuildPicture(benchmark::State &state)
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
         benchmark::DoNotOptimize(picture.get());
     }
     state.SetItemsProcessed(state.iterations() * pixel_shapes.size());
@@ -207,7 +207,7 @@ static void BM_Rasterize(benchmark::State &state)
     const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
     Renderer setup_renderer;
     const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
-    const auto &picture = setup_renderer.build_picture(pixel_shapes, scene, data.view_layers);
+    const auto &picture = setup_renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
 
     for (auto _ : state)
     {
@@ -235,7 +235,7 @@ static void BM_Render(benchmark::State &state)
         Renderer renderer;
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
         const auto &buffer = renderer.rasterize(picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
@@ -262,7 +262,7 @@ static void BM_RenderReused_NoChange(benchmark::State &state)
     {
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
         const auto &buffer = renderer.rasterize(picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
@@ -284,7 +284,7 @@ static void BM_RenderReused_PanOnly(benchmark::State &state)
         scene.set_pan(Point{pan_x++, 0});
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
         const auto &buffer = renderer.rasterize(picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);

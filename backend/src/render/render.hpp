@@ -208,13 +208,17 @@ namespace le
         /// @brief Record the pixel-space shapes into an SkPicture, sized to
         /// the Scene's viewport, drawn in map order (bottom-up, see
         /// Pipeline::filter_by_layer_visibility's comment) on top of the
-        /// background dot grid + axis lines drawn first by draw_grid.
-        /// Each group's ViewLayerStyle (outline/fill Color) comes from
-        /// `view_layers`; a ViewLayerId that doesn't resolve to a known
-        /// ViewLayer (see Pipeline's layer filter comment on why that's
-        /// kept, not dropped) has its whole group skipped here - there's
-        /// no style to draw it with.
-        const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers)
+        /// background dot grid + axis lines drawn first by draw_grid, and
+        /// the currently selected Abstract's own origin marker (see
+        /// draw_origin_marker, UPDATES.md 5.4) drawn just after - `root` is
+        /// only needed to look up that Abstract's AbstractData::origin;
+        /// skipped entirely if scene.current_abstract() doesn't resolve
+        /// (no Design selected). Each group's ViewLayerStyle (outline/fill
+        /// Color) comes from `view_layers`; a ViewLayerId that doesn't
+        /// resolve to a known ViewLayer (see Pipeline's layer filter
+        /// comment on why that's kept, not dropped) has its whole group
+        /// skipped here - there's no style to draw it with.
+        const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers, const Root &root)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return picture_.get(key, [&]
@@ -226,6 +230,9 @@ namespace le
                 // Grid first, so it sits underneath the real design
                 // geometry drawn below rather than obscuring it.
                 draw_grid(*canvas, scene);
+
+                if (const AbstractData *abstract = root.get_abstract(scene.current_abstract()))
+                    draw_origin_marker(*canvas, scene, abstract->origin);
 
                 for (const auto &[view_layer_id, group] : shapes)
                 {
@@ -444,6 +451,14 @@ namespace le
         static constexpr Color kMajorGridColor = {255, 255, 255, 230};
         static constexpr Color kAxisLineColor = {255, 255, 255, 160};
 
+        // Origin marker (UPDATES.md 5.4) - fully opaque, and a color
+        // distinct from both the grid (gray/white) and the cursor box
+        // (red) so it isn't confused with either. Fixed on-screen size
+        // regardless of zoom, same rationale as kCursorBoxSizePx.
+        static constexpr Color kOriginMarkerColor = {255, 200, 0, 255};
+        static constexpr float kOriginMarkerStrokeWidth = 2.0f;
+        static constexpr float kOriginMarkerSizePx = 16.0f;
+
         // Grid-snap indicator box (UPDATES.md 5.2) - fully opaque so it
         // stays visible over any layer color/pattern underneath. Fixed
         // on-screen size regardless of zoom (see draw_cursor) - 7x7px
@@ -639,6 +654,35 @@ namespace le
                         canvas.drawCircle(to_pixel_x(x), to_pixel_y(y), kGridDotRadius, major_paint);
                 }
             }
+        }
+
+        // Draws a fixed on-screen-size "+" cross at the Abstract's own
+        // origin point (UPDATES.md 5.4) - not necessarily dbu (0,0); an
+        // Abstract's origin is wherever its own LEF ORIGIN statement
+        // placed it (AbstractData::origin) - in the same pre-flip pixel
+        // space as draw_grid and build_picture's own shapes. Fixed size
+        // regardless of Scene::scale, same "marks a reference point, not
+        // geometry that should grow with zoom" rationale as
+        // kCursorBoxSizePx.
+        static void draw_origin_marker(SkCanvas &canvas, const Scene &scene, Point origin_dbu)
+        {
+            const double scale = scene.scale();
+            if (scale <= 0.0)
+                return;
+
+            const Point pan = scene.pan();
+            const auto cx = static_cast<SkScalar>((static_cast<double>(origin_dbu.x) - static_cast<double>(pan.x)) * scale);
+            const auto cy = static_cast<SkScalar>((static_cast<double>(origin_dbu.y) - static_cast<double>(pan.y)) * scale);
+
+            SkPaint paint;
+            paint.setAntiAlias(true);
+            paint.setStyle(SkPaint::kStroke_Style);
+            paint.setStrokeWidth(kOriginMarkerStrokeWidth);
+            paint.setColor(to_sk_color(kOriginMarkerColor));
+
+            const SkScalar half = kOriginMarkerSizePx / 2.0f;
+            canvas.drawLine(cx - half, cy, cx + half, cy, paint);
+            canvas.drawLine(cx, cy - half, cx, cy + half, paint);
         }
 
         // Draws the grid-snap indicator box (UPDATES.md 5.2) - a red

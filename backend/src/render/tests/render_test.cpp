@@ -216,7 +216,7 @@ TEST_F(RenderFixture, BuildPictureFillsInteriorPixelWithLayerStyleColor)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // M1 is ROUTING, so its TERMINAL fill is a tiled diagonal-stripe
     // pattern (see FillPattern), not a flat wash - scan a strip inside the
@@ -243,7 +243,7 @@ TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
     const auto &shapes = pipeline.run(root, scene, view_layers);
     ASSERT_EQ(shapes.size(), 2u); // two distinct groups: M1/OBSTRUCTION, M2/TERMINAL
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     SkBitmap bitmap = rasterize(picture, 100, 100);
 
     // M1/OBSTRUCTION is BRICK (any OBSTRUCTION is); M2/TERMINAL is ROUTING's
@@ -273,7 +273,7 @@ TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentF
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // The label is drawn at the shape's centroid (20,20), using the
     // opaque outline color (alpha 255) - unlike the surrounding translucent
@@ -305,7 +305,7 @@ TEST_F(RenderFixture, BuildPictureSkipsShapesWithUnresolvedViewLayer)
     const auto &shapes = pipeline.run(root, scene, view_layers);
     ASSERT_EQ(shapes.size(), 1u); // kept by the layer filter despite an invalid ViewLayerId
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     SkColor pixel = sample_pixel(picture, 100, 100, 20, 20);
     EXPECT_EQ(SkColorGetA(pixel), 0); // nothing drawn - no style to draw it with
@@ -323,12 +323,12 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    renderer.build_picture(pixel_shapes, scene, view_layers);
-    renderer.build_picture(pixel_shapes, scene, view_layers);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
     EXPECT_EQ(renderer.picture_calls(), 1u);
 
     scene.set_layer_name_visible("M1", false);
-    renderer.build_picture(pixel_shapes, scene, view_layers);
+    renderer.build_picture(pixel_shapes, scene, view_layers, root);
     EXPECT_EQ(renderer.picture_calls(), 2u);
 }
 
@@ -342,7 +342,7 @@ TEST_F(RenderFixture, BuildPictureDrawsSolidAxisLinesAtDbuOrigin)
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // pan=(0,0), scale=1.0 -> dbu (x=0) is pixel column 0, dbu (y=0) is
     // pixel row 0 (sample_pixel reads the picture's own unflipped pixel
@@ -361,7 +361,7 @@ TEST_F(RenderFixture, BuildPictureDrawsAMajorGridDotAtAKnownLatticePoint)
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (50,50) is on the default major lattice (multiple of 50) but
     // off both axes -> pixel (100,100) at this pan/scale.
@@ -378,7 +378,7 @@ TEST_F(RenderFixture, BuildPictureHidesBothGridTiersWhenTooDenseButKeepsAxisLine
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (500,500) -> pixel (50,50) at this scale, and 500 is a multiple
     // of 50 (would be a major dot if that tier weren't suppressed) - away
@@ -396,12 +396,60 @@ TEST_F(RenderFixture, BuildPictureHidesMinorTierIndependentlyOfMajorTier)
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (100,100) is on the major lattice (multiple of 50), off-axis,
     // -> pixel (50,50) at this pan/scale: still drawn even though minor
     // dots are hidden, proving the two tiers gate independently.
     EXPECT_GT(SkColorGetA(sample_pixel(picture, 100, 100, 50, 50)), 0);
+}
+
+TEST_F(RenderFixture, BuildPictureDrawsOriginMarkerAtTheAbstractsOwnOrigin)
+{
+    // Not (0,0) - proves the marker tracks AbstractData::origin (UPDATES.md
+    // 5.4: "not necessarily at 0,0"), not a hardcoded dbu (0,0).
+    const AbstractId origin_abstract_id = root.create_abstract(AbstractData{.origin = Point{33, 71}});
+
+    Scene scene;
+    scene.set_current_abstract(origin_abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    // Origin at dbu (33,71) -> pixel (33,71) at this pan/scale
+    // (build_picture's own pre-flip pixel space, no Y-flip). Sampled on
+    // the horizontal arm, away from the vertical arm's own stroke.
+    const SkColor marker_color = sample_pixel(picture, 100, 100, 40, 71);
+    EXPECT_EQ(SkColorGetR(marker_color), 255);
+    EXPECT_EQ(SkColorGetG(marker_color), 200);
+    EXPECT_EQ(SkColorGetB(marker_color), 0);
+    EXPECT_EQ(SkColorGetA(marker_color), 255);
+
+    // Far from the marker's actual position and off any grid dot/axis
+    // line - nothing drawn here.
+    EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 5, 90)), 0);
+}
+
+TEST_F(RenderFixture, BuildPictureOmitsOriginMarkerWhenNoAbstractIsSelected)
+{
+    Scene scene; // current_abstract() left default/invalid - no Design selected
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // degrades gracefully to empty
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    // Would show the marker's default-origin (0,0) position if
+    // root.get_abstract(scene.current_abstract()) weren't null-checked -
+    // off any grid dot/axis line, so nothing else could account for alpha
+    // being nonzero here either.
+    EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 5, 5)), 0);
 }
 
 TEST_F(RenderFixture, BuildCursorPictureDrawsAFixedSizeBoxCenteredOnTheSnappedMousePosition)
@@ -502,7 +550,7 @@ TEST_F(RenderFixture, ComposeWithCursorDoesNotReRasterizeDesignWhenOnlyMouseMove
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     scene.set_mouse_position(10, 10);
     const auto &cursor_picture_1 = renderer.build_cursor_picture(scene);
@@ -539,7 +587,7 @@ TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const PixelBuffer &buffer = renderer.rasterize(picture, scene);
     ASSERT_NE(buffer.data, nullptr);
 
@@ -627,7 +675,7 @@ TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract, nothing drawn
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const PixelBuffer &buffer = renderer.rasterize(picture, scene);
 
     ASSERT_EQ(buffer.width, 100);
@@ -653,7 +701,7 @@ TEST_F(RenderFixture, RasterizeWithZeroSizedViewportDoesNotCrashAndReturnsEmptyB
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const PixelBuffer &buffer = renderer.rasterize(picture, scene);
 
     EXPECT_EQ(buffer.data, nullptr);
@@ -674,7 +722,7 @@ TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     renderer.rasterize(picture, scene);
     renderer.rasterize(picture, scene);
     EXPECT_EQ(renderer.rasterize_calls(), 1u);
