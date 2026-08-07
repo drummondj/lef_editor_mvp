@@ -1,6 +1,7 @@
 #include <fmt/ostream.h>
 #include "lef_reader.hpp"
 #include "../geometry/geometry.hpp"
+#include <cmath>
 
 namespace le
 {
@@ -27,25 +28,26 @@ namespace le
         technology_ = root.get_technology(technology_id);
         library_name_ = library_name;
 
-        // Open file
-        FILE *f;
-        if ((f = fopen(filename.c_str(), "r")) == 0)
+        // Open file - RAII (fclose via unique_ptr's deleter) rather than a
+        // manual fclose() at each return path below, so the handle is
+        // still closed if an exception propagates out of lefrRead (which
+        // invokes our own callbacks - e.g. a std::vector::reserve deep in
+        // shapes_from_parser could throw on a malformed file) rather than
+        // returning through here normally.
+        std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(filename.c_str(), "r"), &fclose);
+        if (!file)
         {
-            // fopen already failed, so there's no stream to close - fclose(f)
-            // here would call fclose(NULL), which is undefined behavior.
             spdlog::error("Could not open LEF file {}.", filename);
             return 1;
         }
 
         // Read file
-        int result = lefrRead(f, filename.c_str(), (void *)this);
+        int result = lefrRead(file.get(), filename.c_str(), (void *)this);
         if (result != 0)
         {
             spdlog::error("Could not parse LEF file {}.", filename);
-            fclose(f);
             return 2;
         }
-        fclose(f);
         lefrPrintUnusedCallbacks(stdout);
 
         return 0;
@@ -267,11 +269,14 @@ namespace le
         // TODO: Check that pin doesn't already exists with the same name
         // TODO: link to shematic depending if we are creating the schematic or not
 
-        // Create a new terminal
+        // The parser reuses one scratch lefiPin across every PIN statement
+        // and never resets direction_ between them, so a pin that omits
+        // DIRECTION would otherwise silently inherit whichever prior pin
+        // last set it (same hazard as lefiLayer's direction_ above).
         auto terminal = TerminalData{
             .abstract = reader->abstract_id_,
             .name = lef_pin->name(),
-            .direction = signal_direction_from_parser(lef_pin->direction()),
+            .direction = lef_pin->hasDirection() ? signal_direction_from_parser(lef_pin->direction()) : SignalDirection::NONE,
         };
 
         auto terminal_id = reader->root_->create_terminal(terminal);
@@ -395,6 +400,23 @@ namespace le
         };
     }
 
+    size_t LEFReader::safe_iteration_count(double x_count, double y_count)
+    {
+        if (!std::isfinite(x_count) || !std::isfinite(y_count) || x_count < 0.0 || y_count < 0.0)
+            return 0;
+
+        // Generous but bounded - a real LEF ITERATE statement repeats a
+        // handful of times (single/double digits), never anywhere close
+        // to this. Checked against each factor individually, before
+        // multiplying, so the product itself can't overflow double's
+        // range either.
+        constexpr double kMaxReasonableCount = 1'000'000.0;
+        if (x_count > kMaxReasonableCount || y_count > kMaxReasonableCount)
+            return 0;
+
+        return static_cast<size_t>(x_count) * static_cast<size_t>(y_count);
+    }
+
     // The `!shape.has_value()` guards below (RECT/RECT-ITERATE/PATH/
     // PATH-ITERATE/POLYGON/POLYGON-ITERATE without a preceding LAYER) are
     // unreachable in practice - the LEF grammar itself already rejects that
@@ -452,7 +474,7 @@ namespace le
                     break;
                 }
                 auto lef_rect_iter = geometries->getRectIter(j);
-                shape.value().rects.reserve(lef_rect_iter->xStart * lef_rect_iter->yStart);
+                shape.value().rects.reserve(safe_iteration_count(lef_rect_iter->xStart, lef_rect_iter->yStart));
 
                 for (int ix = 0; ix < lef_rect_iter->xStart; ix++)
                 {
@@ -492,7 +514,7 @@ namespace le
                     break;
                 }
                 auto lef_path_iter = geometries->getPathIter(j);
-                shape.value().paths.reserve(lef_path_iter->xStart * lef_path_iter->yStart);
+                shape.value().paths.reserve(safe_iteration_count(lef_path_iter->xStart, lef_path_iter->yStart));
                 for (int ix = 0; ix < lef_path_iter->xStart; ix++)
                 {
                     for (int iy = 0; iy < lef_path_iter->yStart; iy++)
@@ -531,7 +553,7 @@ namespace le
                     break;
                 }
                 auto lef_polygon_iter = geometries->getPolygonIter(j);
-                shape.value().polygons.reserve(lef_polygon_iter->xStart * lef_polygon_iter->yStart);
+                shape.value().polygons.reserve(safe_iteration_count(lef_polygon_iter->xStart, lef_polygon_iter->yStart));
                 for (int ix = 0; ix < lef_polygon_iter->xStart; ix++)
                 {
                     for (int iy = 0; iy < lef_polygon_iter->yStart; iy++)

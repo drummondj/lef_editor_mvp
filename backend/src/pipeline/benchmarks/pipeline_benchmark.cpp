@@ -40,7 +40,7 @@ static void BM_FilterByViewportAndSize(benchmark::State &state)
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &filtered = pipeline.filter_by_viewport_and_size(generated, scene);
+        const auto &filtered = pipeline.filter_by_viewport_and_size(generated, scene, data.view_layers);
         const auto *filtered_data = filtered.data();
         benchmark::DoNotOptimize(filtered_data);
     }
@@ -55,7 +55,7 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
 
     Pipeline setup;
     const auto &generated = setup.generate_shapes(data.root, data.abstract_id, data.view_layers);
-    const auto &viewport_filtered = setup.filter_by_viewport_and_size(generated, scene);
+    const auto &viewport_filtered = setup.filter_by_viewport_and_size(generated, scene, data.view_layers);
 
     for (auto _ : state)
     {

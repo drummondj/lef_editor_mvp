@@ -276,6 +276,29 @@ TEST(LEFReaderErrors, DuplicateLayerNameIsIgnored)
     EXPECT_EQ(root.get_layer(m1_id)->direction, RoutingDirection::H);
 }
 
+TEST(LEFReaderErrors, PinWithoutDirectionDoesNotInheritThePreviousPinsDirection)
+{
+    // Regression: the vendored parser reuses one scratch lefiPin across
+    // every PIN statement and never resets direction_ between them
+    // (same hazard as lefiLayer's direction_) - PIN B declares no
+    // DIRECTION at all and must read back NONE, not silently inherit
+    // PIN A's DIRECTION INPUT.
+    Root root;
+    LEFReader reader;
+    ASSERT_EQ(reader.read_lef(fixture_path("pin_without_direction.lef"), root, "test_lib"), 0);
+
+    ASSERT_EQ(root.get_design_size(), 1u);
+    AbstractId abstract_id = root.get_design_abstract(root.get_design_ids().front());
+
+    TerminalId pin_a_id = find_terminal_id(root, abstract_id, "A");
+    ASSERT_TRUE(pin_a_id.valid());
+    EXPECT_EQ(root.get_terminal(pin_a_id)->direction, SignalDirection::INPUT);
+
+    TerminalId pin_b_id = find_terminal_id(root, abstract_id, "B");
+    ASSERT_TRUE(pin_b_id.valid());
+    EXPECT_EQ(root.get_terminal(pin_b_id)->direction, SignalDirection::NONE);
+}
+
 TEST(LEFReaderErrors, SecondReadWithDifferentUnitsIsIgnored)
 {
     // Reading a second LEF into the same Root with a different DATABASE

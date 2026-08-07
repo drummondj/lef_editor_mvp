@@ -68,9 +68,19 @@ namespace le
     /// transitively depends on, so invalidation cascades for free via key
     /// comparison - no manual "invalidate downstream" bookkeeping):
     ///
-    ///   generate_shapes             <- AbstractId
+    ///   generate_shapes             <- AbstractId, ViewLayerSet::generation()
     ///   filter_by_viewport_and_size <- AbstractId, Scene::viewport_version()
     ///   filter_by_layer_visibility  <- AbstractId, viewport_version(), Scene::visibility_version()
+    ///
+    /// generate_shapes's key includes ViewLayerSet::generation() (not just
+    /// AbstractId) because it resolves every shape straight to a
+    /// ViewLayerId using the *given* ViewLayerSet - api.cpp's le_read_lef
+    /// rebuilds its handle's ViewLayerSet from scratch (a new Pool, not an
+    /// in-place update) on every call, so re-reading a LEF file while
+    /// viewing an already-cached Abstract must invalidate this stage even
+    /// though the AbstractId itself hasn't changed, or it would keep
+    /// returning RenderedShapes whose ViewLayerIds were resolved against a
+    /// now-discarded ViewLayerSet.
     ///
     /// generate_shapes collects every Shape from the Abstract's Terminals'
     /// Ports, Obstructions, and boundary polygon, resolving each straight
@@ -133,7 +143,7 @@ namespace le
         /// handled specially.
         const std::vector<RenderedShape> &generate_shapes(const Root &root, AbstractId abstract_id, const ViewLayerSet &view_layers)
         {
-            return generated_.get(abstract_id, [&]
+            return generated_.get(std::tuple{abstract_id, view_layers.generation()}, [&]
             {
                 std::vector<RenderedShape> shapes;
                 const auto &terminals = root.get_abstract_terminals(abstract_id);
@@ -242,9 +252,16 @@ namespace le
         /// Shape::texts) have no bbox and are dropped for now; text
         /// rendering isn't subject to this kind of culling anyway and
         /// needs its own handling later.
-        const std::vector<RenderedShape> &filter_by_viewport_and_size(const std::vector<RenderedShape> &shapes, const Scene &scene)
+        const std::vector<RenderedShape> &filter_by_viewport_and_size(const std::vector<RenderedShape> &shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
-            const auto key = std::pair{scene.current_abstract(), scene.viewport_version()};
+            // view_layers.generation() is here even though this stage
+            // never reads view_layers itself - `shapes` is generate_shapes's
+            // output, and its own key includes generation() (see that
+            // function's doc comment on why); if this stage's key omitted
+            // it, a cache hit here would keep returning a filtered view of
+            // the *previous* `shapes` even after generate_shapes correctly
+            // recomputed a new one.
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), view_layers.generation()};
             return viewport_filtered_.get(key, [&]
             {
                 const double scale = scene.scale();
@@ -302,7 +319,12 @@ namespace le
         /// top, with no separate sort/ordering step needed.
         const std::map<ViewLayerId, std::vector<RenderedShape>> &filter_by_layer_visibility(const std::vector<RenderedShape> &shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            // view_layers.generation() - same transitive-staleness reasoning
+            // as filter_by_viewport_and_size's own key above: `shapes` here
+            // is that stage's output, which changes whenever generate_shapes
+            // does, even when current_abstract()/viewport_version()/
+            // visibility_version() don't.
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), view_layers.generation()};
             return layer_filtered_.get(key, [&]
             {
                 std::map<ViewLayerId, std::vector<RenderedShape>> grouped;
@@ -330,7 +352,7 @@ namespace le
         const std::map<ViewLayerId, std::vector<RenderedShape>> &run(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
         {
             const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
-            const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene);
+            const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene, view_layers);
             return filter_by_layer_visibility(viewport_filtered, scene, view_layers);
         }
 
@@ -413,8 +435,8 @@ namespace le
         uint64_t layer_filter_calls() const { return layer_filtered_.call_count(); }
 
     private:
-        CachedStage<AbstractId, std::vector<RenderedShape>> generated_;
-        CachedStage<std::pair<AbstractId, uint64_t>, std::vector<RenderedShape>> viewport_filtered_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<RenderedShape>>> layer_filtered_;
+        CachedStage<std::tuple<AbstractId, uint64_t>, std::vector<RenderedShape>> generated_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::vector<RenderedShape>> viewport_filtered_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<RenderedShape>>> layer_filtered_;
     };
 }

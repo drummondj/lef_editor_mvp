@@ -454,6 +454,73 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     EXPECT_FALSE(is_white(59, 30)); // second rect's left edge - same Terminal, not the selected piece
 }
 
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
+{
+    // draw_selected_piece_outline's polygon branch, otherwise untested -
+    // every other piece-outline test above uses a rect-only piece.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape polygon_piece{.layer_name = "M1", .polygons = {Polygon{.points = {{10, 10}, {30, 10}, {30, 30}, {10, 30}}}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {polygon_piece}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, polygon_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+
+    // Same square as the rect-piece tests above (10,10)-(30,30) - left
+    // edge preflip (9,20) -> post-flip y = 100-20 = 80.
+    const uint8_t *p = buffer.data + static_cast<size_t>(80) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(9) * 4;
+    EXPECT_EQ(p[0], 255);
+    EXPECT_EQ(p[1], 255);
+    EXPECT_EQ(p[2], 255);
+    EXPECT_GT(p[3], 200);
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPiece)
+{
+    // draw_selected_piece_outline's path branch (halo width =
+    // path.width * scale + 2*kSelectionPathHaloMarginPx), otherwise
+    // untested - every other piece-outline test above uses a rect/
+    // polygon piece.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, path_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+
+    auto is_white = [&](int x, int y)
+    {
+        const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+        return p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 200;
+    };
+
+    // Horizontal path centerline at dbu y=20 (preflip), scale 1.0 -> post-flip y = 100-20 = 80.
+    // The halo is a solid stroked band (not just an outline), so the
+    // centerline itself is white, not just its edges.
+    EXPECT_TRUE(is_white(20, 80));
+    // Well outside the path's width + halo margin - not selected/white.
+    EXPECT_FALSE(is_white(20, 60));
+}
+
 TEST_F(RenderFixture, BuildPictureReusesCacheUntilSelectionVersionChanges)
 {
     const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});

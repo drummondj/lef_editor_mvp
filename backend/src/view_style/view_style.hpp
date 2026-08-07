@@ -2,6 +2,7 @@
 #include "../database/database.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -98,6 +99,7 @@ namespace le
         static ViewLayerSet build_for_technology(const Root &root, TechnologyId technology_id)
         {
             ViewLayerSet set;
+            set.generation_ = next_generation();
 
             // Two independent palette cursors (see kRoutingCutColors/
             // kOtherColors below) plus the most recently assigned ROUTING
@@ -181,6 +183,20 @@ namespace le
 
         ViewLayerId boundary_view_layer() const { return boundary_id_; }
 
+        /// @brief Identifies *which* built ViewLayerSet this is - distinct
+        /// from every other one build_for_technology() has ever produced,
+        /// even one built for the same TechnologyId (e.g. after a second
+        /// LEF file adds a layer, changing every later ViewLayerId
+        /// assignment - see le_read_lef's own doc comment on why it
+        /// rebuilds on every call, not just the first). A fresh, empty
+        /// (default-constructed) ViewLayerSet reads 0. Exists so a cache
+        /// keyed on some other stable identity (e.g. AbstractId, which
+        /// doesn't change across a rebuild) can still detect that the
+        /// ViewLayerIds it previously resolved shapes against no longer
+        /// mean the same thing - see Pipeline::generate_shapes's cache
+        /// key, which learned this the hard way.
+        uint64_t generation() const { return generation_; }
+
         const ViewLayerData *get(ViewLayerId id) const { return pool_.get(id); }
 
         std::vector<ViewLayerId> all() const { return pool_.ids(); }
@@ -218,6 +234,22 @@ namespace le
             ViewLayerPurpose purpose;
             ViewLayerId id;
         };
+
+        // Process-wide, monotonically increasing - not per-Root/per-handle,
+        // since ViewLayerSet has no back-reference to either. Only the
+        // relative distinctness of two generation() values is ever relied
+        // on (as a cache-key component), never a specific number or a
+        // per-handle sequence, so sharing this counter across every
+        // LeHandle in the process is fine. Atomic since this project's
+        // pipeline is meant to become multi-threaded (see CLAUDE.md/
+        // README's Threading open design question) - a plain static
+        // counter would race if build_for_technology is ever called from
+        // more than one thread.
+        static uint64_t next_generation()
+        {
+            static std::atomic<uint64_t> counter{0};
+            return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
 
         ViewLayerId add(std::string layer_name, std::string name, ViewLayerPurpose purpose, LayerId layer, ViewLayerStyle style)
         {
@@ -337,5 +369,6 @@ namespace le
         std::vector<LookupEntry> lookup_;
         ViewLayerId boundary_id_;
         std::vector<ViewLayerRow> rows_;
+        uint64_t generation_ = 0;
     };
 }

@@ -1,5 +1,6 @@
 #include "../lef_reader.hpp"
 #include <gtest/gtest.h>
+#include <limits>
 
 using namespace le;
 
@@ -69,4 +70,35 @@ TEST(SignalDirectionFromParser, NullOrUnknownIsNone)
     EXPECT_EQ(LEFReader::signal_direction_from_parser(nullptr), SignalDirection::NONE);
     EXPECT_EQ(LEFReader::signal_direction_from_parser(""), SignalDirection::NONE);
     EXPECT_EQ(LEFReader::signal_direction_from_parser("BOGUS"), SignalDirection::NONE);
+}
+
+TEST(SafeIterationCount, MultipliesOrdinaryCounts)
+{
+    EXPECT_EQ(LEFReader::safe_iteration_count(5.0, 3.0), 15u);
+    EXPECT_EQ(LEFReader::safe_iteration_count(1.0, 1.0), 1u);
+    EXPECT_EQ(LEFReader::safe_iteration_count(0.0, 5.0), 0u); // a legitimate zero-repetition ITERATE, not rejected
+}
+
+TEST(SafeIterationCount, RejectsNegativeCounts)
+{
+    // A malformed/negative ITERATE count - not a real LEF construct, but
+    // nothing in the grammar guarantees the parser rejects it upstream.
+    EXPECT_EQ(LEFReader::safe_iteration_count(-1.0, 5.0), 0u);
+    EXPECT_EQ(LEFReader::safe_iteration_count(5.0, -1.0), 0u);
+}
+
+TEST(SafeIterationCount, RejectsNonFiniteCounts)
+{
+    EXPECT_EQ(LEFReader::safe_iteration_count(std::numeric_limits<double>::infinity(), 1.0), 0u);
+    EXPECT_EQ(LEFReader::safe_iteration_count(1.0, std::numeric_limits<double>::quiet_NaN()), 0u);
+}
+
+TEST(SafeIterationCount, RejectsCountsAboveTheSaneMaximum)
+{
+    // The exact bug this guards against: an extreme value from a
+    // malformed file would otherwise overflow size_t (or worse, make the
+    // double-to-size_t conversion itself undefined behavior) when
+    // multiplied and handed straight to std::vector::reserve.
+    EXPECT_EQ(LEFReader::safe_iteration_count(1e18, 1e18), 0u);
+    EXPECT_EQ(LEFReader::safe_iteration_count(1e300, 2.0), 0u);
 }

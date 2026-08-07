@@ -10,6 +10,17 @@
 // ffigen (or any other C FFI generator) and so LeHandle/LePixelBuffer have
 // a stable, toolchain-independent ABI between this project's macOS dev
 // machine and its Linux deployment target.
+//
+// Thread safety: every function below is safe to call concurrently from
+// multiple threads on the *same* LeHandle, except le_destroy() (see its
+// own doc comment) - each internally locks a mutex owned by the handle.
+// This isn't defensive-but-unneeded caution: Flutter's own external-
+// texture API calls le_render_pixel_buffer() from a dedicated raster
+// thread once per frame, while ordinary pointer/FFI calls
+// (le_set_mouse_position(), le_mouse_down()/up(), le_zoom(), ...) run on
+// the platform thread - both reach the same handle. A real crash
+// (concurrent, unsynchronized std::map mutation inside Pipeline) shipped
+// before this was added.
 
 #ifdef __cplusplus
 extern "C"
@@ -148,7 +159,13 @@ extern "C"
     LeHandle *le_create(void);
 
     /// @brief Destroy an instance created by le_create(). Safe to call
-    /// with a null handle (no-op), matching free()'s convention.
+    /// with a null handle (no-op), matching free()'s convention. The one
+    /// function this header's own thread-safety guarantee doesn't cover -
+    /// the handle's mutex is destroyed along with everything else, so it
+    /// can't protect this call itself. The caller must ensure no other
+    /// thread is still calling into this handle when le_destroy() runs
+    /// (the same standard contract as destroying any C++ object with
+    /// live references elsewhere - not a new constraint this introduces).
     void le_destroy(LeHandle *handle);
 
     /// @brief Read a LEF file into this handle's shared Root, deriving a

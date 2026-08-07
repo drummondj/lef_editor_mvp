@@ -35,6 +35,16 @@ namespace le
                 bg::expand(*out, r);
         }
 
+        // Cheap containment pre-check shared by find_hit_piece and
+        // local_width_at, ahead of an expensive bg::within/path_to_polygons
+        // call - see find_hit_piece's own doc comment for the measured
+        // cost this guards against (~17ms/call on the 1M-shape stress
+        // design without it, dominated by path_to_polygons).
+        static bool point_in_rect(const Point &point, const Rect &rect)
+        {
+            return point.x >= rect.ll.x && point.x <= rect.ur.x && point.y >= rect.ll.y && point.y <= rect.ur.y;
+        }
+
         static Rect bbox_of(const Polygon &poly)
         {
             Rect r;
@@ -68,11 +78,25 @@ namespace le
                 expand_bbox(out, bbox_of(path));
         }
 
+        // Assigns straight from `polygon.points` into `bg_polygon`'s own
+        // ring storage - one copy, not two. ensure_closed() (used as-is by
+        // the other call site below, which needs the closed vector back)
+        // would work here too but builds and returns its own intermediate
+        // std::vector<Point> first, which this then has to copy *again*
+        // via .assign() - avoided by closing the ring in place instead.
         static bg::model::polygon<Point> to_boost_polygon(const Polygon &polygon)
         {
             bg::model::polygon<Point> bg_polygon;
-            std::vector<Point> ring = ensure_closed(polygon.points);
-            bg_polygon.outer().assign(ring.begin(), ring.end());
+            bg_polygon.outer().assign(polygon.points.begin(), polygon.points.end());
+
+            if (!polygon.points.empty())
+            {
+                const auto &first = polygon.points.front();
+                const auto &last = polygon.points.back();
+                if (last.x != first.x || last.y != first.y)
+                    bg_polygon.outer().push_back(first);
+            }
+
             bg::correct(bg_polygon);
             return bg_polygon;
         }
@@ -436,6 +460,11 @@ namespace le
         ///   the ratio; area/max(dim) conflates both arms of an L into one
         ///   wrong average for either arm).
         ///
+        /// Like find_hit_piece, polygons/paths are pre-checked against a
+        /// cheap bbox (point_in_rect) before the real bg::within/
+        /// path_to_polygons call, for the same measured reason - see that
+        /// function's own doc comment.
+        ///
         /// If `point` falls inside none of the shape's pieces (e.g. it
         /// came from get_label_location's own last-resort raw-centroid
         /// fallback, which can land outside every piece for disjoint
@@ -449,12 +478,15 @@ namespace le
         {
             for (const auto &rect : shape.rects)
             {
-                if (point.x >= rect.ll.x && point.x <= rect.ur.x && point.y >= rect.ll.y && point.y <= rect.ur.y)
+                if (point_in_rect(point, rect))
                     return static_cast<double>(std::min(rect.ur.x - rect.ll.x, rect.ur.y - rect.ll.y));
             }
 
             for (const auto &path : shape.paths)
             {
+                if (!point_in_rect(point, bbox_of(path)))
+                    continue;
+
                 for (const auto &part : path_to_polygons(path))
                 {
                     if (bg::within(point, to_boost_polygon(part)))
@@ -464,6 +496,9 @@ namespace le
 
             for (const auto &polygon : shape.polygons)
             {
+                if (!point_in_rect(point, bbox_of(polygon)))
+                    continue;
+
                 const auto bg_polygon = to_boost_polygon(polygon);
                 if (bg::within(point, bg_polygon))
                     return 2.0 * distance_to_boundary(bg_polygon, point);
@@ -523,7 +558,7 @@ namespace le
         /// contains `point`.
         ///
         /// Polygons/paths are pre-checked against a cheap bbox (see
-        /// point_in_rect below, and bbox_of for paths - already accounts
+        /// point_in_rect above, and bbox_of for paths - already accounts
         /// for width) before the real `bg::within`/`path_to_polygons`
         /// test - a real measured cost, not speculation: BM_HitTestPoint
         /// (pipeline_benchmark.cpp) against the 1M-shape stress design
@@ -537,20 +572,15 @@ namespace le
         /// BENCHMARKS.md for the before/after numbers.
         static std::optional<Shape> find_hit_piece(const Shape &shape, const Point &point)
         {
-            auto point_in_rect = [&](const Rect &rect)
-            {
-                return point.x >= rect.ll.x && point.x <= rect.ur.x && point.y >= rect.ll.y && point.y <= rect.ur.y;
-            };
-
             for (const auto &rect : shape.rects)
             {
-                if (point_in_rect(rect))
+                if (point_in_rect(point, rect))
                     return Shape{.layer_name = shape.layer_name, .rects = {rect}};
             }
 
             for (const auto &polygon : shape.polygons)
             {
-                if (!point_in_rect(bbox_of(polygon)))
+                if (!point_in_rect(point, bbox_of(polygon)))
                     continue;
 
                 if (bg::within(point, to_boost_polygon(polygon)))
@@ -559,7 +589,7 @@ namespace le
 
             for (const auto &path : shape.paths)
             {
-                if (!point_in_rect(bbox_of(path)))
+                if (!point_in_rect(point, bbox_of(path)))
                     continue;
 
                 for (const auto &part : path_to_polygons(path))

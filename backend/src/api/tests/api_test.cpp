@@ -1,13 +1,47 @@
 #include "../api.hpp"
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <map>
 #include <string>
+#include <thread>
 
 namespace
 {
     std::string fixture_path(const std::string &name)
     {
         return std::string(API_TEST_FIXTURES_DIR) + "/" + name;
+    }
+
+    // A moderately-sized (not stress_data.hpp's full 1M-shape) generated
+    // LEF - one PIN per shape, matching stress_data.hpp's "fresh LAYER
+    // before every geometry item" trick so shapes_from_parser finalizes
+    // many separate Shape entries - giving Pipeline::filter_by_layer_
+    // visibility's grouping loop (the exact std::map mutation that raced
+    // in the reported crash) enough iterations per call to take
+    // measurable time, without making this test itself slow. Written to
+    // a scratch temp file rather than a checked-in fixture, since it's
+    // generated, not hand-authored.
+    std::string generate_concurrency_stress_lef(int shape_count)
+    {
+        const std::filesystem::path path = std::filesystem::temp_directory_path() / "le_concurrency_stress.lef";
+
+        std::ofstream out(path, std::ios::trunc);
+        out << "VERSION 5.8 ;\nBUSBITCHARS \"<>\" ;\nDIVIDERCHAR \"/\" ;\n\n";
+        out << "UNITS\n   DATABASE MICRONS 1000 ;\nEND UNITS\n\n";
+        out << "LAYER M1\n   TYPE ROUTING ;\n   WIDTH 1 ;\n   PITCH 2 ;\n   DIRECTION HORIZONTAL ;\nEND M1\n\n";
+        out << "MACRO CONCURRENCYSTRESS\n   CLASS CORE ;\n   SIZE 100000 BY 100000 ;\n\n";
+
+        for (int i = 0; i < shape_count; ++i)
+        {
+            const double x = (i % 1000) * 100.0;
+            const double y = (i / 1000) * 100.0;
+            out << "   PIN P" << i << "\n      DIRECTION INPUT ;\n      PORT\n         LAYER M1 ;\n"
+                << "         RECT " << x << " " << y << " " << (x + 1.0) << " " << (y + 1.0) << " ;\n      END\n   END P" << i << "\n";
+        }
+
+        out << "END CONCURRENCYSTRESS\n";
+        return path.string();
     }
 
     // ROUTING layers (e.g. the pin's M1) render with a tiled FillPattern
@@ -1348,6 +1382,30 @@ TEST_F(ApiFixture, SelectedTerminalBoundingBoxTrimsTrailingZerosInWholeGroupsOfT
     EXPECT_STREQ(properties.at("bbox_um").string_value, "0.340 0.340 5.340 5.340");
 }
 
+TEST_F(ApiFixture, SelectedTerminalBoundingBoxKeepsFullPrecisionWhenNotAMultipleOfAThousand)
+{
+    // format_coordinate_um's "leave the value untouched" branch, otherwise
+    // untested - every other bbox_um test uses DATABASE MICRONS 1000,
+    // where um = dbu/1000 is always exactly 3-decimal-precise, so the
+    // first trailing-zero-group check always succeeds there. This
+    // fixture uses DATABASE MICRONS 2000 (full_precision_pin.lef) with a
+    // RECT at (0.0005,0.0005)-(5.0005,5.0005) micron - a value that
+    // genuinely needs all 6 decimal digits, so the trim loop's first
+    // check ("500" isn't "000") must fail immediately and leave it alone.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("full_precision_pin.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 0.01 - 1.0, 0, 100);
+
+    le_mouse_down(handle, 50, 50); // inside the rect - dbu (5000,5000)
+    le_mouse_up(handle, 50, 50);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(properties.contains("bbox_um"));
+    EXPECT_STREQ(properties.at("bbox_um").string_value, "0.000500 0.000500 5.000500 5.000500");
+}
+
 TEST_F(ApiFixture, SelectedObstructionReportsItsKindShapesCountAndBoundingBox)
 {
     load_pin_and_obstruction_at_known_scale(handle);
@@ -1504,4 +1562,40 @@ TEST_F(ApiFixture, ShiftClickingTwoPiecesOfTheSameTerminalSelectsBothIndependent
     EXPECT_NE(first_bbox, second_bbox); // genuinely distinct pieces
     EXPECT_EQ(first_bbox, "16 1 19 4");
     EXPECT_EQ(second_bbox, "16 16 19 19");
+}
+
+TEST_F(ApiFixture, ConcurrentRenderAndMousePositionCallsOnTheSameHandleDoNotCrash)
+{
+    // Regression: le_render_pixel_buffer (called by Flutter's own raster
+    // thread, via FlutterTexture.copyPixelBuffer(), once per frame) and
+    // le_set_mouse_position/le_zoom (called by the platform thread on
+    // every pointer event) both run Pipeline::run() on the same handle -
+    // a real crash (concurrent, unsynchronized std::map mutation inside
+    // Pipeline::filter_by_layer_visibility) shipped from exactly this
+    // pattern. Every LeHandle-touching function now locks the handle's
+    // own mutex; this drives both call paths concurrently, repeatedly,
+    // and must complete without crashing, deadlocking, or hanging.
+    ASSERT_EQ(le_read_lef(handle, generate_concurrency_stress_lef(3000).c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 200, 200);
+
+    constexpr int kIterations = 50;
+    std::thread render_thread([&]
+                               {
+        for (int i = 0; i < kIterations; ++i)
+        {
+            // Alternates a no-op-ish zoom so viewport_version() keeps
+            // changing, forcing Pipeline::run() to actually recompute
+            // (not just return an already-cached result) on most calls -
+            // the same "real work, not a cache hit" condition the
+            // original crash needed to manifest.
+            le_zoom(handle, (i % 2 == 0) ? 0.001 : -0.001, 100, 100);
+            const LePixelBuffer buffer = le_render_pixel_buffer(handle);
+            EXPECT_NE(buffer.data, nullptr);
+        } });
+
+    for (int i = 0; i < kIterations; ++i)
+        le_set_mouse_position(handle, i % 200, (i * 7) % 200);
+
+    render_thread.join();
 }

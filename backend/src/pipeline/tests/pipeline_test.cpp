@@ -237,6 +237,28 @@ TEST_F(PipelineFixture, GenerateShapesReusesCacheForSameAbstractId)
     EXPECT_EQ(pipeline.generate_calls(), 2u);
 }
 
+TEST_F(PipelineFixture, GenerateShapesRecomputesWhenViewLayersIsRebuiltEvenForTheSameAbstractId)
+{
+    // Regression: generate_shapes's cache key used to be AbstractId alone,
+    // even though its compute lambda resolves every shape's ViewLayerId
+    // against the given ViewLayerSet. le_read_lef (api.cpp) rebuilds its
+    // handle's ViewLayerSet from scratch - a brand-new Pool, not an
+    // in-place update - on every call, so re-reading a LEF file while
+    // viewing an already-cached Abstract must invalidate this cache even
+    // though the AbstractId itself hasn't changed, or it would keep
+    // returning RenderedShapes resolved against the discarded
+    // ViewLayerSet. See ViewLayerSet::generation() for the fix.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    pipeline.generate_shapes(root, abstract_id, view_layers);
+    pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(pipeline.generate_calls(), 1u); // same ViewLayerSet instance - cache hit
+
+    ViewLayerSet rebuilt_view_layers = ViewLayerSet::build_for_technology(root, technology_id);
+    pipeline.generate_shapes(root, abstract_id, rebuilt_view_layers);
+    EXPECT_EQ(pipeline.generate_calls(), 2u); // same AbstractId, but a freshly rebuilt ViewLayerSet - must recompute
+}
+
 TEST_F(PipelineFixture, FilterByViewportAndSizeKeepsShapesInsideViewport)
 {
     Scene scene;
@@ -247,7 +269,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeKeepsShapesInsideViewport)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}}, .view_layer = {}},
     };
-    const auto &result = pipeline.filter_by_viewport_and_size(shapes, scene);
+    const auto &result = pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
     EXPECT_EQ(result.size(), 1u);
 }
 
@@ -263,7 +285,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesWithNoGeometry)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .texts = {Text{.label = "A1", .location = {5, 5}}}}, .view_layer = {}},
     };
-    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene).empty());
+    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene, view_layers).empty());
 }
 
 TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesOutsideViewport)
@@ -276,7 +298,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesOutsideViewport)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {1000, 1000}, .ur = {1010, 1010}}}}, .view_layer = {}},
     };
-    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene).empty());
+    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene, view_layers).empty());
 }
 
 TEST_F(PipelineFixture, FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLongShapes)
@@ -289,7 +311,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLong
     RenderedShape dot{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}}, .view_layer = {}};             // 0x0
     RenderedShape thin_long_line{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 105}}}}, .view_layer = {}}; // 0 wide, 100 tall
 
-    const auto &result = pipeline.filter_by_viewport_and_size(std::vector<RenderedShape>{dot, thin_long_line}, scene);
+    const auto &result = pipeline.filter_by_viewport_and_size(std::vector<RenderedShape>{dot, thin_long_line}, scene, view_layers);
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result.front().shape.rects.front().ur.y, 105);
 }
@@ -304,12 +326,12 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeReusesCacheUntilViewportVersionCh
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}}, .view_layer = {}},
     };
 
-    pipeline.filter_by_viewport_and_size(shapes, scene);
-    pipeline.filter_by_viewport_and_size(shapes, scene);
+    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
+    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    pipeline.filter_by_viewport_and_size(shapes, scene);
+    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
 }
 

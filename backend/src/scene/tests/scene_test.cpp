@@ -144,6 +144,54 @@ TEST(Scene, ReselectingTheExactSamePieceOfTheSameOriginIsANoOp)
     EXPECT_EQ(scene.selection().size(), 1u);
 }
 
+TEST(Scene, SamePieceDedupDistinguishesDifferentPolygonPiecesAndNoOpsOnIdenticalOnes)
+{
+    // Scene::same_piece's polygon branch, otherwise untested - every other
+    // piece-selection test here uses a rect-only piece.
+    Scene scene;
+    Shape polygon_a;
+    polygon_a.polygons.push_back(Polygon{.points = {Point{0, 0}, Point{10, 0}, Point{5, 10}}});
+    Shape polygon_b;
+    polygon_b.polygons.push_back(Polygon{.points = {Point{20, 20}, Point{30, 20}, Point{25, 30}}});
+
+    scene.select(TerminalId{1, 0}, polygon_a);
+    ASSERT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}, polygon_a); // identical polygon - no-op
+    EXPECT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}, polygon_b); // different polygon - adds a second entry
+    ASSERT_EQ(scene.selection().size(), 2u);
+    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(polygon_a));
+    EXPECT_EQ(to_string(*scene.selection()[1].piece), to_string(polygon_b));
+}
+
+TEST(Scene, SamePieceDedupDistinguishesDifferentPathPiecesAndNoOpsOnIdenticalOnes)
+{
+    // Scene::same_piece's path branch (width + polygon), otherwise
+    // untested - every other piece-selection test here uses a rect-only
+    // piece.
+    Scene scene;
+    Shape path_a;
+    path_a.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{10, 0}}}, .width = 2});
+    Shape path_b_different_polygon;
+    path_b_different_polygon.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{0, 10}}}, .width = 2});
+    Shape path_c_different_width_only;
+    path_c_different_width_only.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{10, 0}}}, .width = 4});
+
+    scene.select(TerminalId{1, 0}, path_a);
+    ASSERT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}, path_a); // identical path - no-op
+    EXPECT_EQ(scene.selection().size(), 1u);
+
+    scene.select(TerminalId{1, 0}, path_b_different_polygon); // different centerline - adds a second entry
+    ASSERT_EQ(scene.selection().size(), 2u);
+
+    scene.select(TerminalId{1, 0}, path_c_different_width_only); // same centerline, different width - adds a third entry
+    ASSERT_EQ(scene.selection().size(), 3u);
+}
+
 TEST(Scene, SelectingWithNoPieceAfterAPieceWasAlreadySelectedAddsAWholeObjectEntryWithoutDisturbingThePiece)
 {
     // e.g. a shift-drag that happens to re-enclose an object a previous

@@ -7,13 +7,27 @@
 #include "../scene/scene.hpp"
 #include "../view_style/view_style.hpp"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <limits>
+#include <mutex>
 
 // The real, C++-only definition behind the opaque LeHandle - never exposed
 // in api.hpp. Owns everything needed to load a LEF file and render it: one
 // Pipeline and one Renderer per handle (not one per call), matching the
 // "reuse across repeated calls" lifetime their own internal CachedStage
 // caching is designed around.
+//
+// `mutex_` exists because this handle genuinely is called from more than
+// one thread today, not as defensive-but-unnecessary caution: Flutter's
+// external-texture API invokes le_render_pixel_buffer (via
+// LeTexture.copyPixelBuffer()) from its own dedicated raster thread once
+// per frame, while ordinary pointer/FFI calls (le_set_mouse_position,
+// le_mouse_down/up, le_zoom, ...) run on the platform thread - both
+// threads reach the same Pipeline/Scene/Root state. See every exported
+// function's own std::lock_guard for the actual enforcement; see
+// le_destroy's doc comment in api.hpp for the one function that can't be
+// covered by the handle's own mutex.
 struct LeHandle
 {
     le::Root root;
@@ -21,6 +35,7 @@ struct LeHandle
     le::Scene scene;
     le::Pipeline pipeline;
     le::Renderer renderer;
+    std::mutex mutex_;
 
     // Single-slot cache backing le_selected_object_property_count/
     // le_selected_object_property_at - rebuilt whenever a different
@@ -186,6 +201,7 @@ namespace
             else
             {
                 std::vector<le::Shape> shapes;
+                shapes.reserve(port_ids.size()); // a lower bound (each port usually has one Shape) but avoids most reallocations
                 for (const le::TerminalPortId port_id : port_ids)
                 {
                     const le::TerminalPortData *port = root.get_terminal_port(port_id);
@@ -216,6 +232,81 @@ namespace
 
         return properties;
     }
+
+    // Lock-free bodies of le_zoom/le_pan/le_fit_scene - factored out so
+    // le_key_down's LE_KEY_ZOOM/FIT/PAN_* handling can call them directly
+    // while it's already holding handle->mutex_ (std::mutex isn't
+    // recursive - calling back into le_zoom/le_pan/le_fit_scene itself
+    // from inside le_key_down would deadlock the calling thread against
+    // itself). Callers must have already null-checked `handle` and locked
+    // its mutex; the public le_zoom/le_pan/le_fit_scene below do exactly
+    // that and then delegate here, so the real logic exists in exactly
+    // one place either way.
+    void zoom_unlocked(LeHandle *handle, double factor, int32_t x, int32_t y)
+    {
+        const double old_scale = handle->scene.scale();
+        const double new_scale = old_scale * (1.0 + factor);
+        if (new_scale <= 0.0)
+            return;
+
+        const le::Point old_pan = handle->scene.pan();
+        const double viewport_height = handle->scene.viewport_height_px();
+
+        // Undo rasterize()'s Y-flip to get from the caller's image-pixel
+        // (x, y) - top-left origin, y down - to the dbu point it currently
+        // shows, using the *old* scale/pan (see render.hpp's PixelShape /
+        // Renderer::rasterize comments for why pan/scale describe the
+        // pre-flip transform while (x, y) here is post-flip).
+        const double dbu_x = static_cast<double>(old_pan.x) + static_cast<double>(x) / old_scale;
+        const double dbu_y = static_cast<double>(old_pan.y) + (viewport_height - static_cast<double>(y)) / old_scale;
+
+        // Re-solve pan so that same dbu point still lands under (x, y) at
+        // the new scale, keeping the zoom visually anchored there.
+        const double pan_x_double = dbu_x - static_cast<double>(x) / new_scale;
+        const double pan_y_double = dbu_y - (viewport_height - static_cast<double>(y)) / new_scale;
+
+        // A `factor` close enough to -1.0 (an ordinary finite double, not
+        // just the already-rejected exact -1.0 above) drives new_scale
+        // toward zero, blowing up x/new_scale - reject before casting to
+        // int64_t below, since casting an out-of-range (or non-finite)
+        // double to an integer type is undefined behavior in C++, not a
+        // safe wrap or saturation. Matches new_scale <= 0.0's existing
+        // "invalid zoom, no-op" behavior rather than clamping to some
+        // arbitrary minimum scale.
+        constexpr double kInt64Max = static_cast<double>(std::numeric_limits<int64_t>::max());
+        if (!std::isfinite(pan_x_double) || !std::isfinite(pan_y_double) ||
+            std::abs(pan_x_double) >= kInt64Max || std::abs(pan_y_double) >= kInt64Max)
+            return;
+
+        const int64_t pan_x = static_cast<int64_t>(pan_x_double);
+        const int64_t pan_y = static_cast<int64_t>(pan_y_double);
+
+        handle->scene.set_scale(new_scale);
+        handle->scene.set_pan(le::Point{.x = pan_x, .y = pan_y});
+    }
+
+    void pan_unlocked(LeHandle *handle, double x_factor, double y_factor)
+    {
+        const double scale = handle->scene.scale();
+        const le::Point pan = handle->scene.pan();
+
+        const int64_t dx = static_cast<int64_t>(x_factor * handle->scene.viewport_width_px() / scale);
+        const int64_t dy = static_cast<int64_t>(y_factor * handle->scene.viewport_height_px() / scale);
+
+        handle->scene.set_pan(le::Point{.x = pan.x + dx, .y = pan.y + dy});
+    }
+
+    void fit_scene_unlocked(LeHandle *handle, int32_t padding_px)
+    {
+        const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
+
+        std::vector<const le::Shape *> shape_ptrs;
+        shape_ptrs.reserve(generated.size());
+        for (const auto &rs : generated)
+            shape_ptrs.push_back(&rs.shape);
+
+        handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
+    }
 }
 
 extern "C"
@@ -234,6 +325,7 @@ extern "C"
     {
         if (!handle || !path)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::filesystem::path lef_path(path);
         le::LEFReader reader;
@@ -257,6 +349,7 @@ extern "C"
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return static_cast<int32_t>(handle->root.get_design_size());
     }
 
@@ -264,6 +357,7 @@ extern "C"
     {
         if (!handle || index < 0)
             return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto design_ids = handle->root.get_design_ids();
         if (static_cast<size_t>(index) >= design_ids.size())
@@ -277,6 +371,7 @@ extern "C"
     {
         if (!handle || index < 0)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto design_ids = handle->root.get_design_ids();
         if (static_cast<size_t>(index) >= design_ids.size())
@@ -290,6 +385,7 @@ extern "C"
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return static_cast<int32_t>(handle->root.get_library_size());
     }
 
@@ -298,6 +394,7 @@ extern "C"
         const LeLibraryInfo invalid{.id = {UINT32_MAX, 0}, .name = nullptr};
         if (!handle || index < 0)
             return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto library_ids = handle->root.get_library_ids();
         if (static_cast<size_t>(index) >= library_ids.size())
@@ -312,6 +409,7 @@ extern "C"
     {
         if (!handle || library_index < 0)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto library_ids = handle->root.get_library_ids();
         if (static_cast<size_t>(library_index) >= library_ids.size())
@@ -325,6 +423,7 @@ extern "C"
         const LeDesignInfo invalid{.library_id = {UINT32_MAX, 0}, .id = {UINT32_MAX, 0}, .abstract_id = {UINT32_MAX, 0}, .name = nullptr};
         if (!handle || library_index < 0 || design_index < 0)
             return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto library_ids = handle->root.get_library_ids();
         if (static_cast<size_t>(library_index) >= library_ids.size())
@@ -349,6 +448,7 @@ extern "C"
     {
         if (!handle)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const le::DesignId id = from_c(design_id);
         if (!handle->root.get_design(id))
@@ -362,6 +462,7 @@ extern "C"
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return static_cast<int32_t>(handle->view_layers.rows().size());
     }
 
@@ -370,6 +471,7 @@ extern "C"
         const LeLayerRow invalid{.name = nullptr, .color_r = 0, .color_g = 0, .color_b = 0};
         if (!handle || row_index < 0)
             return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto &rows = handle->view_layers.rows();
         if (static_cast<size_t>(row_index) >= rows.size())
@@ -390,6 +492,7 @@ extern "C"
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return static_cast<int32_t>(handle->view_layers.purposes().size());
     }
 
@@ -397,6 +500,7 @@ extern "C"
     {
         if (!handle || index < 0)
             return -1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto purposes = handle->view_layers.purposes();
         if (static_cast<size_t>(index) >= purposes.size())
@@ -409,6 +513,7 @@ extern "C"
     {
         if (!handle || !layer_name)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.is_layer_name_visible(layer_name) ? 1 : 0;
     }
 
@@ -416,6 +521,7 @@ extern "C"
     {
         if (!handle || !layer_name)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_layer_name_visible(layer_name, visible != 0);
     }
 
@@ -423,6 +529,7 @@ extern "C"
     {
         if (!handle)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.is_purpose_visible(static_cast<le::ViewLayerPurpose>(purpose)) ? 1 : 0;
     }
 
@@ -430,6 +537,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_purpose_visible(static_cast<le::ViewLayerPurpose>(purpose), visible != 0);
     }
 
@@ -437,6 +545,7 @@ extern "C"
     {
         if (!handle || !layer_name)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.is_layer_name_selectable(layer_name) ? 1 : 0;
     }
 
@@ -444,6 +553,7 @@ extern "C"
     {
         if (!handle || !layer_name)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_layer_name_selectable(layer_name, selectable != 0);
     }
 
@@ -451,6 +561,7 @@ extern "C"
     {
         if (!handle)
             return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.is_purpose_selectable(static_cast<le::ViewLayerPurpose>(purpose)) ? 1 : 0;
     }
 
@@ -458,6 +569,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_purpose_selectable(static_cast<le::ViewLayerPurpose>(purpose), selectable != 0);
     }
 
@@ -465,50 +577,23 @@ extern "C"
     {
         if (!handle)
             return;
-
-        const double old_scale = handle->scene.scale();
-        const double new_scale = old_scale * (1.0 + factor);
-        if (new_scale <= 0.0)
-            return;
-
-        const le::Point old_pan = handle->scene.pan();
-        const double viewport_height = handle->scene.viewport_height_px();
-
-        // Undo rasterize()'s Y-flip to get from the caller's image-pixel
-        // (x, y) - top-left origin, y down - to the dbu point it currently
-        // shows, using the *old* scale/pan (see render.hpp's PixelShape /
-        // Renderer::rasterize comments for why pan/scale describe the
-        // pre-flip transform while (x, y) here is post-flip).
-        const double dbu_x = static_cast<double>(old_pan.x) + static_cast<double>(x) / old_scale;
-        const double dbu_y = static_cast<double>(old_pan.y) + (viewport_height - static_cast<double>(y)) / old_scale;
-
-        // Re-solve pan so that same dbu point still lands under (x, y) at
-        // the new scale, keeping the zoom visually anchored there.
-        const int64_t pan_x = static_cast<int64_t>(dbu_x - static_cast<double>(x) / new_scale);
-        const int64_t pan_y = static_cast<int64_t>(dbu_y - (viewport_height - static_cast<double>(y)) / new_scale);
-
-        handle->scene.set_scale(new_scale);
-        handle->scene.set_pan(le::Point{.x = pan_x, .y = pan_y});
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        zoom_unlocked(handle, factor, x, y);
     }
 
     void le_pan(LeHandle *handle, double x_factor, double y_factor)
     {
         if (!handle)
             return;
-
-        const double scale = handle->scene.scale();
-        const le::Point pan = handle->scene.pan();
-
-        const int64_t dx = static_cast<int64_t>(x_factor * handle->scene.viewport_width_px() / scale);
-        const int64_t dy = static_cast<int64_t>(y_factor * handle->scene.viewport_height_px() / scale);
-
-        handle->scene.set_pan(le::Point{.x = pan.x + dx, .y = pan.y + dy});
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        pan_unlocked(handle, x_factor, y_factor);
     }
 
     void le_set_viewport_size(LeHandle *handle, int32_t width_px, int32_t height_px)
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_viewport_size(width_px, height_px);
     }
 
@@ -516,21 +601,15 @@ extern "C"
     {
         if (!handle)
             return;
-
-        const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
-
-        std::vector<const le::Shape *> shape_ptrs;
-        shape_ptrs.reserve(generated.size());
-        for (const auto &rs : generated)
-            shape_ptrs.push_back(&rs.shape);
-
-        handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        fit_scene_unlocked(handle, padding_px);
     }
 
     int64_t le_minor_grid_spacing(LeHandle *handle)
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.minor_grid_spacing();
     }
 
@@ -538,6 +617,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_minor_grid_spacing(dbu);
     }
 
@@ -545,6 +625,7 @@ extern "C"
     {
         if (!handle)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         return handle->scene.major_grid_spacing();
     }
 
@@ -552,6 +633,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.set_major_grid_spacing(dbu);
     }
 
@@ -559,6 +641,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         handle->scene.set_mouse_position(x, y);
 
@@ -570,6 +653,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.clear_mouse_position();
         handle->scene.clear_hover();
     }
@@ -578,6 +662,7 @@ extern "C"
     {
         if (!handle)
             return LeSnappedMousePosition{.x_um = 0.0, .y_um = 0.0, .has_position = 0};
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::optional<le::Point> snapped = handle->scene.snapped_mouse_position();
         if (!snapped)
@@ -605,30 +690,34 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.press_key(key_code);
 
         switch (key_code)
         {
         case LE_KEY_ZOOM:
         {
+            // Unlocked variants (see their own comment) - handle->mutex_
+            // is already held above; le_zoom/le_fit_scene/le_pan
+            // themselves would re-lock it and deadlock.
             const double factor = handle->scene.is_key_held(LE_KEY_SHIFT) ? -kKeyZoomFactor : kKeyZoomFactor;
-            le_zoom(handle, factor, handle->scene.mouse_x_px(), handle->scene.mouse_y_px());
+            zoom_unlocked(handle, factor, handle->scene.mouse_x_px(), handle->scene.mouse_y_px());
             break;
         }
         case LE_KEY_FIT:
-            le_fit_scene(handle, kKeyFitPaddingPx);
+            fit_scene_unlocked(handle, kKeyFitPaddingPx);
             break;
         case LE_KEY_PAN_LEFT:
-            le_pan(handle, -kKeyPanFactor, 0.0);
+            pan_unlocked(handle, -kKeyPanFactor, 0.0);
             break;
         case LE_KEY_PAN_RIGHT:
-            le_pan(handle, kKeyPanFactor, 0.0);
+            pan_unlocked(handle, kKeyPanFactor, 0.0);
             break;
         case LE_KEY_PAN_UP:
-            le_pan(handle, 0.0, kKeyPanFactor);
+            pan_unlocked(handle, 0.0, kKeyPanFactor);
             break;
         case LE_KEY_PAN_DOWN:
-            le_pan(handle, 0.0, -kKeyPanFactor);
+            pan_unlocked(handle, 0.0, -kKeyPanFactor);
             break;
         default:
             break;
@@ -639,6 +728,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.release_key(key_code);
     }
 
@@ -651,6 +741,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.clear_all_keys();
     }
 
@@ -658,6 +749,7 @@ extern "C"
     {
         if (!handle)
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.begin_drag(x, y);
     }
 
@@ -665,6 +757,7 @@ extern "C"
     {
         if (!handle || !handle->scene.is_dragging())
             return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const int32_t dx = x - handle->scene.drag_start_x_px();
         const int32_t dy = y - handle->scene.drag_start_y_px();
@@ -712,6 +805,7 @@ extern "C"
     {
         if (!handle || selection_index < 0)
             return -1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::vector<le::SelectedObject> &selection = handle->scene.selection();
         if (static_cast<size_t>(selection_index) >= selection.size())
@@ -726,6 +820,7 @@ extern "C"
     {
         if (!handle || selection_index < 0)
             return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::vector<le::SelectedObject> &selection = handle->scene.selection();
         if (static_cast<size_t>(selection_index) >= selection.size())
@@ -741,6 +836,7 @@ extern "C"
         const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
         if (!handle || selection_index < 0 || property_index < 0)
             return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::vector<le::SelectedObject> &selection = handle->scene.selection();
         if (static_cast<size_t>(selection_index) >= selection.size())
@@ -769,6 +865,7 @@ extern "C"
     {
         if (!handle)
             return LePixelBuffer{.data = nullptr, .width = 0, .height = 0, .row_bytes = 0};
+        std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
         const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
