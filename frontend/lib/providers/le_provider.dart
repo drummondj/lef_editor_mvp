@@ -26,6 +26,12 @@ class LePurposeInfo {
   });
 }
 
+class LeSelectedObjectInfo {
+  LeSelectionKind kind;
+  List<LeSelectedProperty> properties;
+  LeSelectedObjectInfo({required this.kind, required this.properties});
+}
+
 class LeProvider extends ChangeNotifier {
   final double panFactor = 0.25;
   final LeEditor _editor = LeEditor();
@@ -62,11 +68,52 @@ class LeProvider extends ChangeNotifier {
   bool _allPurposesSelectable = true;
   bool get allPurposesSelectable => _allPurposesSelectable;
 
+  Offset _snappedMousePosition = Offset.zero;
+  Offset get snappedMousePosition => _snappedMousePosition;
+
+  int _selectedCount = 0;
+  int get selectedCount => _selectedCount;
+
+  final List<LeSelectedObjectInfo> _selectedObjects = [];
+  List<LeSelectedObjectInfo> get selectedObjects => _selectedObjects;
+
   Future<void> refreshTexture() async {
     await _texture?.markFrameAvailable();
   }
 
+  Future<void> refreshSnappedMousePosition() async {
+    if (_editor.snappedMousePosition != null) {
+      _snappedMousePosition = Offset(
+        _editor.snappedMousePosition!.xUm,
+        _editor.snappedMousePosition!.yUm,
+      );
+    }
+  }
+
+  Future<void> refreshSelectedCount() async {
+    _selectedCount = _editor.selectionCount;
+  }
+
+  Future<void> refreshSelectedObjects() async {
+    _selectedObjects.clear();
+    for (int i = 0; i < _editor.selectionCount; i++) {
+      final kind = _editor.selectedObjectKind(i);
+      if (kind != null) {
+        _selectedObjects.add(
+          LeSelectedObjectInfo(
+            kind: kind,
+            properties: _editor.selectedObjectProperties(i),
+          ),
+        );
+      }
+    }
+  }
+
+  // TODO: this currently refreshed everything all the time, choose what to refresh more carefully.
   void refreshAndNotify() {
+    refreshSnappedMousePosition();
+    refreshSelectedCount();
+    refreshSelectedObjects();
     refreshLayers();
     refreshTexture();
     notifyListeners();
@@ -275,4 +322,39 @@ class LeProvider extends ChangeNotifier {
     await setAllLayersSelectable(selectable);
     await setAllPurposesSelectable(selectable);
   }
+
+  void handlePointerEvent(PointerEvent event) {
+    _editor.handlePointerEvent(event);
+    refreshAndNotify();
+  }
+
+  bool handleKeyEvent(KeyEvent event) {
+    if (_editor.handleKeyEvent(event)) {
+      refreshAndNotify();
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  void handleFocusChange(bool hasFocus) {
+    _editor.handleFocusChange(hasFocus);
+  }
+
+  // Future<void> setMousePosition(Offset offset) async {
+  //   _editor.setMousePosition(offset.dx.toInt(), offset.dy.toInt());
+  //   refreshAndNotify();
+  // }
+
+  // Future<void> setMouseDown(Offset offset) async {
+  //   debugPrint("mouseDown: $offset");
+  //   _editor.mouseDown(offset.dx.toInt(), offset.dy.toInt());
+  //   refreshAndNotify();
+  // }
+
+  // Future<void> setMouseUp(Offset offset) async {
+  //   debugPrint("mouseUp: $offset");
+  //   _editor.mouseUp(offset.dx.toInt(), offset.dy.toInt());
+  //   refreshAndNotify();
+  // }
 }

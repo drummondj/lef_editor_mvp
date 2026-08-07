@@ -22,28 +22,26 @@ class _LayerManagerState extends State<LayerManager> {
   Widget build(BuildContext context) {
     return Consumer<LeProvider>(
       builder: (context, provider, child) {
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: .min,
-                children: [
-                  HeaderRow(),
-                  AllRow(provider: provider),
-                  Divider(),
-                  AllPurposesRow(provider: provider),
-                  ..._provider.layerPurposes.map(
-                    (purpose) =>
-                        PurposeRow(provider: provider, purposeInfo: purpose),
-                  ),
-                  Divider(),
-                  AllLayersRow(provider: provider),
-                  ..._provider.layers.map(
-                    (layer) => LayerRow(provider: provider, layerInfo: layer),
-                  ),
-                ],
-              ),
+        return Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: .min,
+              children: [
+                HeaderRow(),
+                AllRow(provider: provider),
+                Divider(),
+                AllPurposesRow(provider: provider),
+                ..._provider.layerPurposes.map(
+                  (purpose) =>
+                      PurposeRow(provider: provider, purposeInfo: purpose),
+                ),
+                Divider(),
+                AllLayersRow(provider: provider),
+                ..._provider.layers.map(
+                  (layer) => LayerRow(provider: provider, layerInfo: layer),
+                ),
+              ],
             ),
           ),
         );
