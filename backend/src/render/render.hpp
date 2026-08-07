@@ -225,22 +225,32 @@ namespace le
         /// Color) comes from `view_layers`; a ViewLayerId that doesn't
         /// resolve to a known ViewLayer (see Pipeline's layer filter
         /// comment on why that's kept, not dropped) has its whole group
-        /// skipped here - there's no style to draw it with. A final pass
-        /// draws a white outline (see draw_selection_outline, UPDATES.md
-        /// 7) around every PixelShape whose origin is selected *as a
-        /// whole object* (Scene::is_selected_as_whole_object) - i.e.
-        /// selected without one specific piece recorded, which is what
-        /// drag-select's enclosure results produce (see
-        /// Scene::SelectedObject). A click-select that recorded a
-        /// specific piece is drawn instead by
-        /// build_overlay_picture/draw_selected_piece_outline, so it
-        /// doesn't also get the whole-object treatment here. Runs after
-        /// every group, so a selected shape's outline is never obscured
-        /// by a shape on a higher layer, unlike its own per-group
-        /// outline/fill.
+        /// skipped here - there's no style to draw it with.
+        ///
+        /// Deliberately has no selection-dependent content or cache-key
+        /// dependency: an earlier version drew a white outline here around
+        /// every PixelShape selected *as a whole object*
+        /// (Scene::is_selected_as_whole_object) for drag-select's
+        /// enclosure results, keyed additionally on selection_version() -
+        /// but api.cpp's le_mouse_up has never called Scene::select()
+        /// without a piece (both click and drag branches always pass one -
+        /// see Pipeline::hit_test_rect), so that pass could never actually
+        /// fire through the public API, and its per-visible-shape
+        /// selection-membership check (is_selected_as_whole_object, a
+        /// linear scan of the whole current selection) still cost
+        /// O(visible shapes * selection size) on every selection change
+        /// for nothing - a measured, real cost (see BENCHMARKS.md) that
+        /// made selecting many objects slow to select and slow to grow.
+        /// Removed entirely, along with Scene::is_selected_as_whole_object
+        /// and draw_selection_outline (both otherwise unused). Piece-level
+        /// selection outlines (the only kind actually reachable) are drawn
+        /// by build_selection_overlay_picture/draw_selected_piece_outline
+        /// instead, which is why this picture no longer needs
+        /// selection_version() in its cache key at all - its content is a
+        /// pure function of the design and viewport/visibility state now.
         const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers, const Root &root)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return picture_.get(key, [&]
                                 {
                 SkPictureRecorder recorder;
@@ -263,36 +273,26 @@ namespace le
                     draw_group(*canvas, group, view_layer->style);
                 }
 
-                if (!scene.selection().empty())
-                {
-                    for (const auto &[view_layer_id, group] : shapes)
-                        for (const auto &pixel_shape : group)
-                            if (pixel_shape.origin && scene.is_selected_as_whole_object(*pixel_shape.origin))
-                                draw_selection_outline(*canvas, pixel_shape);
-                }
-
                 return recorder.finishRecordingAsPicture(); });
         }
 
         /// @brief Records the mouse-driven overlay chrome - the live
         /// rubber-band drag-select rectangle if a drag is in progress
         /// (see draw_drag_rect), the grid-snap indicator box (see
-        /// draw_cursor), if a shape is currently hovered its yellow
-        /// outline (see draw_hover_outline), and a white outline for
-        /// every selected object that has a specific piece recorded (see
-        /// draw_selected_piece_outline, Scene::SelectedObject -
-        /// build_picture's own selection pass handles whole-object
-        /// selections instead, so the two never overlap) - into its own
-        /// small SkPicture, cached independently of the (potentially
+        /// draw_cursor), and if a shape is currently hovered its yellow
+        /// outline (see draw_hover_outline) - into its own small
+        /// SkPicture, cached independently of the (potentially
         /// design-sized, expensive) design picture above - keyed on
         /// viewport_version()/visibility_version() (grid spacing lives
-        /// there), mouse_version(), and selection_version() (piece
-        /// outlines are selection content), deliberately *not*
-        /// AbstractId: this overlay is a pure viewport/mouse/selection
-        /// concern, not design content, so switching Abstracts doesn't
-        /// need to recompute it (selection is cleared on an Abstract
-        /// switch anyway - see Scene::set_current_abstract). Neither
-        /// hover state (Scene::hover()) nor drag state
+        /// there) and mouse_version(), deliberately *not* AbstractId or
+        /// selection_version(): this overlay is a pure viewport/mouse
+        /// concern, not design or selection content, so switching
+        /// Abstracts or changing the selection doesn't need to recompute
+        /// it. Selected-piece outlines are a separate picture (see
+        /// build_selection_overlay_picture) precisely so a mouse move
+        /// alone never has to re-walk the selection list - see that
+        /// method's own comment for why that split exists. Neither hover
+        /// state (Scene::hover()) nor drag state
         /// (Scene::is_dragging()/drag_rect_dbu()) needs its own cache key
         /// - set_hover/begin_drag/end_drag are only ever called alongside
         /// set_mouse_position (or bump mouse_version_ themselves, for
@@ -302,13 +302,10 @@ namespace le
         /// project's answer to UPDATES.md 5.2's own flagged perf concern
         /// (recomputing this tiny picture on every mouse-move event is
         /// cheap; recomputing/re-rasterizing the whole design picture on
-        /// every mouse-move event would not be - and the same holds for
-        /// piece outlines, since this loops the *selection list*, not
-        /// the design's shapes, so its cost is bounded by how many
-        /// objects are selected, never by design size).
+        /// every mouse-move event would not be).
         const sk_sp<SkPicture> &build_overlay_picture(const Scene &scene)
         {
-            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version(), scene.selection_version()};
+            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.mouse_version()};
             return overlay_picture_.get(key, [&]
                                         {
                 SkPictureRecorder recorder;
@@ -321,6 +318,39 @@ namespace le
 
                 if (const auto &hover = scene.hover())
                     draw_hover_outline(*canvas, scene, *hover);
+
+                return recorder.finishRecordingAsPicture(); });
+        }
+
+        /// @brief Records a white outline for every selected object that
+        /// has a specific piece recorded (see draw_selected_piece_outline,
+        /// Scene::SelectedObject - every reachable selection always
+        /// records one, see build_picture's own doc comment), into its
+        /// own small SkPicture separate from build_overlay_picture's
+        /// mouse-driven chrome above - keyed on
+        /// viewport_version()/visibility_version()/selection_version(),
+        /// deliberately *not* mouse_version().
+        ///
+        /// This split exists because a selected PATH piece's outline is
+        /// traced via Geometry::path_to_polygons (a real Boost.Geometry
+        /// buffer op, not free) - before this split, that work lived in
+        /// build_overlay_picture keyed together with mouse_version(),
+        /// which bumps on *every* pointer-move event; since CachedStage's
+        /// key comparison is all-or-nothing, that meant every mouse move
+        /// re-buffered every selected path's outline from scratch even
+        /// though the selection hadn't changed - a real, reported
+        /// regression that got worse the more objects were selected. This
+        /// picture only recomputes when the selection itself changes, so
+        /// its cost (proportional to selection size) is paid once per
+        /// selection change, never once per pointer event.
+        const sk_sp<SkPicture> &build_selection_overlay_picture(const Scene &scene)
+        {
+            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
+            return selection_overlay_picture_.get(key, [&]
+                                                  {
+                SkPictureRecorder recorder;
+                SkCanvas *canvas = recorder.beginRecording(
+                    SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
 
                 for (const auto &selected : scene.selection())
                     if (selected.piece)
@@ -344,46 +374,64 @@ namespace le
 
         /// @brief Composites the design picture's cached, already-rasterized
         /// frame (from rasterize_frame - the expensive step for a large
-        /// design) with the cheap mouse-overlay picture (see
-        /// build_overlay_picture) into one final RGBA8888 buffer, without
-        /// re-rasterizing the design's own vector content on every call.
-        /// Reuses the design's cached raster surface via a cheap SkImage
-        /// snapshot + blit (`SkCanvas::drawImage`, a bitmap copy - not a
-        /// re-walk of the design's draw ops) rather than recording both
-        /// pictures into one fresh canvas, which would re-execute every
-        /// shape's draw calls again on every mouse move. `overlay_picture`
-        /// is drawn through the same whole-canvas Y-flip rasterize_frame
+        /// design) with the two cheap overlay pictures (see
+        /// build_overlay_picture, build_selection_overlay_picture) into
+        /// one final RGBA8888 buffer, without re-rasterizing the design's
+        /// own vector content on every call. Reuses the design's cached
+        /// raster surface via a cheap SkImage snapshot + blit
+        /// (`SkCanvas::drawImage`, a bitmap copy - not a re-walk of the
+        /// design's draw ops) rather than recording all three pictures
+        /// into one fresh canvas, which would re-execute every shape's
+        /// draw calls again on every mouse move. Both overlay pictures
+        /// are drawn through the same whole-canvas Y-flip rasterize_frame
         /// applies to the design (translate + scale(1,-1) - see its own
-        /// comment for why that flip exists), since build_overlay_picture
-        /// records pre-flip pixel-space coordinates, the same convention
-        /// build_picture's own shapes use.
+        /// comment for why that flip exists), since both record pre-flip
+        /// pixel-space coordinates, the same convention build_picture's
+        /// own shapes use.
         ///
         /// Cached on all five of AbstractId/viewport_version/
         /// visibility_version/selection_version/mouse_version - a
-        /// superset of rasterize_frame's own key (selection_version
-        /// included here for the same reason it's in rasterize_frame's
-        /// key: `design_picture`'s content depends on it, and
-        /// CachedStage's key comparison is the only thing that decides
-        /// whether to recompute - it never inspects `design_picture`
-        /// itself, so a key that doesn't change would silently return a
-        /// stale composited buffer even though a *different* picture was
-        /// passed in). A mouse-only change *does* invalidate this entry,
-        /// but recomputing it only costs one full-viewport image blit
-        /// plus the tiny overlay picture, not anything proportional to
-        /// design complexity - this project's answer to UPDATES.md 5.2's
-        /// own flagged perf concern (a naive single-picture-per-frame
-        /// design would re-rasterize the whole design on every
+        /// superset of both overlay pictures' own keys as well as
+        /// rasterize_frame's (selection_version included here for the
+        /// same reason it's in rasterize_frame's key: `design_picture`'s
+        /// content depends on it, and CachedStage's key comparison is the
+        /// only thing that decides whether to recompute - it never
+        /// inspects the picture arguments themselves, so a key that
+        /// doesn't change would silently return a stale composited buffer
+        /// even though a *different* picture was passed in). A
+        /// mouse-only change *does* invalidate this entry, but
+        /// recomputing it only costs two full-viewport image blits
+        /// (design + selection overlay, both already-rasterized - see
+        /// rasterize_frame/rasterize_selection_overlay_frame) plus
+        /// replaying the small, mouse-version-only overlay_picture - none
+        /// of that is proportional to design or selection size. The
+        /// selection-outline picture is specifically blitted as a cached
+        /// raster image rather than replayed as an SkPicture on every
+        /// call (unlike overlay_picture, which stays a direct
+        /// drawPicture - it's small and mouse-driven, so replaying it
+        /// every call is cheap and *should* redraw every call): a
+        /// measured regression (see BENCHMARKS.md) showed that
+        /// SkPicture replay cost, like recording cost, scales with the
+        /// number of recorded draw ops, so composing thousands of
+        /// selected pieces' outlines by replaying their picture directly
+        /// still cost proportionally to selection size on every mouse
+        /// move, even after selection_overlay_picture itself stopped
+        /// being *re-recorded* on mouse move - this project's answer to
+        /// UPDATES.md 5.2's own flagged perf concern (a naive
+        /// single-picture-per-frame design would re-rasterize the whole
+        /// design, or replay an unboundedly large overlay, on every
         /// mouse-move event).
-        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &overlay_picture, const Scene &scene)
+        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version(), scene.mouse_version()};
             return composed_.get(key, [&]
                                  {
                 const RasterizedFrame &design_frame = rasterize_frame(design_picture, scene);
+                const RasterizedFrame &selection_frame = rasterize_selection_overlay_frame(selection_overlay_picture, scene);
 
                 const int width = scene.viewport_width_px();
                 const int height = scene.viewport_height_px();
-                if (width <= 0 || height <= 0 || !design_frame.surface)
+                if (width <= 0 || height <= 0 || !design_frame.surface || !selection_frame.surface)
                     return RasterizedFrame{};
 
                 const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
@@ -391,10 +439,13 @@ namespace le
                 SkCanvas *canvas = surface->getCanvas();
                 canvas->clear(SK_ColorTRANSPARENT);
 
-                // Cheap blit of the already-rasterized design pixels - no
-                // re-walk of its underlying (potentially design-sized)
-                // draw commands.
+                // Cheap blits of the already-rasterized design/selection
+                // pixels - no re-walk of either's underlying (potentially
+                // large) draw commands. Both source surfaces already have
+                // rasterize_frame's own Y-flip baked in, so no further
+                // transform is needed for these two.
                 canvas->drawImage(design_frame.surface->makeImageSnapshot(), 0, 0);
+                canvas->drawImage(selection_frame.surface->makeImageSnapshot(), 0, 0);
 
                 canvas->translate(0, static_cast<SkScalar>(height));
                 canvas->scale(1, -1);
@@ -420,7 +471,9 @@ namespace le
         uint64_t transform_calls() const { return pixel_shapes_.call_count(); }
         uint64_t picture_calls() const { return picture_.call_count(); }
         uint64_t overlay_picture_calls() const { return overlay_picture_.call_count(); }
+        uint64_t selection_overlay_picture_calls() const { return selection_overlay_picture_.call_count(); }
         uint64_t rasterize_calls() const { return rasterized_.call_count(); }
+        uint64_t rasterize_selection_overlay_calls() const { return rasterized_selection_overlay_.call_count(); }
         uint64_t compose_calls() const { return composed_.call_count(); }
 
     private:
@@ -544,20 +597,21 @@ namespace le
 
         // Selection outline (UPDATES.md 7) - opaque white, distinct from
         // every other overlay color above (and from every layer's own
-        // default palette color, none of which are pure white). A click
-        // that hit a specific piece (Scene::SelectedObject::piece) only
-        // outlines that one piece (draw_selected_piece_outline); a
-        // drag-select result, which has no single piece, still outlines
-        // every piece belonging to the selected object
-        // (draw_selection_outline) - the two are mutually exclusive per
-        // selected object (see build_picture/build_overlay_picture).
+        // default palette color, none of which are pure white). Every
+        // reachable selection (click or drag - see Pipeline::hit_test_rect)
+        // always records a specific piece, so draw_selected_piece_outline
+        // is the only consumer of these constants.
         static constexpr Color kSelectionOutlineColor = {255, 255, 255, 255};
         static constexpr float kSelectionOutlineStrokeWidth = 2.0f;
-        // A selected Path is stroked in white at its own width plus this
-        // margin on each side (not just retraced at the same width) so it
-        // reads as a highlighted halo rather than simply recoloring the
-        // wire white.
-        static constexpr float kSelectionPathHaloMarginPx = 2.0f;
+
+        // Border margin (each side) added around a Path's own width when
+        // drawing its normal (unselected) outline-colored border in
+        // draw_group - see its own comment. A wider stroke drawn
+        // underneath a narrower one, same technique
+        // draw_selected_piece_outline's buffered-outline approach
+        // conceptually parallels, but for normal-render fill+outline
+        // treatment rather than a selection highlight.
+        static constexpr float kPathOutlineMarginPx = 1.5f;
 
         // Rubber-band drag-select rectangle (UPDATES.md 7.1 item 5) - a
         // translucent fill so covered shapes stay visible underneath, plus
@@ -882,17 +936,19 @@ namespace le
         }
 
         // Draws a white outline (UPDATES.md 7) around `piece`'s own
-        // geometry - one selected object's specific clicked piece (see
-        // Scene::SelectedObject), not the whole Terminal/Obstruction's
-        // combined geometry. Same dbu->pixel transform as
-        // draw_hover_outline (`piece` is dbu-space, copied straight from
-        // Pipeline::hit_test_point's own HoverTarget::outline at click
-        // time), but the same rect/polygon/path-with-halo stroke style
-        // as draw_selection_outline (kSelectionOutlineColor/Width/
-        // PathHaloMarginPx) - a path is stroked along its own centerline
-        // at its own width plus a margin on each side, not retraced at
-        // hover's buffered-clickable-region outline, so a piece-selected
-        // path reads identically to a whole-object-selected one.
+        // geometry - one selected object's specific clicked/dragged piece
+        // (see Scene::SelectedObject), not the whole Terminal/
+        // Obstruction's combined geometry. Same dbu->pixel transform *and*
+        // same path treatment as draw_hover_outline (`piece` is dbu-space,
+        // copied straight from Pipeline::hit_test_point/hit_test_rect's
+        // own HoverTarget::outline) - a path traces its *buffered outline
+        // polygon* (Geometry::path_to_polygons), not a halo stroke along
+        // its own centerline - a halo reads fine for a real wire (long
+        // relative to its width, so it looks like a thin glow), but
+        // collapses into a solid-looking blob for a path whose width is
+        // comparable to its own length - not hypothetical, a real
+        // reported bug against synthetic stress-test geometry shaped
+        // exactly like that.
         static void draw_selected_piece_outline(SkCanvas &canvas, const Scene &scene, const Shape &piece)
         {
             const double scale = scene.scale();
@@ -932,28 +988,9 @@ namespace le
             for (const auto &polygon : piece.polygons)
                 stroke_polygon(polygon);
 
-            if (!piece.paths.empty())
-            {
-                SkPaint halo;
-                halo.setAntiAlias(true);
-                halo.setStyle(SkPaint::kStroke_Style);
-                halo.setStrokeCap(SkPaint::kButt_Cap);
-                halo.setColor(to_sk_color(kSelectionOutlineColor));
-
-                for (const auto &path : piece.paths)
-                {
-                    halo.setStrokeWidth(static_cast<SkScalar>(path.width) * static_cast<SkScalar>(scale) + 2.0f * kSelectionPathHaloMarginPx);
-
-                    SkPathBuilder builder;
-                    const auto &points = path.polygon.points;
-                    if (points.empty())
-                        continue;
-                    builder.moveTo(to_pixel(points.front()));
-                    for (size_t i = 1; i < points.size(); ++i)
-                        builder.lineTo(to_pixel(points[i]));
-                    canvas.drawPath(builder.detach(), halo);
-                }
-            }
+            for (const auto &path : piece.paths)
+                for (const auto &buffered : Geometry::path_to_polygons(path))
+                    stroke_polygon(buffered);
         }
 
         // Draws the live rubber-band drag-select rectangle (UPDATES.md
@@ -1091,6 +1128,30 @@ namespace le
                 // Paths are wire centerlines with a width, not filled
                 // polygons - drawn as a solid stroked line using the fill
                 // color (the layer's "main" color), not the outline color.
+                // When the layer has an outline color, an outline-colored
+                // stroke at width + 2*kPathOutlineMarginPx is drawn first
+                // (wider, underneath), then the narrower fill-colored
+                // stroke on top - the wider stroke only shows through as a
+                // border ring where the narrower one doesn't cover it,
+                // matching how RECT/POLYGON already show fill-then-border
+                // above. Deliberately a second stroke, not
+                // Geometry::path_to_polygons buffering (see
+                // draw_selected_piece_outline's comment for that
+                // technique) - this runs once per path in the main design
+                // picture, which can hold hundreds of thousands of paths,
+                // so it stays a single cheap extra draw call rather than a
+                // per-path Boost.Geometry buffer operation.
+                if (has_outline)
+                {
+                    SkPaint border = stroke;
+                    border.setStrokeCap(SkPaint::kButt_Cap);
+                    for (const auto &p : shape.paths)
+                    {
+                        border.setStrokeWidth(static_cast<SkScalar>(p.width) + 2.0f * kPathOutlineMarginPx);
+                        canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), border);
+                    }
+                }
+
                 if (has_fill)
                 {
                     SkPaint wire = fill;
@@ -1129,48 +1190,6 @@ namespace le
                         canvas.drawString(t.label.c_str(), 0, 0, font, text_paint);
                         canvas.restore();
                     }
-                }
-            }
-        }
-
-        // Draws a white outline around every piece of `shape` (UPDATES.md
-        // 7) - rects/polygons stroked along their own boundary; paths
-        // stroked along their centerline at their own width plus a margin
-        // on each side (kSelectionPathHaloMarginPx), so a selected wire
-        // reads as highlighted rather than simply recolored white. Called
-        // once per selected PixelShape, in a pass that runs after every
-        // group has already been drawn (see build_picture) so the
-        // outline is never obscured by a shape on a higher layer.
-        static void draw_selection_outline(SkCanvas &canvas, const PixelShape &shape)
-        {
-            SkPaint stroke;
-            stroke.setAntiAlias(true);
-            stroke.setStyle(SkPaint::kStroke_Style);
-            stroke.setStrokeWidth(kSelectionOutlineStrokeWidth);
-            stroke.setColor(to_sk_color(kSelectionOutlineColor));
-
-            for (const auto &r : shape.rects)
-            {
-                const SkRect rect = SkRect::MakeLTRB(static_cast<SkScalar>(r.ll.x), static_cast<SkScalar>(r.ll.y),
-                                                      static_cast<SkScalar>(r.ur.x), static_cast<SkScalar>(r.ur.y));
-                canvas.drawRect(rect, stroke);
-            }
-
-            for (const auto &poly : shape.polygons)
-                canvas.drawPath(to_sk_path(poly, /*close=*/true), stroke);
-
-            if (!shape.paths.empty())
-            {
-                SkPaint halo;
-                halo.setAntiAlias(true);
-                halo.setStyle(SkPaint::kStroke_Style);
-                halo.setStrokeCap(SkPaint::kButt_Cap);
-                halo.setColor(to_sk_color(kSelectionOutlineColor));
-
-                for (const auto &p : shape.paths)
-                {
-                    halo.setStrokeWidth(static_cast<SkScalar>(p.width) + 2.0f * kSelectionPathHaloMarginPx);
-                    canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), halo);
                 }
             }
         }
@@ -1227,21 +1246,20 @@ namespace le
         /// always succeed for a surface this function itself just created
         /// via `SkSurfaces::Raster`.
         ///
-        /// Cache key is `{AbstractId, viewport_version, visibility_version,
-        /// selection_version}` - every one of `picture`'s own upstream
-        /// triggers (`build_picture`'s cache key exactly). This has to be
-        /// kept in sync with `build_picture`'s key by hand: CachedStage's
-        /// `get` only ever compares the key tuple, never `picture` itself,
-        /// so if `picture`'s content can change for a reason this key
-        /// doesn't capture, this returns a stale frame for a *different*
-        /// picture than the one just passed in - exactly what happened
-        /// before `selection_version` was added here (build_picture
-        /// correctly recomputed a new SkPicture with the selection
-        /// outline baked in, but this cache still matched on the old key
-        /// and returned the pre-selection rasterized bytes).
+        /// Cache key is `{AbstractId, viewport_version, visibility_version}` -
+        /// every one of `picture`'s own upstream triggers (`build_picture`'s
+        /// cache key exactly - kept in sync by hand: CachedStage's `get`
+        /// only ever compares the key tuple, never `picture` itself, so if
+        /// `picture`'s content can change for a reason this key doesn't
+        /// capture, this returns a stale frame for a *different* picture
+        /// than the one just passed in - this bit us once already when
+        /// `build_picture` still had selection-dependent content and this
+        /// key initially omitted `selection_version`; now that
+        /// `build_picture` has no selection-dependent content at all - see
+        /// its own doc comment - neither key needs it).
         const RasterizedFrame &rasterize_frame(const sk_sp<SkPicture> &picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
             return rasterized_.get(key, [&]
                                    {
                 const int width = scene.viewport_width_px();
@@ -1281,10 +1299,70 @@ namespace le
                 }; });
         }
 
+        /// @brief Rasterizes `selection_overlay_picture` into its own
+        /// cached raster surface, exactly mirroring `rasterize_frame`'s
+        /// body (same Y-flip, same explicit RGBA8888 format) but keyed
+        /// separately on `{viewport_version, visibility_version,
+        /// selection_version}` - matching `build_selection_overlay_picture`'s
+        /// own key, not `rasterize_frame`'s (no AbstractId; this picture
+        /// is a pure viewport/selection concern, same reasoning as
+        /// `build_selection_overlay_picture`'s own doc comment).
+        ///
+        /// This exists so `compose_with_overlays` can blit the selection
+        /// outline as a cached image (cost independent of selection size)
+        /// instead of replaying `selection_overlay_picture` as an
+        /// SkPicture on every call: a measured regression (see
+        /// BENCHMARKS.md) showed SkPicture replay cost, like recording
+        /// cost, scales with the number of recorded draw ops, so even
+        /// after `build_selection_overlay_picture` stopped being
+        /// *re-recorded* on every mouse move, `compose_with_overlays`
+        /// still *replayed* that same picture (proportional cost) on
+        /// every mouse move regardless. A separate CachedStage from
+        /// `rasterized_` is required, not a shared call with a different
+        /// key - `CachedStage` is single-slot, so reusing the same
+        /// instance for two different pictures (design vs. selection
+        /// overlay) would have each one's rasterization evict the
+        /// other's on every alternating call.
+        const RasterizedFrame &rasterize_selection_overlay_frame(const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.viewport_version(), scene.visibility_version(), scene.selection_version()};
+            return rasterized_selection_overlay_.get(key, [&]
+                                                      {
+                const int width = scene.viewport_width_px();
+                const int height = scene.viewport_height_px();
+
+                if (width <= 0 || height <= 0)
+                    return RasterizedFrame{};
+
+                const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+
+                SkCanvas *canvas = surface->getCanvas();
+                canvas->clear(SK_ColorTRANSPARENT);
+                canvas->translate(0, static_cast<SkScalar>(height));
+                canvas->scale(1, -1);
+                canvas->drawPicture(selection_overlay_picture);
+
+                SkPixmap pixmap;
+                surface->peekPixels(&pixmap);
+
+                return RasterizedFrame{
+                    .surface = std::move(surface),
+                    .buffer = PixelBuffer{
+                        .data = static_cast<const uint8_t *>(pixmap.addr()),
+                        .width = width,
+                        .height = height,
+                        .row_bytes = pixmap.rowBytes(),
+                    },
+                }; });
+        }
+
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
-        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> selection_overlay_picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_selection_overlay_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };
 }

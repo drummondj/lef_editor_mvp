@@ -632,5 +632,41 @@ namespace le
             return bbox->ll.x >= container.ll.x && bbox->ll.y >= container.ll.y &&
                    bbox->ur.x <= container.ur.x && bbox->ur.y <= container.ur.y;
         }
+
+        /// @brief The per-piece analog of fully_enclosed - every individual
+        /// rect/polygon/path of `shape` whose *own* bbox is entirely inside
+        /// `container` (same exact-for-axis-aligned-containment reasoning
+        /// as fully_enclosed's own doc comment - no Boost calls needed
+        /// here either), each returned as its own single-piece Shape
+        /// (matching find_hit_piece's return convention). Needed because
+        /// one Shape can bundle several rects/polygons/paths together
+        /// (e.g. several RECT statements in one PORT) - a drag-select
+        /// needs to know *which* of them individually qualify, not just
+        /// whether the bundle's own combined bbox does (UPDATES.md 7.1
+        /// item 5's rule 5 rectangle-select).
+        static std::vector<Shape> fully_enclosed_pieces(const Rect &container, const Shape &shape)
+        {
+            auto bbox_enclosed = [&](const Rect &bbox)
+            {
+                return bbox.ll.x >= container.ll.x && bbox.ll.y >= container.ll.y &&
+                       bbox.ur.x <= container.ur.x && bbox.ur.y <= container.ur.y;
+            };
+
+            std::vector<Shape> result;
+
+            for (const auto &rect : shape.rects)
+                if (bbox_enclosed(rect))
+                    result.push_back(Shape{.layer_name = shape.layer_name, .rects = {rect}});
+
+            for (const auto &polygon : shape.polygons)
+                if (bbox_enclosed(bbox_of(polygon)))
+                    result.push_back(Shape{.layer_name = shape.layer_name, .polygons = {polygon}});
+
+            for (const auto &path : shape.paths)
+                if (bbox_enclosed(bbox_of(path)))
+                    result.push_back(Shape{.layer_name = shape.layer_name, .paths = {path}});
+
+            return result;
+        }
     };
 }

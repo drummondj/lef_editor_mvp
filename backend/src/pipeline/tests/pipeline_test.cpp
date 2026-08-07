@@ -647,7 +647,7 @@ TEST_F(PipelineFixture, HitTestRectFindsShapesFullyEnclosedAcrossAllLayers)
     auto has = [&](SelectionRef ref)
     {
         for (const auto &hit : hits)
-            if (hit == ref)
+            if (hit.origin == ref)
                 return true;
         return false;
     };
@@ -655,6 +655,50 @@ TEST_F(PipelineFixture, HitTestRectFindsShapesFullyEnclosedAcrossAllLayers)
     ASSERT_EQ(hits.size(), 2u);
     EXPECT_TRUE(has(SelectionRef{inside_m1}));
     EXPECT_TRUE(has(SelectionRef{inside_m2}));
+}
+
+TEST_F(PipelineFixture, HitTestRectReturnsOneHoverTargetPerEnclosedPieceOfTheSameOrigin)
+{
+    // Regression: a single Obstruction can bundle several disjoint Shape
+    // entries together in its own .shapes list (e.g. every RECT
+    // statement in one OBS block gets its own Shape - see
+    // stress_data.hpp's "fresh LAYER before every geometry item" trick,
+    // which is exactly how a real stress-test LEF produces one
+    // Obstruction with ~900,000 single-piece Shapes) - dragging a
+    // rectangle around two of them must report two independently-
+    // selectable pieces sharing the same origin, not collapse to "the
+    // object is selected" (which would then highlight every piece
+    // belonging to it, however many there are - the actual reported
+    // bug). Constructed directly (not via add_obstruction_shape, which
+    // only ever creates one Shape per Obstruction) so each rect lands in
+    // its own Shape/RenderedShape, matching that real structure -
+    // bundling all three rects into one Shape instead would exercise
+    // Geometry::merge_overlapping_fills (generate_shapes runs it per
+    // RenderedShape), which converts a multi-piece Shape's rects into
+    // polygons regardless of whether they actually overlap - a different
+    // scenario from this test's target.
+    const ObstructionId obstruction_id = root.create_obstruction(ObstructionData{
+        .abstract = abstract_id,
+        .shapes = {
+            Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}},
+            Shape{.layer_name = "M1", .rects = {Rect{.ll = {30, 30}, .ur = {40, 40}}}},
+            Shape{.layer_name = "M1", .rects = {Rect{.ll = {100, 100}, .ur = {110, 110}}}}, // outside the drag rect
+        },
+    });
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_viewport_size(1000, 1000);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto hits = Pipeline::hit_test_rect(shapes, view_layers, scene, Rect{.ll = {0, 0}, .ur = {50, 50}});
+
+    ASSERT_EQ(hits.size(), 2u);
+    EXPECT_EQ(hits[0].origin, SelectionRef{obstruction_id});
+    EXPECT_EQ(hits[1].origin, SelectionRef{obstruction_id});
+    ASSERT_EQ(hits[0].outline.rects.size(), 1u);
+    ASSERT_EQ(hits[1].outline.rects.size(), 1u);
+    EXPECT_NE(hits[0].outline.rects.front().ll.x, hits[1].outline.rects.front().ll.x); // genuinely different pieces
 }
 
 TEST_F(PipelineFixture, HitTestRectSkipsAnUnselectableLayer)

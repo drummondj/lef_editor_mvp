@@ -192,7 +192,7 @@ gtest_discover_tests(backend_tests)
 
 # --- benchmarks ---
 add_executable(pipeline_benchmarks src/pipeline/benchmarks/pipeline_benchmark.cpp)
-target_link_libraries(pipeline_benchmarks PRIVATE database geometry scene pipeline render io benchmark::benchmark)
+target_link_libraries(pipeline_benchmarks PRIVATE database geometry scene pipeline render io api benchmark::benchmark)
 target_compile_definitions(pipeline_benchmarks PRIVATE
     BENCHMARK_DATA_DIR="${CMAKE_BINARY_DIR}/benchmark_data"
 )

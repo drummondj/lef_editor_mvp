@@ -261,6 +261,41 @@ TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
     EXPECT_FALSE(region_shows_color(bitmap, 51, 11, 69, 29, m1_color)); // M1's color doesn't leak into M2's rect
 }
 
+TEST_F(RenderFixture, BuildPictureDrawsAnOutlineColoredBorderAroundAnUnselectedPath)
+{
+    // Regression: draw_group used to draw PATH shapes with only a
+    // fill-colored centerline stroke, never an outline-colored border -
+    // unlike RECT/POLYGON, which always get both. Visually this made
+    // PATH-typed shapes (common in the stress-test LEF, where ~1/3 of
+    // shapes are PATHs with width comparable to length) look like
+    // borderless blobs next to bordered RECT/POLYGON shapes on the same
+    // layer.
+    add_obstruction_shape(Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    const SkColor outline_color = to_sk_color(view_layers.get(view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION))->style.outline_color);
+
+    // Path centerline at y=20, width=4 (wire fill covers y in (18,22));
+    // the border adds kPathOutlineMarginPx (1.5) on each side, covering y
+    // in (16.5,23.5). y=17 is outside the wire fill but inside the border
+    // ring - solid outline color there proves the border draws (the
+    // border paint has no shader, unlike the wire fill's own tiled
+    // pattern, so this is deterministic regardless of FillPattern).
+    EXPECT_EQ(sample_pixel(picture, 100, 100, 20, 17), outline_color);
+
+    // Well beyond even the bordered width - nothing drawn.
+    EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 20, 10)), 0);
+}
+
 TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentFill)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
@@ -312,114 +347,6 @@ TEST_F(RenderFixture, BuildPictureSkipsShapesWithUnresolvedViewLayer)
     EXPECT_EQ(SkColorGetA(pixel), 0); // nothing drawn - no style to draw it with
 }
 
-TEST_F(RenderFixture, BuildPictureDrawsWhiteOutlineAroundASelectedShape)
-{
-    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
-
-    Scene scene;
-    scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
-    scene.set_viewport_size(100, 100);
-    scene.select(terminal_id);
-
-    const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-
-    // Rect (10,10)-(30,30) at pan(0,0)/scale 1.0 -> same pixel coords.
-    // Selection outline stroke (2px, centered on the boundary) fully
-    // covers pixel column 9 (continuous [9,10) within the [9,11] band).
-    const SkColor edge = sample_pixel(picture, 100, 100, 9, 20);
-    EXPECT_EQ(SkColorGetR(edge), 255);
-    EXPECT_EQ(SkColorGetG(edge), 255);
-    EXPECT_EQ(SkColorGetB(edge), 255);
-    EXPECT_GT(SkColorGetA(edge), 200);
-}
-
-TEST_F(RenderFixture, BuildPictureHasNoSelectionOutlineWhenNothingIsSelected)
-{
-    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
-
-    Scene scene;
-    scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
-    scene.set_viewport_size(100, 100);
-
-    const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-
-    const SkColor edge = sample_pixel(picture, 100, 100, 9, 20);
-    EXPECT_FALSE(SkColorGetR(edge) == 255 && SkColorGetG(edge) == 255 && SkColorGetB(edge) == 255);
-}
-
-TEST_F(RenderFixture, BuildPictureOutlinesEveryPieceOfASelectedTerminalNotJustOne)
-{
-    // Unlike hover (which isolates a single piece - see UPDATES.md 7.1's
-    // own bugfix), selecting a Terminal highlights the whole object: two
-    // separate Ports' own Shapes (not merged together, since
-    // merge_overlapping_fills only combines rects/polygons *within* one
-    // Shape) both outline when their shared Terminal is selected.
-    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
-
-    Scene scene;
-    scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
-    scene.set_viewport_size(100, 100);
-    scene.select(terminal_id);
-
-    const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-
-    auto is_white = [&](int x, int y)
-    {
-        const SkColor c = sample_pixel(picture, 100, 100, x, y);
-        return SkColorGetR(c) == 255 && SkColorGetG(c) == 255 && SkColorGetB(c) == 255 && SkColorGetA(c) > 200;
-    };
-
-    EXPECT_TRUE(is_white(9, 20));  // first rect's left edge
-    EXPECT_TRUE(is_white(59, 70)); // second rect's left edge
-}
-
-TEST_F(RenderFixture, BuildPictureOmitsTheWholeObjectOutlineWhenAPieceIsSelected)
-{
-    // Once a click records a specific piece (Scene::SelectedObject::piece,
-    // set via Scene::select's second argument), build_picture's own
-    // whole-object pass must skip that origin entirely - the piece gets
-    // its outline from build_overlay_picture/draw_selected_piece_outline
-    // instead (see ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWholeObject).
-    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
-    const Shape first_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {first_piece}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
-
-    Scene scene;
-    scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
-    scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, first_piece);
-
-    const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-
-    auto is_white = [&](int x, int y)
-    {
-        const SkColor c = sample_pixel(picture, 100, 100, x, y);
-        return SkColorGetR(c) == 255 && SkColorGetG(c) == 255 && SkColorGetB(c) == 255 && SkColorGetA(c) > 200;
-    };
-
-    EXPECT_FALSE(is_white(9, 20));  // first rect's left edge - drawn by the overlay now, not here
-    EXPECT_FALSE(is_white(59, 70)); // second rect's left edge - not selected at all
-}
-
 TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWholeObject)
 {
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
@@ -438,7 +365,8 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
 
     // Post-flip (see the Y-flip comment on
     // ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore) -
@@ -473,7 +401,8 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
 
     // Same square as the rect-piece tests above (10,10)-(30,30) - left
     // edge preflip (9,20) -> post-flip y = 100-20 = 80.
@@ -484,12 +413,14 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     EXPECT_GT(p[3], 200);
 }
 
-TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPiece)
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
 {
-    // draw_selected_piece_outline's path branch (halo width =
-    // path.width * scale + 2*kSelectionPathHaloMarginPx), otherwise
-    // untested - every other piece-outline test above uses a rect/
-    // polygon piece.
+    // draw_selected_piece_outline's path branch, otherwise untested -
+    // every other piece-outline test above uses a rect/polygon piece.
+    // Traces the path's *buffered outline polygon* (like
+    // draw_hover_outline), not a solid halo stroke along its centerline -
+    // so the outline is hollow (edges white, interior not), matching
+    // rect/polygon selection instead of reading as a filled blob.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
     root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
@@ -505,7 +436,8 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPiece)
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -513,16 +445,64 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPiece)
         return p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 200;
     };
 
-    // Horizontal path centerline at dbu y=20 (preflip), scale 1.0 -> post-flip y = 100-20 = 80.
-    // The halo is a solid stroked band (not just an outline), so the
-    // centerline itself is white, not just its edges.
-    EXPECT_TRUE(is_white(20, 80));
-    // Well outside the path's width + halo margin - not selected/white.
-    EXPECT_FALSE(is_white(20, 60));
+    // Buffered outline (width 4 -> +/-2 perpendicular, flat ends) is
+    // roughly dbu (10,18)-(30,22) - post-flip (viewport 100, scale 1.0):
+    // top edge preflip y=22 -> device y=78; bottom edge preflip y=18 ->
+    // device y=82; centerline preflip y=20 -> device y=80.
+    EXPECT_TRUE(is_white(20, 78));   // top edge of the outline
+    EXPECT_TRUE(is_white(20, 82));   // bottom edge of the outline
+    EXPECT_FALSE(is_white(20, 80));  // centerline - hollow interior, not filled
+    EXPECT_FALSE(is_white(20, 60));  // well outside the path entirely
 }
 
-TEST_F(RenderFixture, BuildPictureReusesCacheUntilSelectionVersionChanges)
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
 {
+    // Regression: the actual reported bug - a stress-test-shaped path
+    // whose width is comparable to its own length (unlike a real wire,
+    // which is much longer than it is wide) used to render as a solid
+    // white blob, since the old halo approach stroked the centerline at
+    // (width + margin), which swallows a short/wide path's whole
+    // footprint. Center must now read as hollow, just like the more
+    // typical long/thin case above.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 20}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, path_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+
+    auto is_white = [&](int x, int y)
+    {
+        const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+        return p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 200;
+    };
+
+    // width=20, length=20 (matching the stress test's width~=length
+    // shape) -> buffered outline roughly dbu (10,10)-(30,30), centered
+    // at (20,20) - post-flip center device y = 100-20 = 80.
+    EXPECT_FALSE(is_white(20, 80)); // dead center - must be hollow, not a filled blob
+}
+
+TEST_F(RenderFixture, BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges)
+{
+    // build_picture has no selection-dependent content at all any more
+    // (see its own doc comment - the old whole-object selection-outline
+    // pass was both unreachable through the public API and a real,
+    // measured O(visible shapes * selection size) cost on every selection
+    // change, see BENCHMARKS.md), so neither its own cache key nor
+    // rasterize_frame's (kept in sync by hand) includes selection_version
+    // any more - a selection change should cost nothing here.
     const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
@@ -533,58 +513,17 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilSelectionVersionChanges)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-    renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    renderer.rasterize(picture, scene);
+    ASSERT_EQ(renderer.picture_calls(), 1u);
+    ASSERT_EQ(renderer.rasterize_calls(), 1u);
+
+    scene.select(terminal_id);
+    const auto &picture_after = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    renderer.rasterize(picture_after, scene);
+
     EXPECT_EQ(renderer.picture_calls(), 1u);
-
-    scene.select(terminal_id);
-    renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    EXPECT_EQ(renderer.picture_calls(), 2u);
-}
-
-TEST_F(RenderFixture, RasterizeReflectsASelectionChangeEvenWhenRasterizedOnceBefore)
-{
-    // Regression: build_picture correctly produces a new SkPicture when
-    // the selection changes (see BuildPictureReusesCacheUntilSelectionVersionChanges),
-    // but rasterize()/rasterize_frame()'s own cache used to be keyed only
-    // on {AbstractId, viewport_version, visibility_version} - CachedStage
-    // never inspects the `picture` argument itself, only the key, so
-    // rasterizing once *before* selecting anything (warming that cache),
-    // then again after selecting, returned the pre-selection bytes
-    // unchanged even though a different (correct) SkPicture was passed
-    // the second time. This is exactly the "I select things but never
-    // see a white outline" bug report this test guards against.
-    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
-
-    Scene scene;
-    scene.set_current_abstract(abstract_id);
-    scene.set_pan(Point{0, 0});
-    scene.set_scale(1.0);
-    scene.set_viewport_size(100, 100);
-
-    auto render_and_sample_edge = [&]
-    {
-        const auto &shapes = pipeline.run(root, scene, view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-        const PixelBuffer &buffer = renderer.rasterize(picture, scene);
-        // rasterize() Y-flips: pre-flip rect (10,10)-(30,30) at
-        // pan(0,0)/scale 1.0 ends up at device rows [100-30,100-10] =
-        // [70,90] - column 9 (unaffected by the flip) is still the left
-        // edge's own fully-covered stroke column.
-        const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
-        return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
-    };
-
-    const auto before = render_and_sample_edge(); // warms rasterize_frame's cache with no selection
-    scene.select(terminal_id);
-    const auto after = render_and_sample_edge();
-
-    EXPECT_NE(before, after);
-    EXPECT_EQ(after[0], 255);
-    EXPECT_EQ(after[1], 255);
-    EXPECT_EQ(after[2], 255);
-    EXPECT_GT(after[3], 200);
+    EXPECT_EQ(renderer.rasterize_calls(), 1u);
 }
 
 TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
@@ -903,6 +842,106 @@ TEST_F(RenderFixture, BuildOverlayPictureHasNoDragRectangleWhileDraggingWithoutA
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 200, 200, 100, 100)), 0);
 }
 
+TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseMoves)
+{
+    // Regression: build_overlay_picture used to bundle selected-piece
+    // outlines together with mouse-driven chrome (drag rect/cursor/hover)
+    // in one SkPicture keyed partly on mouse_version() - so every mouse
+    // move (which bumps mouse_version on every pointer event) forced a
+    // full re-walk of the selection list, re-buffering every selected
+    // PATH piece's outline (Geometry::path_to_polygons) from scratch even
+    // though the selection itself hadn't changed - cost scaling with
+    // selection size on every pointer event. Splitting the two pictures
+    // means a pure mouse move only recomputes the cheap mouse-only
+    // picture now; this is the test that would have failed before that
+    // split.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, path_piece);
+
+    renderer.build_selection_overlay_picture(scene);
+    renderer.build_overlay_picture(scene);
+    ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
+    ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
+
+    // Move the mouse several times - selection is untouched throughout.
+    scene.set_mouse_position(5, 5);
+    renderer.build_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene);
+    scene.set_mouse_position(6, 6);
+    renderer.build_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene);
+    scene.set_mouse_position(7, 7);
+    renderer.build_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene);
+
+    EXPECT_EQ(renderer.overlay_picture_calls(), 4u);           // recomputed on every mouse move, as intended - cheap
+    EXPECT_EQ(renderer.selection_overlay_picture_calls(), 1u); // never recomputed - selection never changed
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWhenOnlyMouseMoves)
+{
+    // Regression, one level deeper than
+    // BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseMoves
+    // above: recording selection_overlay_picture only once isn't enough
+    // on its own - compose_with_overlays used to *replay* that SkPicture
+    // directly (canvas->drawPicture) on every call regardless, and
+    // measured benchmarks (see BENCHMARKS.md) showed SkPicture replay
+    // cost, like recording cost, scales with the number of recorded draw
+    // ops. So a mouse-only change still cost proportionally to selection
+    // size even after the picture-recording fix above. Fixed by
+    // rasterizing the selection overlay into its own cached image
+    // (rasterize_selection_overlay_frame) and blitting that instead of
+    // replaying the picture - this test would have failed before that
+    // fix, since rasterize_selection_overlay_calls() would still have
+    // been 1 (it's the replay, not the rasterization, that used to
+    // repeat) - it exists to guard call-count-only tests like the one
+    // above from missing this exact class of regression again.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{40, 40}, {60, 40}}}, .width = 4}}};
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(terminal_id, path_piece);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    auto compose_once = [&]
+    {
+        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+    };
+
+    scene.set_mouse_position(1, 1);
+    compose_once();
+    ASSERT_EQ(renderer.rasterize_selection_overlay_calls(), 1u);
+
+    scene.set_mouse_position(2, 2);
+    compose_once();
+    scene.set_mouse_position(3, 3);
+    compose_once();
+    scene.set_mouse_position(4, 4);
+    compose_once();
+
+    EXPECT_EQ(renderer.compose_calls(), 4u);                   // cheap composite did recompute every time
+    EXPECT_EQ(renderer.rasterize_selection_overlay_calls(), 1u); // selection raster reused, not recomputed
+}
+
 TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMoves)
 {
     // This is the whole point of the design/overlay-picture split (see
@@ -924,19 +963,23 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
 
     scene.set_mouse_position(10, 10);
     const auto &overlay_picture_1 = renderer.build_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, overlay_picture_1, scene);
+    const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene);
+    renderer.compose_with_overlays(design_picture, overlay_picture_1, selection_overlay_picture_1, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
+    ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.compose_calls(), 1u);
 
     // Move the mouse only - viewport/visibility versions (and therefore
     // the design content itself) are untouched.
     scene.set_mouse_position(20, 20);
     const auto &overlay_picture_2 = renderer.build_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, overlay_picture_2, scene);
+    const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene);
+    renderer.compose_with_overlays(design_picture, overlay_picture_2, selection_overlay_picture_2, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
     EXPECT_EQ(renderer.overlay_picture_calls(), 2u); // cheap overlay picture did recompute
+    EXPECT_EQ(renderer.selection_overlay_picture_calls(), 1u); // no selection - never recomputes here
     EXPECT_EQ(renderer.compose_calls(), 2u);        // cheap composite did recompute
 }
 
@@ -949,8 +992,13 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
     // missing selection_version, so composing once before selecting
     // (warming the cache) then again after selecting returned the
     // pre-selection composited bytes unchanged, even with a correctly
-    // updated design_picture passed in both times.
-    const ObstructionId obstruction_id = add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+    // updated design_picture passed in both times. Selects with a piece
+    // (every reachable selection through the public API always has one -
+    // see Pipeline::hit_test_rect), which is what actually produces a
+    // visible outline (via build_selection_overlay_picture) to detect a
+    // stale composite with.
+    const Shape piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    const ObstructionId obstruction_id = add_obstruction_shape(piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -964,14 +1012,15 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
         const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
-        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, scene);
-        // Same Y-flip as rasterize() - see RasterizeReflectsASelectionChangeEvenWhenRasterizedOnceBefore's comment.
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+        // Same Y-flip as rasterize() - see BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges's comment.
         const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
         return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
     };
 
     const auto before = compose_and_sample_edge(); // warms compose_with_overlays's cache with no selection
-    scene.select(obstruction_id);
+    scene.select(obstruction_id, piece);
     const auto after = compose_and_sample_edge();
 
     EXPECT_NE(before, after);

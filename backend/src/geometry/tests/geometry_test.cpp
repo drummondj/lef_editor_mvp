@@ -549,3 +549,36 @@ TEST(Geometry, FullyEnclosedOfEmptyShapeIsFalse)
     Shape shape;
     EXPECT_FALSE(Geometry::fully_enclosed(Rect{.ll = {0, 0}, .ur = {100, 100}}, shape));
 }
+
+TEST(Geometry, FullyEnclosedPiecesReturnsOnlyTheIndividuallyEnclosedPieces)
+{
+    // A bundled multi-piece Shape where some pieces fit inside the
+    // container and others don't - the per-piece analog of
+    // fully_enclosed, which only ever answers for the whole bundle.
+    Shape shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {10, 10}, .ur = {20, 20}},   // inside
+            Rect{.ll = {100, 100}, .ur = {110, 110}}, // outside
+        },
+        .polygons = {
+            Polygon{.points = {{15, 15}, {18, 15}, {18, 18}, {15, 18}}}, // inside
+        },
+    };
+
+    const auto pieces = Geometry::fully_enclosed_pieces(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape);
+
+    ASSERT_EQ(pieces.size(), 2u);
+    EXPECT_EQ(pieces[0].rects.size(), 1u);
+    EXPECT_EQ(pieces[0].rects.front().ll.x, 10);
+    EXPECT_EQ(pieces[1].polygons.size(), 1u);
+    EXPECT_EQ(pieces[0].layer_name, "M1"); // layer_name carried onto each single-piece Shape
+}
+
+TEST(Geometry, FullyEnclosedPiecesIsEmptyWhenNoPieceFits)
+{
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {100, 100}, .ur = {110, 110}});
+
+    EXPECT_TRUE(Geometry::fully_enclosed_pieces(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape).empty());
+}

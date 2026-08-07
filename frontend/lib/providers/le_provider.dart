@@ -77,6 +77,10 @@ class LeProvider extends ChangeNotifier {
   final List<LeSelectedObjectInfo> _selectedObjects = [];
   List<LeSelectedObjectInfo> get selectedObjects => _selectedObjects;
 
+  // -1 so the first refreshSelection() call (selectionVersion is always
+  // >= 0) always does a real refresh.
+  int _lastSelectionVersion = -1;
+
   Future<void> refreshTexture() async {
     await _texture?.markFrameAvailable();
   }
@@ -90,13 +94,23 @@ class LeProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshSelectedCount() async {
-    _selectedCount = _editor.selectionCount;
-  }
+  // Rebuilding _selectedObjects makes several FFI calls per selected
+  // object (selectedObjectKind + selectedObjectProperties, itself one
+  // call per property) - proportional to selection size, not free. Gated
+  // on selectionVersion (bumped only on an actual select/deselect/clear,
+  // not on every pointer event) so a mouse move that doesn't change the
+  // selection skips this entirely instead of paying that cost on every
+  // frame - see backend/BENCHMARKS.md for the measured cost this fixes.
+  Future<void> refreshSelection() async {
+    final version = _editor.selectionVersion;
+    if (version == _lastSelectionVersion) {
+      return;
+    }
+    _lastSelectionVersion = version;
 
-  Future<void> refreshSelectedObjects() async {
+    _selectedCount = _editor.selectionCount;
     _selectedObjects.clear();
-    for (int i = 0; i < _editor.selectionCount; i++) {
+    for (int i = 0; i < _selectedCount; i++) {
       final kind = _editor.selectedObjectKind(i);
       if (kind != null) {
         _selectedObjects.add(
@@ -109,11 +123,12 @@ class LeProvider extends ChangeNotifier {
     }
   }
 
-  // TODO: this currently refreshed everything all the time, choose what to refresh more carefully.
+  // TODO: this currently refreshed everything all the time (except
+  // selection, see refreshSelection), choose what to refresh more
+  // carefully.
   void refreshAndNotify() {
     refreshSnappedMousePosition();
-    refreshSelectedCount();
-    refreshSelectedObjects();
+    refreshSelection();
     refreshLayers();
     refreshTexture();
     notifyListeners();
@@ -141,41 +156,6 @@ class LeProvider extends ChangeNotifier {
     } else {
       _errors.add("Unable to open $path");
     }
-    refreshAndNotify();
-  }
-
-  Future<void> zoomIn(Offset offset) async {
-    _editor.zoom(0.3, offset.dx.toInt(), offset.dy.toInt());
-    refreshAndNotify();
-  }
-
-  Future<void> zoomOut(Offset offset) async {
-    _editor.zoom(-0.3, offset.dx.toInt(), offset.dy.toInt());
-    refreshAndNotify();
-  }
-
-  Future<void> fit({int padding = 10}) async {
-    _editor.fitScene(padding);
-    refreshAndNotify();
-  }
-
-  Future<void> panLeft() async {
-    _editor.pan(-panFactor, 0);
-    refreshAndNotify();
-  }
-
-  Future<void> panRight() async {
-    _editor.pan(panFactor, 0);
-    refreshAndNotify();
-  }
-
-  Future<void> panUp() async {
-    _editor.pan(0, panFactor);
-    refreshAndNotify();
-  }
-
-  Future<void> panDown() async {
-    _editor.pan(0, -panFactor);
     refreshAndNotify();
   }
 
@@ -340,21 +320,4 @@ class LeProvider extends ChangeNotifier {
   void handleFocusChange(bool hasFocus) {
     _editor.handleFocusChange(hasFocus);
   }
-
-  // Future<void> setMousePosition(Offset offset) async {
-  //   _editor.setMousePosition(offset.dx.toInt(), offset.dy.toInt());
-  //   refreshAndNotify();
-  // }
-
-  // Future<void> setMouseDown(Offset offset) async {
-  //   debugPrint("mouseDown: $offset");
-  //   _editor.mouseDown(offset.dx.toInt(), offset.dy.toInt());
-  //   refreshAndNotify();
-  // }
-
-  // Future<void> setMouseUp(Offset offset) async {
-  //   debugPrint("mouseUp: $offset");
-  //   _editor.mouseUp(offset.dx.toInt(), offset.dy.toInt());
-  //   refreshAndNotify();
-  // }
 }

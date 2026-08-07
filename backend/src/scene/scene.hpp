@@ -34,14 +34,18 @@ namespace le
     };
 
     /// @brief One selected object (UPDATES.md 7) - which Terminal/
-    /// Obstruction, plus optionally the exact piece of geometry that was
-    /// clicked to select it. `piece` is a dbu-space copy of just one
+    /// Obstruction, plus the exact piece of geometry that was clicked/
+    /// dragged to select it. `piece` is a dbu-space copy of just one
     /// rect/polygon/path (same shape/reasoning as HoverTarget::outline -
-    /// from Pipeline::hit_test_point's own HoverTarget, when a click hit
-    /// one), or nullopt when no single piece applies (drag-select, which
-    /// enclosure-tests whole objects, not individual pieces) - nullopt
-    /// falls back to highlighting/reporting the whole object, matching
-    /// this feature's original (pre-piece-tracking) behavior.
+    /// from Pipeline::hit_test_point/hit_test_rect's own HoverTarget).
+    /// `select()` still accepts nullopt (see its own doc comment) - no
+    /// reachable caller produces it today (both click and drag always
+    /// pass a piece - see Pipeline::hit_test_rect), but a `SelectedObject`
+    /// with no piece remains a structurally valid state, just one with no
+    /// dedicated rendering treatment (Renderer::build_picture has no
+    /// selection-dependent content at all any more - see its own doc
+    /// comment); `le_selected_object_property_at` (api.cpp) still reports
+    /// the whole object's own bbox for it.
     struct SelectedObject
     {
         SelectionRef origin;
@@ -484,22 +488,33 @@ namespace le
         // object/drag-select) case: repeatedly selecting the same origin
         // with no piece stays a single entry, since every no-piece call
         // matches every other no-piece call for that origin.
+        // Dedup is O(1) average per call via selection_index_ (a signature
+        // -> selection_ index map), not a full linear scan of the current
+        // selection - see piece_signature's own comment. This matters:
+        // le_mouse_up's drag-select branch (api.cpp) calls select() once
+        // per enclosed piece, and a real design can put hundreds of
+        // thousands of pieces under one shared origin (one Obstruction's
+        // OBS block) - a linear-scan dedup made that O(M^2) (confirmed via
+        // benchmark: a drag enclosing a large fraction of the stress-test
+        // design's ~900,000-piece single Obstruction took minutes, not the
+        // sub-second cost a per-piece operation should have).
         void select(SelectionRef origin, std::optional<Shape> piece = std::nullopt)
         {
-            auto same_entry = [&](const SelectedObject &selected)
+            const size_t sig = piece_signature(origin, piece);
+            auto [it, end] = selection_index_.equal_range(sig);
+            for (; it != end; ++it)
             {
-                if (!(selected.origin == origin))
-                    return false;
-                if (!piece)
-                    return !selected.piece.has_value();
-                return selected.piece.has_value() && same_piece(*piece, *selected.piece);
-            };
-
-            if (std::none_of(selection_.begin(), selection_.end(), same_entry))
-            {
-                selection_.push_back(SelectedObject{.origin = origin, .piece = std::move(piece)});
-                ++selection_version_;
+                const SelectedObject &candidate = selection_[it->second];
+                const bool piece_matches = piece
+                                                ? (candidate.piece.has_value() && same_piece(*piece, *candidate.piece))
+                                                : !candidate.piece.has_value();
+                if (candidate.origin == origin && piece_matches)
+                    return; // duplicate, no-op
             }
+
+            selection_index_.emplace(sig, selection_.size());
+            selection_.push_back(SelectedObject{.origin = origin, .piece = std::move(piece)});
+            ++selection_version_;
         }
 
         void deselect(SelectionRef origin)
@@ -508,7 +523,10 @@ namespace le
                                                  [&](const SelectedObject &selected)
                                                  { return selected.origin == origin; });
             if (removed > 0)
+            {
+                rebuild_selection_index();
                 ++selection_version_;
+            }
         }
 
         void clear_selection()
@@ -516,6 +534,7 @@ namespace le
             if (!selection_.empty())
             {
                 selection_.clear();
+                selection_index_.clear();
                 ++selection_version_;
             }
         }
@@ -525,19 +544,6 @@ namespace le
             return std::find_if(selection_.begin(), selection_.end(),
                                  [&](const SelectedObject &selected)
                                  { return selected.origin == origin; }) != selection_.end();
-        }
-
-        /// True if `origin` is selected with no specific piece tracked
-        /// (i.e. should be highlighted/reported as a whole object) -
-        /// false both when unselected and when selected with a specific
-        /// piece (see SelectedObject; Renderer::build_picture's own
-        /// whole-object outline pass gates on this).
-        bool is_selected_as_whole_object(SelectionRef origin) const
-        {
-            const auto it = std::find_if(selection_.begin(), selection_.end(),
-                                          [&](const SelectedObject &selected)
-                                          { return selected.origin == origin; });
-            return it != selection_.end() && !it->piece;
         }
 
         const std::vector<SelectedObject> &selection() const { return selection_; }
@@ -582,6 +588,71 @@ namespace le
             return true;
         }
 
+        // Same mixing formula generated/ids.hpp's own std::hash<le::Id<Tag>>
+        // already uses - reusing an existing, already-reviewed pattern
+        // rather than inventing a new one.
+        static size_t hash_combine(size_t seed, size_t value)
+        {
+            return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+        }
+
+        // A hash consistent with same_piece()'s equality (same fields:
+        // layer_name, and whichever single rect/polygon/path is present -
+        // same_piece's own comment establishes a piece is always exactly
+        // one of the three) - used only to narrow select()'s dedup search
+        // to a small bucket via selection_index_. Never trusted as a
+        // standalone equality check (a collision only costs an extra,
+        // still-correct same_piece comparison in that bucket - see
+        // select()) so it doesn't need to be perfect, just well-mixed.
+        static size_t piece_signature(SelectionRef origin, const std::optional<Shape> &piece)
+        {
+            size_t h = std::visit([](const auto &id)
+                                   { return std::hash<std::decay_t<decltype(id)>>{}(id); },
+                                   origin);
+            h = hash_combine(h, origin.index());
+
+            if (!piece)
+                return hash_combine(h, 0);
+
+            auto hash_point = [&](const Point &p)
+            {
+                h = hash_combine(h, std::hash<int64_t>{}(p.x));
+                h = hash_combine(h, std::hash<int64_t>{}(p.y));
+            };
+
+            h = hash_combine(h, std::hash<std::string>{}(piece->layer_name));
+            if (!piece->rects.empty())
+            {
+                hash_point(piece->rects.front().ll);
+                hash_point(piece->rects.front().ur);
+            }
+            else if (!piece->polygons.empty())
+            {
+                for (const Point &p : piece->polygons.front().points)
+                    hash_point(p);
+            }
+            else if (!piece->paths.empty())
+            {
+                h = hash_combine(h, std::hash<uint64_t>{}(piece->paths.front().width));
+                for (const Point &p : piece->paths.front().polygon.points)
+                    hash_point(p);
+            }
+            return h;
+        }
+
+        // Rebuilds selection_index_ from scratch against the current
+        // selection_ - needed after any operation that changes selection_'s
+        // indices out from under previously-stored ones (deselect()'s
+        // std::erase_if). Not a hot path (deselect isn't called once per
+        // selected piece the way select() is during a drag), so an
+        // O(current size) rebuild here is simpler and fine, unlike select()
+        // itself which needs to stay O(1) average per call.
+        void rebuild_selection_index()
+        {
+            selection_index_.clear();
+            for (size_t i = 0; i < selection_.size(); ++i)
+                selection_index_.emplace(piece_signature(selection_[i].origin, selection_[i].piece), i);
+        }
 
         AbstractId current_abstract_;
         Point pan_{0, 0};
@@ -606,6 +677,9 @@ namespace le
         std::unordered_map<std::string, bool> layer_name_selectable_;
         std::unordered_map<ViewLayerPurpose, bool> purpose_selectable_;
         std::vector<SelectedObject> selection_;
+        // signature (piece_signature) -> index into selection_ - see
+        // select()'s own comment for why this exists.
+        std::unordered_multimap<size_t, size_t> selection_index_;
         uint64_t selection_version_ = 0;
     };
 }

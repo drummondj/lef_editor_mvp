@@ -280,3 +280,227 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_COVERAGE=OFF
 cmake --build build --target pipeline_benchmarks
 ./build/pipeline_benchmarks --benchmark_filter=BM_HitTestPoint --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
 ```
+
+## 2026-08-07 — compose_with_overlays: selection-overlay picture replay scaled with selection size
+
+Reported symptom: after a piece-level selection fix (`Pipeline::hit_test_rect`/
+`draw_selected_piece_outline` now trace a selected PATH piece's *buffered*
+outline via `Geometry::path_to_polygons`, not a cheap centerline halo),
+interactive mouse-move/zoom/multi-select got progressively slower the more
+objects were selected. First fix attempt split `build_overlay_picture`
+(mouse-driven chrome: drag rect/cursor/hover) from a new
+`build_selection_overlay_picture` (selected-piece outlines), so a pure
+mouse move no longer *re-records* the selection outline SkPicture. That
+fix alone didn't resolve the report - added `BM_ComposeWithOverlays_
+ManySelectedPieces_MouseMoveOnly` (selects N real pieces from the stress
+design's own filtered output, mixed RECT/POLYGON/PATH, then measures
+`compose_with_overlays` cost with only mouse position changing) to find
+out why, instead of continuing to reason about it from code alone:
+
+| Selected pieces | Before raster fix | After raster fix |
+| --- | --- | --- |
+| 0 | 1.37 ms | 2.29 ms |
+| 100 | 1.59 ms | 2.28 ms |
+| 1,000 | 1.66 ms | 2.32 ms |
+| 5,000 | 2.56 ms | 2.30 ms |
+| 20,000 | 6.28 ms | 2.33 ms |
+
+Root cause: `compose_with_overlays` *replayed* `selection_overlay_picture`
+(`canvas->drawPicture`) on every call, regardless of whether the picture
+had actually been re-recorded. SkPicture replay cost, like recording
+cost, scales with the number of recorded draw ops - so even with
+recording fixed, every mouse move still cost proportionally to selection
+size just from re-executing thousands of already-recorded stroke/path
+draw calls. Fix: added `rasterize_selection_overlay_frame`, mirroring the
+existing `rasterize_frame` (design picture) pattern - the selection
+overlay is now rasterized into its own cached raster image (keyed on
+`{viewport_version, visibility_version, selection_version}`, no
+`mouse_version`) and `compose_with_overlays` blits that image
+(`SkCanvas::drawImage`, cost independent of content complexity) instead
+of replaying the picture. After the fix, cost is flat regardless of
+selection size (~2.3ms, matching the always-present two-image-blit
+baseline) - the ~0.9ms baseline increase from 1.37ms to 2.29ms at zero
+selected pieces is the fixed cost of the second full-viewport blit,
+always paid now instead of a near-free empty `drawPicture` call.
+
+This is the second time this session a "the picture-cache call count
+looks right" test passed while the actual regression (replay cost, not
+recompute cost) remained - a reminder that `CachedStage` call-count
+assertions only prove *recomputation* was avoided, not that *replay* of
+whatever's cached is cheap; when what's cached is an `SkPicture` rather
+than a flat buffer, replay cost still needs its own reasoning (or
+benchmark) before assuming a cache hit means "cheap."
+
+## 2026-08-07 — Scene::select(): O(N²) dedup scan, not the overlay/composite cost above
+
+The `compose_with_overlays` fix directly above did not resolve the user's
+reported symptom ("many seconds of delay" moving the mouse after
+selecting many shapes) - a clear sign the real cost was somewhere neither
+of the two overlay fixes had touched, since both were millisecond-scale
+and the report was multi-second. Asked to actually profile rather than
+keep guessing: a benchmark exercising the real repro end-to-end
+(`le_read_lef` the stress LEF, `le_fit_scene`, then a full-viewport
+`le_mouse_down`/`le_mouse_up` drag-select, added as
+`BM_RefreshSelectedObjects_ManySelectedPieces`) ran for **7+ minutes**
+without completing what should be a sub-second setup step - had to be
+killed. Root cause: `Scene::select()`'s dedup (`src/scene/scene.hpp`)
+scanned the *entire current selection*, doing a full structural
+rect/polygon/path comparison (`same_piece`) against every existing entry
+sharing the candidate's origin, on every single insert. The stress-test
+LEF's ~900,000 obstruction shapes all share **one** `ObstructionId`
+origin (one `OBS` block), which is exactly the worst case for this: every
+`select()` call during a big drag-select scans against *every previously
+selected piece*, since they all share that one origin and the existing
+origin-mismatch short-circuit never fires. `le_mouse_up`'s drag branch
+(`src/api/api.cpp`) calls `scene.select()` once per enclosed piece, so a
+drag enclosing M pieces cost O(M²) `same_piece` calls - and ran inside the
+handle-wide mutex, blocking everything else for however long it took.
+
+Fix: replaced the linear scan with a signature-bucketed index
+(`piece_signature()` - a hash consistent with `same_piece`'s existing
+equality, `selection_index_` - `std::unordered_multimap<size_t /*sig*/,
+size_t /*index*/>`), so dedup only compares against the small bucket of
+pieces that could plausibly match, not the whole selection. Isolated
+benchmark (`BM_SceneSelect_ManyPiecesSameOrigin` - N distinct pieces
+sharing one synthetic origin, timing only the `select()` loop, not LEF
+parsing or `hit_test_rect`):
+
+| N pieces | Before (O(N²)) | After (O(N) average) |
+| --- | --- | --- |
+| 1,000 | 2.38 ms | 0.073 ms |
+| 5,000 | 58.5 ms | 0.413 ms |
+| 20,000 | 930 ms | 1.71 ms |
+
+544x faster at 20,000 pieces, and the "before" column's growth
+(~24.6x time for 5x items, ~15.9x time for 4x items) confirms the
+quadratic behavior directly, not just asserted from reading the code.
+`items_per_second` after the fix stays flat (~12-13M/s) across all three
+sizes, confirming O(1) average per call, not just "faster."
+
+A second, independent, additive cause was found the same investigation:
+the Flutter frontend (`frontend/lib/providers/le_provider.dart`)
+unconditionally rebuilds its entire selected-object list - several FFI
+calls per selected object - on *every* mouse-move event, regardless of
+whether the selection changed. Fixed by exposing `Scene::selection_version()`
+through the C API (`le_selection_version`) so the frontend can skip that
+rebuild when nothing selection-related has actually changed since the
+last check - not benchmarked in isolation the same way (Dart/FFI-side,
+not something GoogleBenchmark measures), verified instead by rebuilding
+the app and reproducing the original repro.
+
+(A separate incremental-refresh design was attempted on top of this - a
+`le_selected_object_signature` per-entry comparison token letting the
+frontend diff old vs. new selection instead of always rebuilding fully -
+but was reverted: it added real complexity across three layers (C API,
+FFI bindings, Dart) without addressing the actual remaining bottleneck,
+which turned out to be entirely different - see below.)
+
+## 2026-08-07 — build_picture's dead whole-object selection-outline pass
+
+Even after both fixes above, the reported symptom persisted: selecting
+more than a handful of objects was slow, and stayed slow adding just one
+more object to an already-large selection - not explained by either
+prior fix (`Scene::select()` was already confirmed O(1) average; the
+Dart-side refresh gate only helps *unchanged* frames, not actual
+selection changes). Asked directly to profile rather than keep
+hypothesizing, and to justify prior claims about where time was going
+(none of which had been profiler-verified) - used three independent
+methods, escalating in rigor:
+
+1. **Isolated GoogleBenchmark**, `BM_BuildPicture_WithLargeSelection` (a
+   selection of N pieces populated once, then `build_picture` called
+   repeatedly): 3.95 ms (N=0) -> 12.9 ms (N=1,000) -> 64.5 ms (N=5,000) ->
+   64.3 ms (N=20,000, plateaus - ran out of distinct candidates to
+   select). ~16x slower at 5,000 selected than 0.
+2. **macOS `sample`** (statistical call-stack sampler, no source changes)
+   attached to a Release build running that same benchmark: of 6,245
+   samples inside `build_picture`'s recompute call, 5,630 (90%) landed
+   directly in the lambda's own *inlined* code, vs. only ~321 total for
+   the separately-visible `draw_group` (the actual per-shape drawing
+   work) - and 272 samples specifically in `std::variant`'s equality-
+   dispatch machinery, the one piece of evidence that survived inlining
+   and pointed concretely at `SelectionRef == SelectionRef` comparisons.
+3. **Same benchmark, Debug build** (no inlining, so every function keeps
+   its own call-tree frame) - removed all ambiguity: `Scene::
+   is_selected_as_whole_object` (`scene.hpp:552`) accounted for 1,056
+   samples in one call-tree branch alone, ~30x more than `draw_group`
+   (~35) and ~100x more than `Scene::select` (~9) in the same branch -
+   with `find_if.h:24-25` (the linear scan inside it) and
+   `scene.hpp:554` (the comparison lambda) as its own direct children.
+
+Root cause: `build_picture`'s whole-object selection-outline pass (drawn
+once per *visible* `PixelShape`, gated on `Scene::is_selected_as_whole_object`
+- itself a linear scan of the *entire current selection*) was O(visible
+shapes * selection size), and reran on every selection change since
+`selection_version()` was part of `build_picture`'s cache key. It was
+also provably dead: `api.cpp`'s `le_mouse_up` only ever calls
+`Scene::select()` with a piece (confirmed by grep, both call sites), so
+`is_selected_as_whole_object` could never return true through the public
+API - this was pure wasted cost with no possible visual effect.
+
+Fix: removed the whole-object pass, `Scene::is_selected_as_whole_object`,
+and `draw_selection_outline` entirely (all otherwise unused). Since
+`build_picture` no longer has any selection-dependent content at all,
+also dropped `selection_version()` from its cache key and
+`rasterize_frame`'s (kept in sync by hand, per their documented
+invariant) - a selection change no longer invalidates either.
+
+| N pieces selected | Before | After |
+| --- | --- | --- |
+| 0 | 3.95 ms | 4.02 ms |
+| 1,000 | 12.9 ms | 4.02 ms |
+| 5,000 | 64.5 ms | 3.99 ms |
+| 20,000 | 64.3 ms | 4.00 ms |
+
+Flat regardless of selection size. Re-profiled with `sample` after the
+fix as a final check, not just re-benchmarked: neither `build_picture`'s
+lambda nor any selection/variant-comparison symbol appears anywhere in
+the post-fix profile at all - the hot functions are now legitimate
+per-shape Skia drawing work (`SkPaint`, `SkPathData`, `SkMatrix`) and
+one-time LEF parsing setup, exactly what should be there.
+
+## 2026-08-07 — cmg-generated to_string/to_properties/operator<< took their struct by value
+
+Reported: the slowdown was still reproducible selecting Obstruction
+pieces specifically, never Terminal pieces - a real clue, not a red
+herring. The user's own hypothesis (too many shapes embedded in *one*
+Obstruction, not too many selected pieces) was correct. Root cause:
+`cmg` (the schema code generator, `/Users/john/Projects/synthosilicon/cmg`)
+generates `to_string`/`to_properties`/`operator<<` for every schema
+class taking the struct *by value*
+(`cmg/templates/indexed_pools/struct_hpp_j2.py`). Invisible for small
+classes, but `ObstructionData::shapes` (`std::vector<Shape>`) is an
+*embedded* struct field, not pool-referenced like `TerminalData`'s ports
+(fetched separately via `Root::get_terminal_ports`) - so every call to
+`le::to_properties(*obstruction)` (`api.cpp`'s
+`build_selected_object_properties`, called on every property fetch for
+any selected Obstruction piece) deep-copied the whole `shapes` vector
+just to read a couple of fields.
+
+Isolated benchmark (`BM_ToPropertiesObstructionCopyCost`) against the
+real stress-design Obstruction (900K shapes, all under one
+`ObstructionId` - the same one this whole investigation has used):
+
+| | Before | After |
+| --- | --- | --- |
+| `to_properties(ObstructionData)` per call | 29.1 ms | sub-microsecond (50M+ iterations in the benchmark's own min-time window) |
+
+Fixed at the generator (not by hand-patching generated/, which must
+never be hand-edited): changed the three signatures in `cmg`'s template
+to `const T&`, none of the three bodies mutate their own copy. Fixes
+*every* schema class generically, not just Obstruction - any future
+class with a large embedded field gets this for free. Regenerated via
+the local `cmg` checkout (`poetry run cmg --schema ... --output
+src/database/generated --export-style INDEXED_POOLS`, per the
+`regen-database` skill) - `src/database/generated/` is gitignored build
+output, not committed, so there's no diff to review here beyond
+rebuilding/retesting.
+
+`BM_RefreshSelectedObjects_ManySelectedPieces` - added earlier this
+session to measure the full `le_selected_object_*` FFI call sequence,
+but unable to complete even once until now (killed once at O(N²)
+`Scene::select`, silently paying this same 29ms-per-call cost on every
+run after that was fixed) - finally completed cleanly: 36.4 ms at
+50,996 selected pieces, 88.5 ms at 122,333 - real remaining cost now
+proportional to *actual FFI call count* (kind + properties per selected
+object), not a hidden per-call landmine.

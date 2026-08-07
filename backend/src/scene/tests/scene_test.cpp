@@ -79,18 +79,17 @@ TEST(Scene, SettingTheSameCurrentAbstractAgainIsANoOp)
     EXPECT_EQ(scene.selection_version(), 1u);
 }
 
-TEST(Scene, SelectWithNoPieceHighlightsAndReportsTheWholeObject)
+TEST(Scene, SelectWithNoPieceLeavesPieceUnset)
 {
     Scene scene;
     scene.select(TerminalId{1, 0});
 
     EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
-    EXPECT_TRUE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
     ASSERT_FALSE(scene.selection().empty());
     EXPECT_FALSE(scene.selection().front().piece.has_value());
 }
 
-TEST(Scene, SelectWithAPieceIsNotSelectedAsAWholeObject)
+TEST(Scene, SelectWithAPieceRecordsThatPiece)
 {
     Scene scene;
     Shape piece;
@@ -98,7 +97,6 @@ TEST(Scene, SelectWithAPieceIsNotSelectedAsAWholeObject)
     scene.select(TerminalId{1, 0}, piece);
 
     EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
-    EXPECT_FALSE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
     ASSERT_FALSE(scene.selection().empty());
     ASSERT_TRUE(scene.selection().front().piece.has_value());
     EXPECT_EQ(to_string(*scene.selection().front().piece), to_string(piece));
@@ -192,6 +190,53 @@ TEST(Scene, SamePieceDedupDistinguishesDifferentPathPiecesAndNoOpsOnIdenticalOne
     ASSERT_EQ(scene.selection().size(), 3u);
 }
 
+TEST(Scene, SelectDedupsCorrectlyAcrossManyDistinctPiecesSharingOneOrigin)
+{
+    // Regression/refactor-safety test for select()'s signature-bucketed
+    // dedup (piece_signature + selection_index_), which replaced a linear
+    // scan of the whole selection to fix an O(N^2) drag-select cost when
+    // many pieces share one origin (a real design shape: an Obstruction's
+    // whole OBS block is one ObstructionId, however many rects/polygons/
+    // paths it contains) - see BENCHMARKS.md. Mixes distinct new pieces
+    // with re-selecting already-selected ones (in original and reverse
+    // order, so a signature-bucket-position bug couldn't hide behind
+    // insertion order) and checks the exact resulting count/version,
+    // proving the bucketed lookup doesn't miss real duplicates or
+    // conflate distinct pieces that happen to land in the same bucket.
+    Scene scene;
+    const ObstructionId origin{1, 0};
+
+    std::vector<Shape> pieces;
+    for (int i = 0; i < 20; ++i)
+    {
+        Shape piece;
+        piece.layer_name = "M1";
+        piece.rects.push_back(Rect{.ll = {i * 10, 0}, .ur = {i * 10 + 5, 5}});
+        pieces.push_back(piece);
+    }
+
+    for (const Shape &piece : pieces)
+        scene.select(origin, piece);
+    ASSERT_EQ(scene.selection().size(), 20u);
+    ASSERT_EQ(scene.selection_version(), 20u);
+
+    // Re-select every piece again, in reverse order - every one should be
+    // recognized as an existing duplicate (no-op), regardless of which
+    // bucket position it was originally inserted at.
+    for (auto it = pieces.rbegin(); it != pieces.rend(); ++it)
+        scene.select(origin, *it);
+    EXPECT_EQ(scene.selection().size(), 20u);
+    EXPECT_EQ(scene.selection_version(), 20u);
+
+    // One genuinely new piece still gets added correctly afterward.
+    Shape new_piece;
+    new_piece.layer_name = "M1";
+    new_piece.rects.push_back(Rect{.ll = {1000, 1000}, .ur = {1005, 1005}});
+    scene.select(origin, new_piece);
+    EXPECT_EQ(scene.selection().size(), 21u);
+    EXPECT_EQ(scene.selection_version(), 21u);
+}
+
 TEST(Scene, SelectingWithNoPieceAfterAPieceWasAlreadySelectedAddsAWholeObjectEntryWithoutDisturbingThePiece)
 {
     // e.g. a shift-drag that happens to re-enclose an object a previous
@@ -230,12 +275,6 @@ TEST(Scene, SelectingWithNoPieceTwiceForTheSameOriginStaysOneEntry)
     scene.select(TerminalId{1, 0});
     EXPECT_EQ(scene.selection().size(), 1u);
     EXPECT_EQ(scene.selection_version(), 1u);
-}
-
-TEST(Scene, IsSelectedAsWholeObjectIsFalseWhenNotSelectedAtAll)
-{
-    Scene scene;
-    EXPECT_FALSE(scene.is_selected_as_whole_object(TerminalId{1, 0}));
 }
 
 TEST(Scene, DeselectRemovesAnEntryRegardlessOfWhetherItHasAPiece)

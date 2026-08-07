@@ -1052,6 +1052,39 @@ TEST_F(ApiFixture, MouseDownThenUpAsAClickSelectsTheHitShape)
     EXPECT_EQ(le_selection_count(handle), 1);
 }
 
+TEST_F(ApiFixture, SelectionVersionBumpsOnlyOnAnActualSelectionChange)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    const int64_t baseline = le_selection_version(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+    const int64_t after_select = le_selection_version(handle);
+    EXPECT_NE(after_select, baseline);
+
+    // Reselecting the exact same shape (no shift, so it clears first then
+    // reselects the same one) still changes it, since clear+reselect is
+    // two real selection_ mutations even though the end state looks the
+    // same - le_selection_version reflects Scene::selection_version()
+    // directly, not a "did the final state differ" comparison.
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    EXPECT_NE(le_selection_version(handle), after_select);
+    const int64_t after_reselect = le_selection_version(handle);
+
+    // A pure mouse-move (no selection change) must not bump it - this is
+    // the whole point of exposing this counter (see BENCHMARKS.md).
+    le_set_mouse_position(handle, 30, 170);
+    EXPECT_EQ(le_selection_version(handle), after_reselect);
+}
+
+TEST_F(ApiFixture, SelectionVersionWithNullHandleDoesNotCrash)
+{
+    EXPECT_EQ(le_selection_version(nullptr), 0);
+}
+
 TEST_F(ApiFixture, SmallMovementBetweenDownAndUpIsStillTreatedAsAClick)
 {
     load_two_shapes_at_known_scale(handle);
@@ -1507,22 +1540,40 @@ TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsBb
     EXPECT_EQ(properties.at("port_count").int_value, 2);
 }
 
-TEST_F(ApiFixture, DragSelectingATwoPortTerminalStillReportsTheAggregateBboxWithNoLayerName)
+TEST_F(ApiFixture, DragSelectingATwoPortTerminalSelectsBothPortsIndependently)
 {
+    // Regression: rectangle-selecting a Terminal/Obstruction with several
+    // disjoint pieces must select each enclosed piece independently
+    // (mirroring shift-click's own behavior - see
+    // ShiftClickingTwoPiecesOfTheSameTerminalSelectsBothIndependently),
+    // not collapse to one whole-object selection - which, for the
+    // reported stress-test case, meant a 2-piece drag on a ~900,000-piece
+    // Obstruction highlighted every single piece belonging to it.
     load_pin_and_obstruction_at_known_scale(handle);
 
     // Encloses both of PIN B's ports (device x:150-200 -> dbu 15-20
     // micron) without touching PIN A or the OBS rect.
     le_mouse_down(handle, 150, 0);
     le_mouse_up(handle, 200, 200);
-    ASSERT_EQ(le_selection_count(handle), 1);
-    ASSERT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    ASSERT_EQ(le_selection_count(handle), 2);
+    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_TERMINAL);
 
-    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "16 1 19 19"); // union of both ports
+    const std::map<std::string, LeProperty> first_properties = selected_object_properties(handle, 0);
+    ASSERT_TRUE(first_properties.contains("bbox_um"));
+    ASSERT_TRUE(first_properties.contains("layer_name"));
+    const std::string first_bbox = first_properties.at("bbox_um").string_value;
+    const std::string first_layer = first_properties.at("layer_name").string_value;
 
-    EXPECT_FALSE(properties.contains("layer_name")); // no single piece - drag-select has none to report
+    const std::map<std::string, LeProperty> second_properties = selected_object_properties(handle, 1);
+    ASSERT_TRUE(second_properties.contains("bbox_um"));
+    ASSERT_TRUE(second_properties.contains("layer_name"));
+    const std::string second_bbox = second_properties.at("bbox_um").string_value;
+
+    EXPECT_NE(first_bbox, second_bbox); // each port's own bbox, not the aggregate
+    EXPECT_EQ(first_bbox, "16 1 19 4");
+    EXPECT_EQ(second_bbox, "16 16 19 19");
+    EXPECT_EQ(first_layer, "M1"); // a piece-level selection always reports its own layer_name
 }
 
 TEST_F(ApiFixture, ShiftClickingTwoPiecesOfTheSameTerminalSelectsBothIndependently)

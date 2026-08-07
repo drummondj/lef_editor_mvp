@@ -518,6 +518,21 @@ extern "C"
     /// (insertion) order. Returns 0 if handle is null.
     int32_t le_selection_count(LeHandle *handle);
 
+    /// @brief Monotonic counter (Scene::selection_version()) bumped on
+    /// every actual selection change (a select()/deselect()/
+    /// clear_selection() call that isn't a no-op) - a cheap way for a
+    /// caller to tell whether anything selection-related has changed
+    /// since it last checked, without re-fetching le_selection_count()/
+    /// le_selected_object_kind()/le_selected_object_properties() for
+    /// every selected object on every call (e.g. every mouse-move event -
+    /// a real, measured cost that scales with selection size otherwise,
+    /// see BENCHMARKS.md). Returns 0 if handle is null - a real handle's
+    /// version is never observably 0 forever (any interaction eventually
+    /// changes it), so a caller comparing against a sentinel it
+    /// initialized to a negative value on its own side won't be confused
+    /// by a null-handle 0 looking like "unchanged".
+    int64_t le_selection_version(LeHandle *handle);
+
     /// @brief Which database class the selected object at `selection_index`
     /// is (Scene::SelectionRef's variant alternative) - lets a caller
     /// decide how to label/group a row before even looking at its

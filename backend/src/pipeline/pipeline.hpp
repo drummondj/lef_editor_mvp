@@ -405,9 +405,23 @@ namespace le
         /// every layer (no topmost-only restriction - rule 5 says "all
         /// layers") and collects every match, in no particular order.
         /// Same unselectable-layer/no-origin skip as hit_test_point.
-        static std::vector<SelectionRef> hit_test_rect(const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const ViewLayerSet &view_layers, const Scene &scene, Rect dbu_rect)
+        ///
+        /// Piece-level, like hit_test_point (via Geometry::
+        /// fully_enclosed_pieces rather than the coarser fully_enclosed) -
+        /// one RenderedShape can bundle several rects/polygons/paths
+        /// together (e.g. several RECT statements in one PORT), and a
+        /// drag enclosing only some of them must report only those, not
+        /// treat the whole bundle - and by extension every other piece
+        /// sharing the same origin, however many there are - as one
+        /// selected unit. Returns one HoverTarget per enclosed piece, so
+        /// dragging over several disjoint pieces of the same object (e.g.
+        /// a Terminal with multiple ports, or an Obstruction with many
+        /// RECT/PATH/POLYGON items) yields one independently-selected
+        /// entry per piece, exactly like shift-clicking each individually
+        /// would (see Scene::select's dedup-by-(origin, piece)).
+        static std::vector<HoverTarget> hit_test_rect(const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const ViewLayerSet &view_layers, const Scene &scene, Rect dbu_rect)
         {
-            std::vector<SelectionRef> result;
+            std::vector<HoverTarget> result;
 
             for (const auto &[view_layer_id, group] : shapes)
             {
@@ -420,8 +434,8 @@ namespace le
                     if (!rs.origin)
                         continue;
 
-                    if (Geometry::fully_enclosed(dbu_rect, rs.shape))
-                        result.push_back(*rs.origin);
+                    for (auto &piece : Geometry::fully_enclosed_pieces(dbu_rect, rs.shape))
+                        result.push_back(HoverTarget{.origin = *rs.origin, .outline = std::move(piece)});
                 }
             }
 

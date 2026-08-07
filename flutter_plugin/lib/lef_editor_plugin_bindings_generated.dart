@@ -36,7 +36,13 @@ class LefEditorPluginBindings {
       .asFunction<ffi.Pointer<LeHandle> Function()>();
 
   /// @brief Destroy an instance created by le_create(). Safe to call
-  /// with a null handle (no-op), matching free()'s convention.
+  /// with a null handle (no-op), matching free()'s convention. The one
+  /// function this header's own thread-safety guarantee doesn't cover -
+  /// the handle's mutex is destroyed along with everything else, so it
+  /// can't protect this call itself. The caller must ensure no other
+  /// thread is still calling into this handle when le_destroy() runs
+  /// (the same standard contract as destroying any C++ object with
+  /// live references elsewhere - not a new constraint this introduces).
   void le_destroy(ffi.Pointer<LeHandle> handle) {
     return _le_destroy(handle);
   }
@@ -810,6 +816,30 @@ class LefEditorPluginBindings {
         'le_selection_count',
       );
   late final _le_selection_count = _le_selection_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Monotonic counter (Scene::selection_version()) bumped on
+  /// every actual selection change (a select()/deselect()/
+  /// clear_selection() call that isn't a no-op) - a cheap way for a
+  /// caller to tell whether anything selection-related has changed
+  /// since it last checked, without re-fetching le_selection_count()/
+  /// le_selected_object_kind()/le_selected_object_properties() for
+  /// every selected object on every call (e.g. every mouse-move event -
+  /// a real, measured cost that scales with selection size otherwise,
+  /// see BENCHMARKS.md). Returns 0 if handle is null - a real handle's
+  /// version is never observably 0 forever (any interaction eventually
+  /// changes it), so a caller comparing against a sentinel it
+  /// initialized to a negative value on its own side won't be confused
+  /// by a null-handle 0 looking like "unchanged".
+  int le_selection_version(ffi.Pointer<LeHandle> handle) {
+    return _le_selection_version(handle);
+  }
+
+  late final _le_selection_versionPtr =
+      _lookup<ffi.NativeFunction<ffi.Int64 Function(ffi.Pointer<LeHandle>)>>(
+        'le_selection_version',
+      );
+  late final _le_selection_version = _le_selection_versionPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>)>();
 
   int le_selected_object_kind(

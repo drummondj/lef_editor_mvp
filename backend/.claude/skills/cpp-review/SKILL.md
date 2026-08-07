@@ -52,8 +52,20 @@ specific value that would've caught it. Flag logic with no corresponding
 assertion on its actual output, not just "was this line executed."
 
 **Unnecessary allocations, moves, and copies.**
-- Parameters taking `std::string`/`std::vector`/`Shape`/etc. by value where
-  `const&` would do and the callee doesn't need its own copy.
+- Any parameter of non-trivial type — `std::string`/`std::vector`/`Shape`/
+  any user-defined struct or class, not just stdlib containers — taken by
+  value (or by non-const reference when never mutated) where `const&`
+  would do and the callee doesn't need its own copy. Check free functions
+  and generated code too, not just member functions: a real bug here was
+  `cmg`-generated `to_string`/`to_properties`/`operator<<` (one per
+  schema class) all taking their whole struct *by value* — invisible for
+  small classes, but a 29ms-per-call deep copy for `ObstructionData`,
+  whose `shapes` field can hold hundreds of thousands of entries embedded
+  directly in the struct (not pool-referenced like `TerminalData`'s
+  ports) — called on every property fetch for a selected Obstruction.
+  Flag any parameter passed by value into a function that never mutates
+  its own copy, and any pass-by-reference parameter missing `const` when
+  nothing in the body writes through it.
 - Missing `std::move` on a local about to go out of scope (e.g. building a
   `Polygon`/`Shape` then copying it into a container instead of moving it).
 - Round-tripping through `Geometry::to_boost_polygon`/`from_boost_polygon`

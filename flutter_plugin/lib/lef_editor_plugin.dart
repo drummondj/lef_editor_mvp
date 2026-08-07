@@ -644,6 +644,17 @@ class LeEditor {
     return _bindings.le_selection_count(_handle);
   }
 
+  /// Monotonic counter bumped only on an actual selection change (a
+  /// select/deselect/clear that wasn't a no-op) - cheap to check on every
+  /// pointer event to decide whether [selectionCount]/[selectedObjectKind]/
+  /// [selectedObjectProperties] need re-fetching at all, instead of always
+  /// re-fetching them (a real, measured cost that scales with how many
+  /// objects are selected - see backend/BENCHMARKS.md).
+  int get selectionVersion {
+    _checkNotDisposed();
+    return _bindings.le_selection_version(_handle);
+  }
+
   /// Which database class the selected object at [selectionIndex] is, or
   /// null if [selectionIndex] is out of range (0..[selectionCount] - 1).
   LeSelectionKind? selectedObjectKind(int selectionIndex) {

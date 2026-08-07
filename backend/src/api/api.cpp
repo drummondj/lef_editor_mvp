@@ -789,8 +789,8 @@ extern "C"
                 .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
             };
 
-            for (const le::SelectionRef &ref : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
-                handle->scene.select(ref);
+            for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
+                handle->scene.select(hit.origin, hit.outline);
         }
 
         handle->scene.end_drag();
@@ -798,7 +798,20 @@ extern "C"
 
     int32_t le_selection_count(LeHandle *handle)
     {
-        return handle ? static_cast<int32_t>(handle->scene.selection().size()) : 0;
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        return static_cast<int32_t>(handle->scene.selection().size());
+    }
+
+    int64_t le_selection_version(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        return static_cast<int64_t>(handle->scene.selection_version());
     }
 
     int32_t le_selected_object_kind(LeHandle *handle, int32_t selection_index)
@@ -871,7 +884,8 @@ extern "C"
         const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
         const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers, handle->root);
         const auto &overlay_picture = handle->renderer.build_overlay_picture(handle->scene);
-        const auto &buffer = handle->renderer.compose_with_overlays(picture, overlay_picture, handle->scene);
+        const auto &selection_overlay_picture = handle->renderer.build_selection_overlay_picture(handle->scene);
+        const auto &buffer = handle->renderer.compose_with_overlays(picture, overlay_picture, selection_overlay_picture, handle->scene);
 
         return LePixelBuffer{
             .data = buffer.data,
