@@ -504,3 +504,77 @@ run after that was fixed) - finally completed cleanly: 36.4 ms at
 50,996 selected pieces, 88.5 ms at 122,333 - real remaining cost now
 proportional to *actual FFI call count* (kind + properties per selected
 object), not a hidden per-call landmine.
+
+## 2026-08-08 — PATH rendering: buffered outline + pattern fill + centerline
+
+Reported: unselected PATH shapes on both Terminals and Obstructions
+rendered as solid-colored blocks with no visible fill pattern, unlike
+RECT/POLYGON on the same layer. Confirmed visually via `render_preview`
+against a small hand-written LEF (PIN/OBS PATH shapes on M1) before
+touching any code. Root cause: `draw_group`'s PATH branch drew an
+outline-colored "border" stroke at `path.width + 2*kPathOutlineMarginPx`
+directly *underneath* a narrower pattern-shaded "wire" stroke - since a
+layer's `outline_color` is also `pattern_shader`'s own tile color, that
+border acted as an opaque same-color backing plate showing straight
+through every transparent gap in the pattern.
+
+Fix: `RenderedShape` (`pipeline.hpp`) gains `path_outlines` - each
+path's buffered outline (`Geometry::path_to_polygons`, flat ends, miter
+joins - the same buffering already used for hover/selected-piece
+outlines), computed once at `generate_shapes` time. `PixelPath`
+(`render.hpp`) carries the transformed result as `buffered_outline`.
+`draw_group` now fills/outlines a PATH's `buffered_outline` exactly like
+a real POLYGON (pattern fill, thin boundary), plus a new centerline
+stroke along the path's own original polygon so it still reads as a
+wire. Verified visually (border + BRICK pattern + a clearly visible
+centerline, confirmed by rendering a large single path in isolation) and
+via new pixel-level regression tests.
+
+**Performance, measured, not assumed** - `Geometry::path_to_polygons`
+costs ~768ns/call in isolation (`BM_PathToPolygonsSingleCall`), so
+computing it once per path at `generate_shapes` time (cached per-
+AbstractId, not per-frame) rather than in `transform_to_pixels` (reruns
+every pan/zoom) was the deliberate design choice - confirmed by checking
+each stage's own cache key before choosing where this goes, not assumed.
+
+Two real regressions were found via benchmarking that the design above
+didn't anticipate, both against a clean "before this session's PATH
+work" baseline (`git stash` on `pipeline.hpp`/`render.hpp` only, same
+machine/session state, `--benchmark_min_time=8-10s` for a stable
+reading - the first attempt at this comparison used the default ~1s
+min-time and only 3-8 iterations, which gave wildly unstable numbers
+ranging 43-173ms for the same benchmark on the same code; only the
+long-running, ~1700+-iteration numbers below should be trusted):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `BM_GenerateShapes` (1M shapes, cold) | 137 ms | 434 ms |
+| `BM_RunReused_PanOnly` (pipeline only, warm) | 10.3 ms | 11.7 ms |
+| `BM_RenderReused_PanOnly` (full chain, warm) | 39.0 ms | 52.1 ms |
+
+`BM_GenerateShapes`'s +297ms is the expected, accepted cost from point
+above (~330K paths × ~768ns + overhead) - paid once per Abstract-load,
+within this project's documented cold-start budget (see
+`pipeline_latency_budget` memory: 1-2s is fine, spinner shown).
+`BM_RunReused_PanOnly`'s +1.4ms is small and was *not* the concerning
+number it first appeared to be: `RenderedShape::path_outlines` was
+originally a plain `std::vector<std::vector<Polygon>>`, and
+`filter_by_viewport_and_size`/`filter_by_layer_visibility` both already
+copy every surviving `RenderedShape` wholesale on every pan/zoom (an
+existing pattern, not new) - that plain vector made each such copy
+meaningfully heavier, wrapped in `std::shared_ptr<const ...>` instead so
+copying a `RenderedShape` costs an O(1) refcount bump regardless of how
+much outline geometry a path-heavy `Shape` holds.
+
+`BM_RenderReused_PanOnly`'s +13ms is real and not fully explained by the
+pipeline-only number - the difference is in `Renderer`'s own stages
+(`transform_to_pixels` now also transforms `buffered_outline` polygons;
+`draw_group` now issues a shader-filled polygon draw plus a boundary
+stroke plus a centerline stroke per path, instead of two plain strokes).
+Not investigated further: this project's render pipeline was *already*
+well over its 60fps/16.6ms interactive-frame budget before this change
+(39.0ms warm-pan, flagged as an open question in README's Threading
+section since 2026-08-04 - see the `Renderer::rasterize()` entry above),
+so this doesn't cross a new qualitative threshold, and the underlying
+open question (single-threaded rendering) is the same one that would
+need solving regardless of this specific fix.

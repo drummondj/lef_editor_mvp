@@ -47,6 +47,15 @@ namespace le
     {
         PixelPolygon polygon;
         double width = 0.0;
+
+        /// Transformed from RenderedShape::path_outlines (pipeline.hpp) -
+        /// the path's buffered outline (flat ends, miter joins), computed
+        /// once at Pipeline::generate_shapes time, not here - see that
+        /// field's own comment for why. draw_group fills/outlines this the
+        /// same way it already does a real PixelPolygon, instead of
+        /// stroking `polygon` at full `width` (which used to read as a
+        /// solid block regardless of the layer's fill pattern).
+        std::vector<PixelPolygon> buffered_outline;
     };
 
     struct PixelText
@@ -181,13 +190,25 @@ namespace le
                         }
 
                         ps.paths.reserve(rs.shape.paths.size());
-                        for (const auto &path : rs.shape.paths)
+                        for (size_t i = 0; i < rs.shape.paths.size(); ++i)
                         {
+                            const Path &path = rs.shape.paths[i];
                             PixelPath pp;
                             pp.width = static_cast<double>(path.width) * scale;
                             pp.polygon.points.reserve(path.polygon.points.size());
                             for (const auto &pt : path.polygon.points)
                                 pp.polygon.points.push_back(to_pixel(pt));
+
+                            pp.buffered_outline.reserve((*rs.path_outlines)[i].size());
+                            for (const auto &outline_poly : (*rs.path_outlines)[i])
+                            {
+                                PixelPolygon outline_pp;
+                                outline_pp.points.reserve(outline_poly.points.size());
+                                for (const auto &pt : outline_poly.points)
+                                    outline_pp.points.push_back(to_pixel(pt));
+                                pp.buffered_outline.push_back(std::move(outline_pp));
+                            }
+
                             ps.paths.push_back(std::move(pp));
                         }
 
@@ -603,15 +624,6 @@ namespace le
         // is the only consumer of these constants.
         static constexpr Color kSelectionOutlineColor = {255, 255, 255, 255};
         static constexpr float kSelectionOutlineStrokeWidth = 2.0f;
-
-        // Border margin (each side) added around a Path's own width when
-        // drawing its normal (unselected) outline-colored border in
-        // draw_group - see its own comment. A wider stroke drawn
-        // underneath a narrower one, same technique
-        // draw_selected_piece_outline's buffered-outline approach
-        // conceptually parallels, but for normal-render fill+outline
-        // treatment rather than a selection highlight.
-        static constexpr float kPathOutlineMarginPx = 1.5f;
 
         // Rubber-band drag-select rectangle (UPDATES.md 7.1 item 5) - a
         // translucent fill so covered shapes stay visible underneath, plus
@@ -1125,42 +1137,37 @@ namespace le
                         canvas.drawPath(path, stroke);
                 }
 
-                // Paths are wire centerlines with a width, not filled
-                // polygons - drawn as a solid stroked line using the fill
-                // color (the layer's "main" color), not the outline color.
-                // When the layer has an outline color, an outline-colored
-                // stroke at width + 2*kPathOutlineMarginPx is drawn first
-                // (wider, underneath), then the narrower fill-colored
-                // stroke on top - the wider stroke only shows through as a
-                // border ring where the narrower one doesn't cover it,
-                // matching how RECT/POLYGON already show fill-then-border
-                // above. Deliberately a second stroke, not
-                // Geometry::path_to_polygons buffering (see
-                // draw_selected_piece_outline's comment for that
-                // technique) - this runs once per path in the main design
-                // picture, which can hold hundreds of thousands of paths,
-                // so it stays a single cheap extra draw call rather than a
-                // per-path Boost.Geometry buffer operation.
-                if (has_outline)
+                // A path's buffered_outline (PixelPath, transformed from
+                // RenderedShape::path_outlines - computed once at
+                // Pipeline::generate_shapes time, not here) is filled and
+                // outlined exactly like a real PixelPolygon just above -
+                // fill first (the layer's real pattern, not a solid
+                // stroke), then a thin outline-colored boundary. A wide
+                // solid stroke used to be drawn as a "border" directly
+                // underneath a pattern-shaded stroke at the path's own
+                // width - since both used the same base color (a layer's
+                // outline_color is also pattern_shader's tile color), that
+                // border acted as an opaque same-color backing plate
+                // showing straight through every transparent gap in the
+                // pattern, so a PATH always read as one solid block
+                // regardless of its layer's fill pattern (see
+                // BENCHMARKS.md). Then a thin centerline stroke along the
+                // path's own original polygon, so it still reads as a
+                // wire rather than just another filled/outlined shape -
+                // reuses `stroke` (same hairline width/color as the
+                // boundary) rather than a new named color.
+                for (const auto &p : shape.paths)
                 {
-                    SkPaint border = stroke;
-                    border.setStrokeCap(SkPaint::kButt_Cap);
-                    for (const auto &p : shape.paths)
-                    {
-                        border.setStrokeWidth(static_cast<SkScalar>(p.width) + 2.0f * kPathOutlineMarginPx);
-                        canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), border);
-                    }
-                }
+                    if (has_fill)
+                        for (const auto &poly : p.buffered_outline)
+                            canvas.drawPath(to_sk_path(poly, /*close=*/true), fill);
 
-                if (has_fill)
-                {
-                    SkPaint wire = fill;
-                    wire.setStyle(SkPaint::kStroke_Style);
-                    wire.setStrokeCap(SkPaint::kButt_Cap);
-                    for (const auto &p : shape.paths)
+                    if (has_outline)
                     {
-                        wire.setStrokeWidth(static_cast<SkScalar>(p.width));
-                        canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), wire);
+                        for (const auto &poly : p.buffered_outline)
+                            canvas.drawPath(to_sk_path(poly, /*close=*/true), stroke);
+
+                        canvas.drawPath(to_sk_path(p.polygon, /*close=*/false), stroke);
                     }
                 }
 

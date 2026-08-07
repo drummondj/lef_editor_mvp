@@ -3,6 +3,7 @@
 #include "include/core/SkColor.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkSurface.h"
+#include <algorithm>
 #include <array>
 #include <gtest/gtest.h>
 
@@ -148,6 +149,29 @@ TEST_F(RenderFixture, TransformToPixelsHandlesPolygonsPathsAndTexts)
     ASSERT_EQ(ps.paths.front().polygon.points.size(), 2u);
     EXPECT_DOUBLE_EQ(ps.paths.front().polygon.points[1].x, 20.0);
 
+    // buffered_outline (transformed from RenderedShape::path_outlines,
+    // computed via Geometry::path_to_polygons at generate_shapes time) -
+    // a flat-ended, width-4 buffer of dbu (0,0)-(10,0) is the dbu rect
+    // (0,-2)-(10,2); at scale 2.0/pan (0,0) that's pixel (0,-4)-(20,4).
+    // Checked via bbox, not exact point order/winding, since that's an
+    // internal Boost.Geometry buffer detail this test shouldn't couple to.
+    ASSERT_EQ(ps.paths.front().buffered_outline.size(), 1u);
+    const auto &outline_points = ps.paths.front().buffered_outline.front().points;
+    ASSERT_FALSE(outline_points.empty());
+    double min_x = outline_points.front().x, max_x = outline_points.front().x;
+    double min_y = outline_points.front().y, max_y = outline_points.front().y;
+    for (const auto &pt : outline_points)
+    {
+        min_x = std::min(min_x, pt.x);
+        max_x = std::max(max_x, pt.x);
+        min_y = std::min(min_y, pt.y);
+        max_y = std::max(max_y, pt.y);
+    }
+    EXPECT_DOUBLE_EQ(min_x, 0.0);
+    EXPECT_DOUBLE_EQ(max_x, 20.0);
+    EXPECT_DOUBLE_EQ(min_y, -4.0);
+    EXPECT_DOUBLE_EQ(max_y, 4.0);
+
     ASSERT_EQ(ps.texts.size(), 1u);
     EXPECT_EQ(ps.texts.front().label, "note");
     EXPECT_DOUBLE_EQ(ps.texts.front().location.x, 10.0);
@@ -261,15 +285,18 @@ TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
     EXPECT_FALSE(region_shows_color(bitmap, 51, 11, 69, 29, m1_color)); // M1's color doesn't leak into M2's rect
 }
 
-TEST_F(RenderFixture, BuildPictureDrawsAnOutlineColoredBorderAroundAnUnselectedPath)
+TEST_F(RenderFixture, BuildPictureDrawsAPatternFilledOutlinedPathWithACenterline)
 {
-    // Regression: draw_group used to draw PATH shapes with only a
-    // fill-colored centerline stroke, never an outline-colored border -
-    // unlike RECT/POLYGON, which always get both. Visually this made
-    // PATH-typed shapes (common in the stress-test LEF, where ~1/3 of
-    // shapes are PATHs with width comparable to length) look like
-    // borderless blobs next to bordered RECT/POLYGON shapes on the same
-    // layer.
+    // Regression: draw_group used to draw an outline-colored "border"
+    // stroke almost as wide as the path itself, directly underneath a
+    // pattern-shaded stroke at the path's own width - since both use the
+    // same base color (a layer's outline_color is also pattern_shader's
+    // own tile color), the border acted as an opaque same-color backing
+    // plate showing straight through every transparent gap in the
+    // pattern, so a PATH always rendered as one solid block regardless of
+    // its layer's fill pattern. Fixed to fill/outline a PATH's buffered
+    // outline the same way a real POLYGON already renders (real pattern
+    // fill, thin boundary), plus a centerline so it still reads as a wire.
     add_obstruction_shape(Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}});
 
     Scene scene;
@@ -281,19 +308,75 @@ TEST_F(RenderFixture, BuildPictureDrawsAnOutlineColoredBorderAroundAnUnselectedP
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    SkBitmap bitmap = rasterize(picture, 100, 100);
 
     const SkColor outline_color = to_sk_color(view_layers.get(view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION))->style.outline_color);
 
-    // Path centerline at y=20, width=4 (wire fill covers y in (18,22));
-    // the border adds kPathOutlineMarginPx (1.5) on each side, covering y
-    // in (16.5,23.5). y=17 is outside the wire fill but inside the border
-    // ring - solid outline color there proves the border draws (the
-    // border paint has no shader, unlike the wire fill's own tiled
-    // pattern, so this is deterministic regardless of FillPattern).
-    EXPECT_EQ(sample_pixel(picture, 100, 100, 20, 17), outline_color);
+    // Buffered outline (flat ends, width 4 -> +/-2 perpendicular) is
+    // dbu/pixel (10,18)-(30,22) at this pan/scale. This path is narrow
+    // (width 4) - too thin to also test "fill is patterned, not solid"
+    // here without the boundary/centerline dominating the whole strip;
+    // that regression is covered separately, with a wide-enough path to
+    // leave real room for it (see
+    // BuildPictureFillsAShortWidePathWithAPatternNotASolidBlock below).
+    EXPECT_TRUE(region_shows_color(bitmap, 15, 17, 25, 19, outline_color)); // top boundary
+    EXPECT_TRUE(region_shows_color(bitmap, 15, 21, 25, 23, outline_color)); // bottom boundary
 
-    // Well beyond even the bordered width - nothing drawn.
+    // Well beyond even the buffered width - nothing drawn.
     EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 20, 10)), 0);
+
+    // Centerline: a continuous stroke along dbu y=20 (the path's own
+    // polygon, unaffected by the fill pattern's phase) - checked by
+    // fraction of the row actually covered rather than a single pixel,
+    // since BRICK's own mortar joints are also full-width horizontal
+    // lines and could coincidentally land on any given row. The
+    // centerline row should be covered edge-to-edge; comparing against
+    // neighboring rows isn't reliable (a mortar joint could legitimately
+    // land on any of them), so this only asserts the centerline's own
+    // row is (near-)fully covered - proving *a* continuous horizontal
+    // stroke exists exactly at y=20, not just pattern coverage in
+    // general (already proven transparent elsewhere in this same row
+    // range above).
+    int covered = 0;
+    for (int x = 11; x <= 29; ++x)
+        if (SkColorGetA(bitmap.getColor(x, 20)) > 0)
+            ++covered;
+    EXPECT_GT(covered, 15); // most of the 19px span, not just scattered pattern dots
+}
+
+TEST_F(RenderFixture, BuildPictureFillsAShortWidePathWithAPatternNotASolidBlock)
+{
+    // Regression: the actual reported bug - a stress-test-shaped path
+    // whose width is comparable to its own length (unlike a real wire,
+    // much longer than it is wide) rendered as one solid-colored block
+    // with no visible fill pattern at all, since the old wide
+    // outline-colored "border" stroke and the pattern-shaded "wire"
+    // stroke shared the same base color - the border showed straight
+    // through every transparent gap in the pattern. Width=length=20,
+    // matching stress_data.hpp's own synthetic path shape exactly.
+    add_obstruction_shape(Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 20}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    SkBitmap bitmap = rasterize(picture, 100, 100);
+
+    // Buffered outline is dbu/pixel (10,10)-(30,30) - well inside it
+    // (away from the boundary hairline and the y=20 centerline), a solid
+    // block would show outline_color at every pixel; a real pattern must
+    // show at least one fully transparent gap too.
+    bool found_gap = false;
+    for (int x = 14; x <= 26 && !found_gap; ++x)
+        for (int y = 14; y <= 18 && !found_gap; ++y)
+            if (SkColorGetA(bitmap.getColor(x, y)) == 0)
+                found_gap = true;
+    EXPECT_TRUE(found_gap);
 }
 
 TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentFill)

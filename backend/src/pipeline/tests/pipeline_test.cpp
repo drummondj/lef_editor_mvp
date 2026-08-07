@@ -50,6 +50,42 @@ TEST_F(PipelineFixture, GenerateShapesCollectsPortAndObstructionShapes)
     EXPECT_EQ(shapes.size(), 2u);
 }
 
+TEST_F(PipelineFixture, GenerateShapesComputesPathOutlinesForTerminalAndObstructionPaths)
+{
+    // RenderedShape::path_outlines is computed once here (not at
+    // Renderer::transform_to_pixels time, which reruns on every pan/zoom -
+    // see generate_shapes's own doc comment) so draw_group can fill/
+    // outline a PATH like a real POLYGON instead of stroking its
+    // centerline (see BENCHMARKS.md for the solid-fill bug this fixes).
+    const Path terminal_path{.polygon = Polygon{.points = {{0, 0}, {10, 0}}}, .width = 4};
+    add_terminal_shape(Shape{.layer_name = "M1", .paths = {terminal_path}});
+
+    const Path obstruction_path{.polygon = Polygon{.points = {{20, 20}, {20, 40}}}, .width = 6};
+    add_obstruction_shape(Shape{.layer_name = "M1", .paths = {obstruction_path}});
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 2u);
+
+    for (const auto &rs : shapes)
+    {
+        ASSERT_EQ(rs.shape.paths.size(), 1u);
+        ASSERT_NE(rs.path_outlines, nullptr);
+        ASSERT_EQ(rs.path_outlines->size(), 1u);
+        const auto expected = Geometry::path_to_polygons(rs.shape.paths.front());
+        ASSERT_EQ(rs.path_outlines->front().size(), expected.size());
+        ASSERT_FALSE(expected.empty());
+
+        const Polygon &actual_poly = rs.path_outlines->front().front();
+        const Polygon &expected_poly = expected.front();
+        ASSERT_EQ(actual_poly.points.size(), expected_poly.points.size());
+        for (size_t i = 0; i < actual_poly.points.size(); ++i)
+        {
+            EXPECT_EQ(actual_poly.points[i].x, expected_poly.points[i].x);
+            EXPECT_EQ(actual_poly.points[i].y, expected_poly.points[i].y);
+        }
+    }
+}
+
 TEST_F(PipelineFixture, GenerateShapesForUnknownAbstractIsEmpty)
 {
     AbstractId unknown{999, 0};

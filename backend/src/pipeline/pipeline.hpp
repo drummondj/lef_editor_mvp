@@ -5,6 +5,7 @@
 #include "../view_style/view_style.hpp"
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -21,6 +22,35 @@ namespace le
         /// nullopt for the BOUNDARY shape, which isn't tied to any
         /// Terminal/Obstruction and isn't selectable.
         std::optional<SelectionRef> origin;
+
+        /// (*path_outlines)[i] == Geometry::path_to_polygons(shape.paths[i]) -
+        /// each path's buffered outline (flat ends, miter joins),
+        /// precomputed once here (generate_shapes is cached per-AbstractId,
+        /// not per-frame - see its own doc comment) rather than in
+        /// Renderer::transform_to_pixels (which reruns on every pan/zoom,
+        /// viewport_version is in its cache key) or draw_group (which
+        /// reruns on every build_picture recompute). Lets draw_group fill/
+        /// outline a PATH the same way it already does a POLYGON - a real
+        /// filled region with a thin boundary - instead of a solid stroke
+        /// along the centerline, which used to read as an opaque block
+        /// regardless of the layer's fill pattern (see BENCHMARKS.md).
+        ///
+        /// shared_ptr, not a plain vector: filter_by_viewport_and_size
+        /// copies surviving RenderedShapes wholesale on every pan/zoom
+        /// (result.push_back(s) below) - that was already true before this
+        /// field existed (RenderedShape::shape's own rects/polygons/paths
+        /// get copied the same way), but a plain vector-of-vector-of-Polygon
+        /// here made every such copy meaningfully heavier (confirmed via
+        /// BM_RunReused_PanOnly regressing ~8ms to ~50ms - see
+        /// BENCHMARKS.md). A shared_ptr makes copying a RenderedShape cost
+        /// the same O(1) refcount bump regardless of how much outline
+        /// geometry a path-heavy Shape holds. Default member initializer
+        /// (an empty vector, not null) means every RenderedShape - not
+        /// just the ones generate_shapes explicitly sets this for - has a
+        /// safely dereferenceable path_outlines, including the BOUNDARY
+        /// shape (no paths, never sets this) and every test that
+        /// constructs a RenderedShape directly without mentioning it.
+        std::shared_ptr<const std::vector<std::vector<Polygon>>> path_outlines = std::make_shared<const std::vector<std::vector<Polygon>>>();
     };
 
     /// @brief Remembers the last (key, value) pair produced by a single
@@ -141,6 +171,13 @@ namespace le
         /// specific first shape happens to have no geometry of its own
         /// (unusual but possible), its label is dropped with it - not
         /// handled specially.
+        ///
+        /// Also computes each Shape's RenderedShape::path_outlines here
+        /// (one Geometry::path_to_polygons buffer op per path) - this is
+        /// the right cache tier for that real geometry cost (~768ns/call,
+        /// see BM_PathToPolygonsSingleCall) since this stage only
+        /// recomputes on an Abstract switch or ViewLayerSet rebuild, not
+        /// on every pan/zoom the way Renderer::transform_to_pixels does.
         const std::vector<RenderedShape> &generate_shapes(const Root &root, AbstractId abstract_id, const ViewLayerSet &view_layers)
         {
             return generated_.get(std::tuple{abstract_id, view_layers.generation()}, [&]
@@ -153,6 +190,18 @@ namespace le
                 auto resolve = [&](const Shape &shape, ViewLayerPurpose purpose)
                 {
                     return view_layers.find(root.get_layer_by_name(shape.layer_name), purpose);
+                };
+
+                // One buffered outline per path, computed once here (see
+                // RenderedShape::path_outlines's own comment for why this
+                // is the right cache tier, and why it's shared_ptr-wrapped).
+                auto compute_path_outlines = [](const Shape &shape)
+                {
+                    std::vector<std::vector<Polygon>> outlines;
+                    outlines.reserve(shape.paths.size());
+                    for (const Path &path : shape.paths)
+                        outlines.push_back(Geometry::path_to_polygons(path));
+                    return std::make_shared<const std::vector<std::vector<Polygon>>>(std::move(outlines));
                 };
 
                 for (auto terminal_id : terminals)
@@ -193,13 +242,16 @@ namespace le
                             combined.polygons.insert(combined.polygons.end(), shape.polygons.begin(), shape.polygons.end());
                             combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
 
-                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}});
+                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}, .path_outlines = compute_path_outlines(shape)});
                             // Merges the pushed copy's own rects/polygons in
                             // place (after combined's accumulated from the
                             // pre-merge shape above - get_label_location
                             // unions its own input either way, so which one
                             // it sees doesn't change the label location) -
                             // see Geometry::merge_overlapping_fills for why.
+                            // Paths (and therefore path_outlines, computed
+                            // from the pre-merge shape above) are left
+                            // untouched by this - see its own doc comment.
                             Geometry::merge_overlapping_fills(shapes.back().shape);
                         }
                     }
@@ -226,7 +278,7 @@ namespace le
                     const auto *obstruction = root.get_obstruction(obstruction_id);
                     for (const auto &shape : obstruction->shapes)
                     {
-                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}});
+                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .path_outlines = compute_path_outlines(shape)});
                         Geometry::merge_overlapping_fills(shapes.back().shape);
                     }
                 }

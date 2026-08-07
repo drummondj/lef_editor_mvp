@@ -631,4 +631,26 @@ static void BM_ToPropertiesObstructionCopyCost(benchmark::State &state)
 }
 BENCHMARK(BM_ToPropertiesObstructionCopyCost)->Unit(benchmark::kMillisecond);
 
+// Investigates whether Geometry::path_to_polygons (a real Boost.Geometry
+// buffer op) is cheap enough to compute once per path at generate_shapes
+// time (cached per-AbstractId, not per-frame) for a design with the
+// stress data's own path density (~1/3 of 1M shapes, so ~333K paths) -
+// informs whether PATH rendering's planned fill/outline redesign should
+// reuse this existing, already-correct (miter-joined) buffering, or needs
+// a cheaper hand-rolled per-segment-rectangle approximation instead.
+static void BM_PathToPolygonsSingleCall(benchmark::State &state)
+{
+    // A 2-point path matching the stress design's own size formula
+    // (roughly - see stress_data.hpp's item_geometry), not a degenerate
+    // zero-length one.
+    const Path path{.polygon = Polygon{.points = {Point{0, 0}, Point{50'000, 0}}}, .width = 4'000};
+
+    for (auto _ : state)
+    {
+        const auto polygons = Geometry::path_to_polygons(path);
+        benchmark::DoNotOptimize(polygons.data());
+    }
+}
+BENCHMARK(BM_PathToPolygonsSingleCall)->Unit(benchmark::kNanosecond);
+
 BENCHMARK_MAIN();
