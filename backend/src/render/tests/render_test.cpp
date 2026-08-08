@@ -514,6 +514,40 @@ TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentF
     EXPECT_TRUE(found_opaque_pixel);
 }
 
+TEST_F(RenderFixture, BuildPictureDrawsACrossAtEachLabelsOwnAnchorPoint)
+{
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
+    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    // A single rect's label lands at its exact center (20,20) under the
+    // new get_label_location (UPDATES.md item 8.2 - no fracturing
+    // needed for a lone rect). The cross's horizontal arm spans local
+    // x in [-4,4] (kLabelOriginMarkerSizePx=8) - sample a point on its
+    // *left* side (global x=17, i.e. local x=-3), since drawString's
+    // baseline-left origin means the "A1" glyphs are drawn to the right
+    // of the anchor, not the left, so this can't be mistaken for glyph
+    // pixels the way a point on the right side could.
+    const ViewLayerId m1_terminal = view_layers.find(m1, ViewLayerPurpose::TERMINAL);
+    const ViewLayerData *view_layer = view_layers.get(m1_terminal);
+    ASSERT_NE(view_layer, nullptr);
+
+    const SkColor cross_pixel = sample_pixel(picture, 100, 100, 17, 20);
+    EXPECT_EQ(cross_pixel, to_sk_color(view_layer->style.outline_color));
+
+    // Far from the label/cross entirely - nothing drawn here.
+    EXPECT_EQ(SkColorGetA(sample_pixel(picture, 100, 100, 90, 90)), 0);
+}
+
 TEST_F(RenderFixture, BuildPictureSkipsShapesWithUnresolvedViewLayer)
 {
     add_obstruction_shape(Shape{.layer_name = "DOES_NOT_EXIST", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});

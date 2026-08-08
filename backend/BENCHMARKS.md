@@ -659,3 +659,63 @@ Revisit `rasterize_tiny_shapes_frame` (e.g. drawing dots directly into
 `compose_with_overlays`'s own canvas instead of a separate cached raster
 surface) if a real design's dot count and pan-frequency ever make this
 show up as a reported interactive-lag complaint.
+
+## 2026-08-08 — UPDATES.md item 8: label placement (fracture-into-rects) algorithm
+
+Replaced `Geometry::get_label_location`'s old union+11×11-grid-search
+algorithm with a fracture-into-rects one (see `fracture_into_rects`,
+`geometry.hpp`): explicit `Shape::rects` are used directly as
+candidates; each polygon/buffered-path is sliced into slabs along its
+dominant axis (vertical cuts if wider than tall, horizontal otherwise),
+each slab intersected against the polygon and approximated by its own
+bbox; the largest candidate by area wins, label placed at its center.
+Also fixes a latent flaw in the old algorithm for free: its last-resort
+fallback could return a point outside the shape entirely (disjoint
+geometry with no interior grid sample) - the new algorithm can only
+return an off-shape point when the shape has literally no geometry,
+since every candidate rect's center is trivially inside that rect.
+
+**First benchmark pass showed a real regression, not assumed fine per
+CLAUDE.md's rule**: `BM_GenerateShapes` (1M-shape stress design,
+`--benchmark_min_time=8s --benchmark_repetitions=5`, clean `git stash`
+of `geometry.hpp` only for the "before" number) went from 430ms to
+743ms (+313ms, +73%) - `BM_GetLabelLocationSingleRect` (trivial, no
+Boost calls) stayed at ~2ns as expected, but `BM_GetLabelLocationLShapedPolygon`
+(a real 3-cut fracture case) cost ~8.2μs/call, and the stress design's
+10% Terminal-PIN population includes plenty of POLYGON/PATH-based
+labels, not just rects.
+
+**Root-caused with `sample`, not guessed** (per explicit request):
+built a Debug `pipeline_benchmarks`, ran `BM_GenerateShapes` in the
+background with `--benchmark_min_time=30s`, sampled the running process
+for 15s at a 10ms interval (`sample <pid> 15 10 -file ...`). Of 1344
+total samples, 523 (39%) were inside `get_label_location`, and 457 of
+those (34% of the *entire* `generate_shapes` cost) were inside one line
+- the `bg::intersection` call in `fracture_into_rects`.
+
+Reading that call site with the profile in hand found the fix wasn't a
+trade-off: with exactly 2 distinct cuts (one slab), that slab's own
+strip is - by construction - identical to the polygon's whole bbox in
+both dimensions, so intersecting the polygon against it is *always* a
+no-op (`bg::intersection(polygon, its own bbox) == polygon`, whatever
+the polygon's actual shape) and enveloping that gives back the same
+bbox already computed at the top. So `fracture_into_rects`'s early-out
+was widened from `cuts.size() < 2` to `cuts.size() < 3` - an exact
+simplification, not an approximation, and confirmed as such: all 367
+tests (including the new fracture/L-shape tests, which specifically
+exercise the real 3-cut path) pass byte-identical before and after.
+
+Most real LEF `POLYGON` statements and any straight buffered `Path`
+are already exactly their own bbox (2 cuts), so this fast path is the
+common case, not an edge case - confirmed by the fix essentially
+eliminating the regression entirely:
+
+| Benchmark | Before (old algorithm) | After (fracture, unoptimized) | After (fracture, 2-cut fast path) |
+| --- | --- | --- | --- |
+| `BM_GenerateShapes` | 430 ms | 743 ms | 432 ms |
+| `BM_GetLabelLocationSingleRect` | - | 2.00 ns | 2.00 ns |
+| `BM_GetLabelLocationLShapedPolygon` (real 3-cut case, unaffected by the fast path) | - | 8160 ns | 8293 ns |
+
+Net: a behaviorally different (and, per the old algorithm's own
+disjoint-geometry flaw, strictly more correct) label-placement algorithm
+at effectively the same cold-start cost as before.

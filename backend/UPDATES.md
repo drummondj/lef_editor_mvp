@@ -43,7 +43,7 @@ I would like to implement the following fill patterns. Maybe using a shader?
 
 All patterns must have a transparent background so layers below are visible between.
 
-# 3. Error message handling and display
+# 3. Error message handling and display - DONE
 
 When certain operations happen in the backend, such as reading a LEF file. I would like to return any error messages to the flutter_plugin so they can be displayed in the GUI.
 
@@ -100,7 +100,7 @@ Each selected object and it's properties are sent to the frontend via the API, s
 
 Simple properties such as int, double, string etc are just sent as is. Coordinates are always converted to um. Lists of other objects or values are just sent as the size of the list, not the list contents.
 
-## 7.3 Tooltip message
+## 7.3 Tooltip message - DONE
 
 I would like a toopltip message to be generated, which is used in the GUIs status bar below the texture. This tooltip will contain instructions to the user about which mouse gestures and keyboard shortcuts/modifiers are available at that time. For example, when select mode is activated the tooltip should read something click: "Left click to select. Shift for multi-select. Left click and drag for rectangle multi-select."
 
@@ -113,3 +113,10 @@ I would like to try a different Geometry::get_label_location algorithm.
 2. For rects, find the largest rect in the shape and label it.
 
 3. Please draw a cross at the origin of the label because some larger labels can overlap other shapes, so it's not obvious what the label is labeling!
+
+# 9. Mouse and keyboard event additions
+
+1. Ctrl-A select all but stop at 10,000 objects
+2. Mouse scroll wheel zoom in/out
+3. Right mouse button rectangle zoom
+4. 1, 2, 3 ,4 etc changes layer visibility - where 1 maps to the first routing layer, 2 to the second etc. If two adjacent routing layers are made visible via the keyboard (not when the user clicks on the layer manager), then the VIA layer between then is also made visible. Same logic in reverse for making vias invisible.

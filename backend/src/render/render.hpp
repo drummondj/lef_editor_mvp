@@ -694,6 +694,18 @@ namespace le
         static constexpr float kOriginMarkerStrokeWidth = 2.0f;
         static constexpr float kOriginMarkerSizePx = 16.0f;
 
+        // Small marker at each label's own anchor point (UPDATES.md item
+        // 8.3) - a large label can overlap the shape it's labeling, so
+        // this pins down exactly which point get_label_location chose.
+        // Distinct from kOriginMarkerSizePx's own abstract-origin marker
+        // (one global reference point, fixed color) - this is per-label
+        // and drawn in the label's own layer color (see draw_group), not
+        // a new global color, so it visually reads as "belonging to"
+        // that label - color, not size, is what keeps the two from being
+        // confused. Placeholder defaults, easily tuned.
+        static constexpr float kLabelOriginMarkerSizePx = 16.0f;
+        static constexpr float kLabelOriginMarkerStrokeWidth = 2.0f;
+
         // Grid-snap indicator box (UPDATES.md 5.2) - fully opaque so it
         // stays visible over any layer color/pattern underneath. Fixed
         // on-screen size regardless of zoom (see draw_cursor) - 7x7px
@@ -1203,6 +1215,16 @@ namespace le
             text_paint.setAntiAlias(true);
             text_paint.setColor(to_sk_color(style.outline_color));
 
+            // UPDATES.md item 8.3 - a small cross at each label's own
+            // anchor point (see the text loop below), same color as the
+            // label text itself and hoisted the same way for the same
+            // reason.
+            SkPaint label_origin_paint;
+            label_origin_paint.setAntiAlias(true);
+            label_origin_paint.setStyle(SkPaint::kStroke_Style);
+            label_origin_paint.setStrokeWidth(kLabelOriginMarkerStrokeWidth);
+            label_origin_paint.setColor(to_sk_color(style.outline_color));
+
             for (const auto &shape : group)
             {
                 for (const auto &r : shape.rects)
@@ -1290,6 +1312,16 @@ namespace le
                         canvas.save();
                         canvas.translate(static_cast<SkScalar>(t.location.x), static_cast<SkScalar>(t.location.y));
                         canvas.scale(1, -1);
+
+                        // A "+" is symmetric under the y-flip scale(1,-1)
+                        // just applied, so unlike the glyphs below, this
+                        // doesn't need to counter-flip anything itself -
+                        // drawn in the same local, already-translated
+                        // coordinate system so it tracks the label exactly.
+                        const SkScalar half = kLabelOriginMarkerSizePx / 2.0f;
+                        canvas.drawLine(-half, 0, half, 0, label_origin_paint);
+                        canvas.drawLine(0, -half, 0, half, label_origin_paint);
+
                         SkFont font(default_typeface(), static_cast<SkScalar>(t.size));
                         canvas.drawString(t.label.c_str(), 0, 0, font, text_paint);
                         canvas.restore();

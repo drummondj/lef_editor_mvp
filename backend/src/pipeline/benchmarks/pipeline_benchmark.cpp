@@ -853,4 +853,40 @@ static void BM_PathToPolygonsSingleCall(benchmark::State &state)
 }
 BENCHMARK(BM_PathToPolygonsSingleCall)->Unit(benchmark::kNanosecond);
 
+// Geometry::get_label_location (UPDATES.md item 8) - isolated cost of a
+// single call, for both the trivial "one rect, no fracturing" case and
+// the "polygon needs fracturing" case, since Pipeline::generate_shapes
+// calls this once per (Terminal, distinct layer_name) pair.
+static void BM_GetLabelLocationSingleRect(benchmark::State &state)
+{
+    const Shape shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {50'000, 20'000}}}};
+
+    for (auto _ : state)
+    {
+        const auto location = Geometry::get_label_location(shape);
+        const auto *location_ptr = &location;
+        benchmark::DoNotOptimize(location_ptr);
+    }
+}
+BENCHMARK(BM_GetLabelLocationSingleRect)->Unit(benchmark::kNanosecond);
+
+static void BM_GetLabelLocationLShapedPolygon(benchmark::State &state)
+{
+    // Same shape (scaled up to dbu) as Geometry.LabelLocationOnAWidePolygonFracturesVerticallyAndPicksTheLargestSlab.
+    const Shape shape{
+        .layer_name = "M1",
+        .polygons = {Polygon{.points = {
+                         Point{0, 0}, Point{100'000, 0}, Point{100'000, 60'000},
+                         Point{80'000, 60'000}, Point{80'000, 20'000}, Point{0, 20'000}}}},
+    };
+
+    for (auto _ : state)
+    {
+        const auto location = Geometry::get_label_location(shape);
+        const auto *location_ptr = &location;
+        benchmark::DoNotOptimize(location_ptr);
+    }
+}
+BENCHMARK(BM_GetLabelLocationLShapedPolygon)->Unit(benchmark::kNanosecond);
+
 BENCHMARK_MAIN();

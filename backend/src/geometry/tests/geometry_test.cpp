@@ -271,24 +271,36 @@ TEST(Geometry, LabelLocationOfEmptyShapeIsOrigin)
     expect_point_eq(label, Point{0, 0});
 }
 
-TEST(Geometry, LabelLocationReturnsBboxCentroidWhenInsideShape)
+TEST(Geometry, LabelLocationPicksTheLargestRectWhenShapeHasMultipleRects)
 {
-    // Two overlapping rects (exercises the union-merge loop) whose combined
-    // area covers its own bbox centroid, so the fast path returns directly.
+    // No fracturing needed for rects (UPDATES.md item 8.2) - the largest
+    // one is used directly. Areas are deliberately not tied (100 vs 5000).
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    shape.rects.push_back(Rect{.ll = {20, 20}, .ur = {120, 70}});
+
+    Point label = Geometry::get_label_location(shape);
+    expect_point_eq(label, Point{70, 45});
+}
+
+TEST(Geometry, LabelLocationPicksTheFirstCandidateOnAnAreaTie)
+{
+    // Two rects of equal area (100x60=6000) - deterministic tie-break
+    // keeps the first-encountered candidate (documented behavior, not
+    // arbitrary per-run).
     Shape shape;
     shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {100, 60}});
     shape.rects.push_back(Rect{.ll = {0, 40}, .ur = {100, 100}});
 
     Point label = Geometry::get_label_location(shape);
-    expect_point_eq(label, Point{50, 50});
+    expect_point_eq(label, Point{50, 30});
 }
 
 TEST(Geometry, LabelLocationIncludesPolygonsAndPathsNotJustRects)
 {
-    // A square polygon plus a small path fully inside it - exercises the
-    // shape.polygons/shape.paths loops (all other label-location tests only
-    // used shape.rects). The path is entirely inside the polygon, so the
-    // merged shape is still just the square and the fast path applies.
+    // A square polygon (fractures into a single slab - its own bbox,
+    // area 10000) plus a small path fully inside it (buffers into a
+    // much smaller rect) - the polygon's slab wins.
     Shape shape;
     shape.polygons.push_back(Polygon{.points = {{0, 0}, {100, 0}, {100, 100}, {0, 100}}});
     shape.paths.push_back(Path{.polygon = Polygon{.points = {{40, 40}, {60, 40}}}, .width = 4});
@@ -297,27 +309,65 @@ TEST(Geometry, LabelLocationIncludesPolygonsAndPathsNotJustRects)
     expect_point_eq(label, Point{50, 50});
 }
 
-TEST(Geometry, LabelLocationFallsBackToGridSearchWhenCentroidIsInAHole)
+TEST(Geometry, LabelLocationOnAWidePolygonFracturesVerticallyAndPicksTheLargestSlab)
 {
-    // A square frame (hole in the middle): the bbox centroid (50,50) falls in
-    // the hole, so the fast path fails and the grid-search fallback must find
-    // a point that's actually inside the frame material instead.
+    // A rectilinear L: a long horizontal leg (0,0)-(100,20) plus a short
+    // vertical stub (80,20)-(100,60) at its right end. bbox is 100 wide
+    // by 60 tall - wider than tall - so this fractures with vertical
+    // cuts at the vertex x-coordinates {0, 80, 100}: the [0,80] slab is
+    // the leg alone ((0,0)-(80,20), area 1600), the [80,100] slab spans
+    // the leg+stub's full local height ((80,0)-(100,60), area 1200) -
+    // the leg's own slab is larger and wins.
     Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {100, 20}});
-    shape.rects.push_back(Rect{.ll = {0, 80}, .ur = {100, 100}});
-    shape.rects.push_back(Rect{.ll = {0, 20}, .ur = {20, 80}});
-    shape.rects.push_back(Rect{.ll = {80, 20}, .ur = {100, 80}});
+    shape.polygons.push_back(Polygon{.points = {{0, 0}, {100, 0}, {100, 60}, {80, 60}, {80, 20}, {0, 20}}});
 
     Point label = Geometry::get_label_location(shape);
-    expect_point_eq(label, Point{10, 50});
+    expect_point_eq(label, Point{40, 10});
+}
+
+TEST(Geometry, LabelLocationOnATallPolygonFracturesHorizontallyAndPicksTheLargestSlab)
+{
+    // The same L as above, transposed (x<->y) so its bbox is taller than
+    // wide - fractures with horizontal cuts instead, same reasoning
+    // rotated 90 degrees.
+    Shape shape;
+    shape.polygons.push_back(Polygon{.points = {{0, 0}, {0, 100}, {60, 100}, {60, 80}, {20, 80}, {20, 0}}});
+
+    Point label = Geometry::get_label_location(shape);
+    expect_point_eq(label, Point{10, 40});
+}
+
+TEST(Geometry, LabelLocationOnAStraightPathReturnsItsBufferedCenter)
+{
+    // A straight, axis-aligned Path buffers (flat ends) into an exact
+    // rectangle - fracturing it yields that one rectangle unchanged, so
+    // this mainly confirms Paths flow through the same fracture pipeline
+    // as Polygons, landing at the path's own centerline midpoint.
+    Shape shape;
+    shape.paths.push_back(Path{.polygon = Polygon{.points = {{10, 50}, {90, 50}}}, .width = 20});
+
+    Point label = Geometry::get_label_location(shape);
+    expect_point_eq(label, Point{50, 50});
+}
+
+TEST(Geometry, LabelLocationPicksTheLargestCandidateAcrossMixedRectsAndPolygons)
+{
+    // A small Rect and a clearly-larger Polygon (disjoint, so there's no
+    // ambiguity about which one "wins") - confirms both candidate
+    // sources are compared on equal footing.
+    Shape shape;
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    shape.polygons.push_back(Polygon{.points = {{200, 200}, {300, 200}, {300, 300}, {200, 300}}});
+
+    Point label = Geometry::get_label_location(shape);
+    expect_point_eq(label, Point{250, 250});
 }
 
 TEST(Geometry, LabelLocationHandlesZeroWidthBoundingBox)
 {
-    // A zero-width (degenerate vertical-line) rect: span_x == 0, exercising
-    // the "clamp span to at least 1" guard that avoids a divide-by-zero grid
-    // step. Nothing is ever strictly "within" a zero-area shape, so both the
-    // fast path and the grid search fail and the raw centroid is returned.
+    // A zero-width (degenerate vertical-line) rect - used directly as
+    // its own (zero-area) candidate, same as any other single rect; its
+    // "center" is just the degenerate line's own midpoint.
     Shape shape;
     shape.rects.push_back(Rect{.ll = {50, 0}, .ur = {50, 100}});
 
@@ -327,7 +377,7 @@ TEST(Geometry, LabelLocationHandlesZeroWidthBoundingBox)
 
 TEST(Geometry, LabelLocationHandlesZeroHeightBoundingBox)
 {
-    // Same as above but for span_y == 0 (degenerate horizontal-line rect).
+    // Same as above but for a zero-height (degenerate horizontal-line) rect.
     Shape shape;
     shape.rects.push_back(Rect{.ll = {0, 50}, .ur = {100, 50}});
 
@@ -335,19 +385,20 @@ TEST(Geometry, LabelLocationHandlesZeroHeightBoundingBox)
     expect_point_eq(label, Point{50, 50});
 }
 
-TEST(Geometry, LabelLocationReturnsRawCentroidWhenGridSearchFindsNoInteriorPoint)
+TEST(Geometry, LabelLocationOfDisjointRectsPicksTheLargestNotAnOffShapeCentroid)
 {
-    // Two disjoint bars with a gap between them: the bbox centroid (50,50)
-    // isn't inside either bar, and the grid step (span/10=10) happens to
-    // land exactly on the bars' edges for every sample, never strictly
-    // inside - so even the grid-search fallback comes up empty and the
-    // function returns the raw (off-shape) centroid as a last resort.
+    // Two disjoint, equal-area bars with a gap between them. The old
+    // union+grid-search algorithm could return the raw bbox centroid
+    // here (50,50) - a point in the gap, not actually on either bar (see
+    // this project's git history). The new algorithm can't: every
+    // candidate is a real rect, so the result is always genuinely inside
+    // the shape - here, the first-encountered (equal-area tie) bar.
     Shape shape;
     shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 100}});
     shape.rects.push_back(Rect{.ll = {90, 0}, .ur = {100, 100}});
 
     Point label = Geometry::get_label_location(shape);
-    expect_point_eq(label, Point{50, 50});
+    expect_point_eq(label, Point{5, 50});
 }
 
 TEST(Geometry, LocalWidthAtRectReturnsMinDimension)

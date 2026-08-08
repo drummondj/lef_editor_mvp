@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <boost/geometry.hpp>
 #include <boost/geometry/algorithms/buffer.hpp>
+#include <boost/geometry/algorithms/intersection.hpp>
 #include <boost/geometry/algorithms/union.hpp>
 #include <boost/geometry/geometries/register/point.hpp>
 #include <boost/geometry/geometries/register/box.hpp>
@@ -99,6 +100,79 @@ namespace le
 
             bg::correct(bg_polygon);
             return bg_polygon;
+        }
+
+        // Slices bg_polygon into approximating rects via a slab
+        // decomposition along its dominant axis (UPDATES.md item 8):
+        // vertical cut lines (slabs along x, at each distinct vertex
+        // x-coordinate) if its bbox is wider than tall, horizontal cut
+        // lines (slabs along y) otherwise. Each slab is intersected
+        // against the polygon (bg::intersection) and approximated by ITS
+        // OWN bbox - exact for a rectilinear polygon (LEF RECT/POLYGON
+        // geometry, and any axis-aligned buffered Path - the common
+        // case), a reasonable approximation otherwise (e.g. a diagonal
+        // Path's mitered/flat-end buffered outline). Never empty for a
+        // non-degenerate polygon - a polygon whose vertices share one
+        // coordinate (fewer than 2 distinct cuts) returns its own bbox
+        // as the single slab. Used by get_label_location - see its own
+        // comment for why this only needs to be an approximation, not
+        // an exact decomposition.
+        //
+        // With exactly 2 distinct cuts (one slab), that slab's own strip
+        // - [cuts[0], cuts[1]] on the cut axis, the *full* bbox range on
+        // the other - is by construction identical to `bbox` itself, so
+        // intersecting the polygon against it is a guaranteed no-op
+        // (bg::intersection(polygon, its own bbox) == polygon, whatever
+        // the polygon's actual shape) and enveloping that gives back
+        // `bbox` again - an exact simplification, not an approximation,
+        // so this is folded into the same early return as the <2 case
+        // rather than paying for a real bg::intersection call to
+        // rediscover it. Confirmed as the dominant cost of this function
+        // via `sample` profiling of BM_GenerateShapes on the 1M-shape
+        // stress design before this was added (see BENCHMARKS.md) - most
+        // real LEF POLYGON geometry and any straight buffered Path is
+        // already exactly its own bbox, hitting this path.
+        static std::vector<Rect> fracture_into_rects(const bg::model::polygon<Point> &bg_polygon)
+        {
+            Rect bbox;
+            bg::envelope(bg_polygon, bbox);
+
+            const bool wide = (bbox.ur.x - bbox.ll.x) >= (bbox.ur.y - bbox.ll.y);
+
+            std::vector<int64_t> cuts;
+            for (const auto &pt : bg_polygon.outer())
+                cuts.push_back(wide ? bg::get<0>(pt) : bg::get<1>(pt));
+            std::sort(cuts.begin(), cuts.end());
+            cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+            std::vector<Rect> result;
+            if (cuts.size() < 3)
+            {
+                result.push_back(bbox);
+                return result;
+            }
+
+            using BgPolygon = bg::model::polygon<Point>;
+            using BgMultiPolygon = bg::model::multi_polygon<BgPolygon>;
+
+            for (size_t i = 0; i + 1 < cuts.size(); ++i)
+            {
+                const Rect strip = wide
+                    ? Rect{.ll = {cuts[i], bbox.ll.y}, .ur = {cuts[i + 1], bbox.ur.y}}
+                    : Rect{.ll = {bbox.ll.x, cuts[i]}, .ur = {bbox.ur.x, cuts[i + 1]}};
+
+                BgMultiPolygon pieces;
+                bg::intersection(bg_polygon, to_boost_polygon(rect_to_polygon(strip)), pieces);
+
+                for (const auto &piece : pieces)
+                {
+                    Rect piece_bbox;
+                    bg::envelope(piece, piece_bbox);
+                    result.push_back(piece_bbox);
+                }
+            }
+
+            return result;
         }
 
         // bg::distance(point, ring) treats a *closed ring* as an areal
@@ -335,101 +409,49 @@ namespace le
                 shape.polygons.push_back(from_boost_polygon(poly));
         }
 
+        /// @brief Finds the largest candidate rect across `shape`'s own
+        /// rects (used directly - no fracturing needed) and its
+        /// polygons/paths (each fractured into approximating rects via
+        /// fracture_into_rects - see its own comment), and returns that
+        /// rect's center (UPDATES.md item 8). Ties keep the
+        /// first-encountered candidate - deterministic, arbitrary but
+        /// documented, not load-bearing for correctness. {0,0} for a
+        /// shape with no geometry at all (matches the old algorithm's
+        /// own empty-shape fallback). Unlike the old union+grid-search
+        /// algorithm this replaces, the result can only land outside
+        /// `shape`'s own geometry when `shape` is empty - every
+        /// candidate rect's center is trivially inside that rect.
         static Point get_label_location(const Shape &shape)
         {
-            using BgPolygon = bg::model::polygon<Point>;
-            using BgMultiPolygon = bg::model::multi_polygon<BgPolygon>;
+            std::optional<Rect> best;
+            int64_t best_area = -1;
 
-            std::vector<BgPolygon> parts;
-            // Lower-bound estimate: paths can expand into more than one
-            // polygon each via path_to_polygons.
-            parts.reserve(shape.rects.size() + shape.polygons.size() + shape.paths.size());
+            auto consider = [&](const Rect &r)
+            {
+                const int64_t area = (r.ur.x - r.ll.x) * (r.ur.y - r.ll.y);
+                if (area > best_area)
+                {
+                    best_area = area;
+                    best = r;
+                }
+            };
 
             for (const auto &rect : shape.rects)
-                parts.push_back(to_boost_polygon(rect_to_polygon(rect)));
+                consider(rect);
 
             for (const auto &polygon : shape.polygons)
-                parts.push_back(to_boost_polygon(polygon));
+                for (const auto &r : fracture_into_rects(to_boost_polygon(polygon)))
+                    consider(r);
 
             for (const auto &path : shape.paths)
-            {
-                for (const auto &path_part : path_to_polygons(path))
-                    parts.push_back(to_boost_polygon(path_part));
-            }
+                for (const auto &poly : path_to_polygons(path))
+                    for (const auto &r : fracture_into_rects(to_boost_polygon(poly)))
+                        consider(r);
 
-            if (parts.empty())
+            if (!best)
                 return Point{0, 0};
 
-            BgMultiPolygon unioned;
-            for (size_t i = 0; i < parts.size(); ++i)
-            {
-                BgMultiPolygon next;
-                if (i == 0)
-                {
-                    unioned.push_back(parts[i]);
-                }
-                else
-                {
-                    bg::union_(unioned, parts[i], next);
-                    unioned = std::move(next);
-                }
-            }
-
-            // bbox(shape) is non-nullopt here: parts (checked above) and this
-            // bbox are accumulated from the same shape.rects/polygons/paths.
-            const Rect bbox = *Geometry::bbox(shape);
-
-            const int64_t target_x = (bbox.ll.x + bbox.ur.x) / 2;
-            const int64_t target_y = (bbox.ll.y + bbox.ur.y) / 2;
-            Point target{target_x, target_y};
-
-            for (const auto &poly : unioned)
-            {
-                if (bg::within(target, poly))
-                    return target;
-            }
-
-            const int64_t span_x = (bbox.ur.x - bbox.ll.x) > 0 ? (bbox.ur.x - bbox.ll.x) : 1;
-            const int64_t span_y = (bbox.ur.y - bbox.ll.y) > 0 ? (bbox.ur.y - bbox.ll.y) : 1;
-
-            const int steps = 11;
-            const int64_t step_x = span_x / (steps - 1);
-            const int64_t step_y = span_y / (steps - 1);
-
-            std::optional<Point> best;
-            int64_t best_dist_sq = std::numeric_limits<int64_t>::max();
-
-            for (const auto &poly : unioned)
-            {
-                for (int i = 0; i < steps; ++i)
-                {
-                    for (int j = 0; j < steps; ++j)
-                    {
-                        Point candidate{
-                            bbox.ll.x + i * step_x,
-                            bbox.ll.y + j * step_y,
-                        };
-
-                        if (!bg::within(candidate, poly))
-                            continue;
-
-                        const int64_t dx = candidate.x - target.x;
-                        const int64_t dy = candidate.y - target.y;
-                        const int64_t dist_sq = dx * dx + dy * dy;
-
-                        if (dist_sq < best_dist_sq)
-                        {
-                            best_dist_sq = dist_sq;
-                            best = candidate;
-                        }
-                    }
-                }
-            }
-
-            if (best)
-                return *best;
-
-            return target;
+            return Point{(best->ll.x + best->ur.x) / 2, (best->ll.y + best->ur.y) / 2};
         }
 
         /// @brief The local "width" (thickness) of `shape` at `point`: the
