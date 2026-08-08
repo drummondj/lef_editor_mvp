@@ -2,6 +2,7 @@
 #include <string>
 #include <memory>
 #include <expected>
+#include <vector>
 #include "../lefdef/lef/include/lefrReader.hpp"
 #include "../database/database.hpp"
 #include "spdlog/spdlog.h"
@@ -12,6 +13,19 @@ namespace le
     {
     public:
         int read_lef(std::string filename, Root &root, std::string library_name);
+
+        // Messages produced by the most recent read_lef() call - parser
+        // errors/warnings/info (already fully formatted and prefixed by
+        // the vendored parser itself, e.g. "ERROR (LEFPARS-201): ...",
+        // "WARNING (LEFPARS-2079): ...", "INFO (LEFPARS-nnn): ...", via
+        // lefrSetLogFunction/lefrSetWarningLogFunction - see lefrLogFn),
+        // plus this class's own synthesized fopen-failure/fallback
+        // messages for the cases the parser callbacks never fire for.
+        // Cleared and repopulated at the start of every read_lef() call -
+        // reflects only the most recent call, not an accumulation across
+        // calls (api.cpp's le_read_lef is what accumulates these into a
+        // persistent, ever-growing handle-owned queue for the GUI).
+        const std::vector<std::string> &messages() const { return messages_; }
 
         // Pure LEF-enum -> database-enum conversions. Public (and static, with
         // no dependency on parser/instance state) so they can be unit tested
@@ -43,6 +57,18 @@ namespace le
         static int lefrPinCbkFn(lefrCallbackType_e typ, lefiPin *lef_pin, void *user_data);
         static int lefrObstructionCbkFn(lefrCallbackType_e typ, lefiObstruction *lef_obs, void *user_data);
 
+        // Registered for *both* lefrSetLogFunction (errors) and
+        // lefrSetWarningLogFunction (warnings and info both route through
+        // this one registration point - see lefWarning/lefInfo in the
+        // vendored src/lefdef/lef/lef/lef_keywords.cpp) - one function
+        // suffices since the distinguishing "ERROR ("/"WARNING ("/
+        // "INFO (" prefix is already baked into the message text by the
+        // parser itself. Unlike the lefrSet*Cbk callbacks above, this
+        // signature (LEFI_LOG_FUNCTION/LEFI_WARNING_LOG_FUNCTION, see
+        // lefrReader.hpp) carries no userData - see read_lef's own
+        // comment for how messages still reach this specific instance.
+        static void lefrLogFn(const char *msg);
+
         // Helper functions
         int64_t microns_to_dbu(const double microns);
         static Polygon polygon_from_parser(LEFReader *reader, int count, double *x, double *y);
@@ -58,5 +84,6 @@ namespace le
         LibraryId library_id_;
         AbstractData abstract_data_;
         AbstractId abstract_id_;
+        std::vector<std::string> messages_;
     };
 }

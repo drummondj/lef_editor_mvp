@@ -6,8 +6,10 @@
 #include "../render/render.hpp"
 #include "../scene/scene.hpp"
 #include "../view_style/view_style.hpp"
+#include <fmt/format.h>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <mutex>
@@ -45,6 +47,21 @@ struct LeHandle
     // needed, its shape already matches LeProperty field-for-field.
     int32_t cached_property_selection_index = -1;
     std::vector<le::PropertyValue> cached_properties;
+
+    // Backs le_message_count/le_message_at (UPDATES.md item 3) - every
+    // error/warning/info message produced by this handle's backend
+    // operations so far (currently just le_read_lef), in order, never
+    // cleared or reordered. std::deque, deliberately not std::vector:
+    // le_message_at() hands out a `const char*` promised valid "until
+    // the handle is destroyed" (this API's usual string-ownership
+    // convention), but std::vector::push_back can reallocate on growth,
+    // move-relocating every contained std::string - for a short (SSO)
+    // string that relocates its character buffer inline, invalidating
+    // any .c_str() a caller is still holding from an earlier call.
+    // std::deque::push_back never invalidates references/pointers to
+    // existing elements (only iterators), so it's the correct container
+    // here.
+    std::deque<std::string> messages;
 };
 
 namespace
@@ -323,13 +340,23 @@ extern "C"
 
     int le_read_lef(LeHandle *handle, const char *path)
     {
-        if (!handle || !path)
+        if (!handle)
             return 1;
         std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (!path)
+        {
+            handle->messages.push_back("ERROR: le_read_lef: path is null");
+            return 1;
+        }
 
         const std::filesystem::path lef_path(path);
         le::LEFReader reader;
         const int result = reader.read_lef(lef_path.string(), handle->root, lef_path.stem().string());
+        for (const auto &msg : reader.messages())
+            handle->messages.push_back(msg);
+        // if (result == 0)
+        //     handle->messages.push_back(fmt::format("INFO: Loaded {}.", path));
         if (result != 0)
             return result;
 
@@ -343,6 +370,24 @@ extern "C"
             handle->view_layers = le::ViewLayerSet::build_for_technology(handle->root, technology_ids.front());
 
         return 0;
+    }
+
+    int32_t le_message_count(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return static_cast<int32_t>(handle->messages.size());
+    }
+
+    const char *le_message_at(LeHandle *handle, int32_t index)
+    {
+        if (!handle)
+            return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        if (index < 0 || static_cast<size_t>(index) >= handle->messages.size())
+            return nullptr;
+        return handle->messages[static_cast<size_t>(index)].c_str();
     }
 
     int32_t le_design_count(LeHandle *handle)

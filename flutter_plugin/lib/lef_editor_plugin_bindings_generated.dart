@@ -76,6 +76,46 @@ class LefEditorPluginBindings {
   late final _le_read_lef = _le_read_lefPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
 
+  /// @brief Total number of error/warning/info messages produced by
+  /// this handle's backend operations so far (currently just
+  /// le_read_lef() - file-open/parse errors, parser warnings, parser
+  /// info notes, and a success summary, each already formatted with
+  /// its own "ERROR "/"WARNING "/"INFO " prefix). Monotonically
+  /// increasing - entries are never removed, cleared, or reordered -
+  /// so a caller can poll this like le_selection_version() and only
+  /// fetch le_message_at() for indices at or past what it last saw,
+  /// rather than re-reading everything on every check. 0 if handle is
+  /// null.
+  int le_message_count(ffi.Pointer<LeHandle> handle) {
+    return _le_message_count(handle);
+  }
+
+  late final _le_message_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_message_count',
+      );
+  late final _le_message_count = _le_message_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief The message at `index` (0..le_message_count()-1). Returns
+  /// null if handle is null or index is out of range. The returned
+  /// pointer is owned by the handle - valid until the handle is
+  /// destroyed (messages are never removed/reordered, so unlike a
+  /// "last error" design this pointer is never invalidated by a later
+  /// le_read_lef() call).
+  ffi.Pointer<ffi.Char> le_message_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_message_at(handle, index);
+  }
+
+  late final _le_message_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_message_at');
+  late final _le_message_at = _le_message_atPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, int)>();
+
   /// @brief Number of Designs currently loaded across every LEF file
   /// read into this handle so far. 0 if handle is null.
   int le_design_count(ffi.Pointer<LeHandle> handle) {

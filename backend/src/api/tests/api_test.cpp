@@ -154,6 +154,94 @@ TEST_F(ApiFixture, ReadLefWithValidFileSucceedsAndPopulatesOneDesign)
     EXPECT_STREQ(name, "TESTCELL");
 }
 
+// le_message_count/le_message_at (UPDATES.md item 3) - the queue
+// le_read_lef drains LEFReader::messages() into, persisting across
+// calls on the same handle for the GUI to poll.
+TEST_F(ApiFixture, MessageCountAndMessageAtAreZeroAndNullBeforeAnyReadLefCall)
+{
+    EXPECT_EQ(le_message_count(handle), 0);
+    EXPECT_EQ(le_message_at(handle, 0), nullptr);
+}
+
+TEST_F(ApiFixture, ReadLefWithMissingFileAppendsAnErrorMessage)
+{
+    ASSERT_NE(le_read_lef(handle, "/does/not/exist.lef"), 0);
+    ASSERT_GT(le_message_count(handle), 0);
+    const char *msg = le_message_at(handle, 0);
+    ASSERT_NE(msg, nullptr);
+    EXPECT_NE(std::string(msg).find("ERROR"), std::string::npos);
+}
+
+TEST_F(ApiFixture, ReadLefWithMalformedContentAppendsAnErrorMessage)
+{
+    ASSERT_NE(le_read_lef(handle, fixture_path("malformed.lef").c_str()), 0);
+    ASSERT_GT(le_message_count(handle), 0);
+    const char *msg = le_message_at(handle, 0);
+    ASSERT_NE(msg, nullptr);
+    EXPECT_NE(std::string(msg).find("ERROR"), std::string::npos);
+}
+
+TEST_F(ApiFixture, ReadLefWithAWarningProducingFileSucceedsAndAppendsAWarningMessage)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("warning_currentden.lef").c_str()), 0);
+    ASSERT_GT(le_message_count(handle), 0);
+
+    bool found_warning = false;
+    for (int32_t i = 0; i < le_message_count(handle); ++i)
+    {
+        const char *msg = le_message_at(handle, i);
+        ASSERT_NE(msg, nullptr);
+        if (std::string(msg).find("WARNING") != std::string::npos)
+            found_warning = true;
+    }
+    EXPECT_TRUE(found_warning);
+}
+
+TEST_F(ApiFixture, SuccessfulReadLefAppendsAnInfoMessage)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_GT(le_message_count(handle), 0);
+
+    bool found_info = false;
+    for (int32_t i = 0; i < le_message_count(handle); ++i)
+    {
+        const char *msg = le_message_at(handle, i);
+        ASSERT_NE(msg, nullptr);
+        if (std::string(msg).find("INFO") != std::string::npos)
+            found_info = true;
+    }
+    EXPECT_TRUE(found_info);
+}
+
+TEST_F(ApiFixture, MessagesAccumulateAcrossMultipleReadLefCalls)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const int32_t count_after_first = le_message_count(handle);
+    ASSERT_GT(count_after_first, 0);
+    const std::string first_message = le_message_at(handle, 0);
+
+    ASSERT_EQ(le_read_lef(handle, fixture_path("othercell.lef").c_str()), 0);
+    const int32_t count_after_second = le_message_count(handle);
+    EXPECT_GT(count_after_second, count_after_first);
+
+    // Earlier entries keep their original text - not overwritten by the
+    // second call.
+    ASSERT_NE(le_message_at(handle, 0), nullptr);
+    EXPECT_EQ(std::string(le_message_at(handle, 0)), first_message);
+}
+
+TEST_F(ApiFixture, MessageAtOutOfRangeOrNullHandleReturnsNull)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const int32_t count = le_message_count(handle);
+    ASSERT_GT(count, 0);
+
+    EXPECT_EQ(le_message_at(handle, count), nullptr);
+    EXPECT_EQ(le_message_at(handle, -1), nullptr);
+    EXPECT_EQ(le_message_at(nullptr, 0), nullptr);
+    EXPECT_EQ(le_message_count(nullptr), 0);
+}
+
 TEST_F(ApiFixture, DesignCountAndNameAreZeroOrNullForNullHandle)
 {
     EXPECT_EQ(le_design_count(nullptr), 0);

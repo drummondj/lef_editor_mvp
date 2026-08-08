@@ -248,6 +248,28 @@ class LeEditor {
     }
   }
 
+  /// Total number of error/warning/info messages produced by this
+  /// handle's backend operations so far (currently just [readLef] -
+  /// file-open/parse errors, parser warnings, parser info notes, and a
+  /// success summary, each already formatted with its own "ERROR "/
+  /// "WARNING "/"INFO " prefix). Monotonically increasing - entries are
+  /// never removed, cleared, or reordered - so a caller can poll this
+  /// like [selectionVersion] and only fetch [messageAt] for indices at
+  /// or past what it last saw.
+  int get messageCount {
+    _checkNotDisposed();
+    return _bindings.le_message_count(_handle);
+  }
+
+  /// The message at [index] (0..[messageCount] - 1), or null if [index]
+  /// is out of range.
+  String? messageAt(int index) {
+    _checkNotDisposed();
+    final msgPtr = _bindings.le_message_at(_handle, index);
+    if (msgPtr == ffi.nullptr) return null;
+    return msgPtr.cast<pkg_ffi.Utf8>().toDartString();
+  }
+
   /// Number of Designs loaded across every LEF file read into this handle
   /// so far.
   int get designCount {

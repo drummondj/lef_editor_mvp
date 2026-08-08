@@ -41,8 +41,8 @@ class LeProvider extends ChangeNotifier {
 
   final List<String> _openLefFiles = [];
 
-  final List<String> _errors = [];
-  List<String> get errors => _errors;
+  final List<String> _messages = ["INFO: Welcome to LayoutEngine"];
+  List<String> get messages => _messages;
 
   final List<LeLayerInfo> _layers = [];
   List<LeLayerInfo> get layers => _layers;
@@ -80,6 +80,14 @@ class LeProvider extends ChangeNotifier {
   // -1 so the first refreshSelection() call (selectionVersion is always
   // >= 0) always does a real refresh.
   int _lastSelectionVersion = -1;
+
+  // Cursor into the backend's own message queue (le_message_count/
+  // le_message_at) - messages there are never removed/reordered, so
+  // this just needs to remember how many we've already pulled in.
+  // Starts at 0 (not -1 like _lastSelectionVersion): messageCount is
+  // also 0 before any backend operation has run, so "drain nothing yet"
+  // is already the correct behavior with no special sentinel needed.
+  int _lastMessageCount = 0;
 
   Future<void> refreshTexture() async {
     await _texture?.markFrameAvailable();
@@ -123,6 +131,23 @@ class LeProvider extends ChangeNotifier {
     }
   }
 
+  // Pulls in any backend messages (LEF read errors/warnings/info - see
+  // backend's le_message_count/le_message_at, UPDATES.md item 3) added
+  // since the last check, in order, without re-adding ones already
+  // seen - same incremental-fetch shape as refreshSelection's own
+  // selectionVersion gate above, just for a queue instead of a
+  // change-counter.
+  Future<void> refreshMessages() async {
+    final count = _editor.messageCount;
+    for (int i = _lastMessageCount; i < count; i++) {
+      final message = _editor.messageAt(i);
+      if (message != null) {
+        _messages.add(message);
+      }
+    }
+    _lastMessageCount = count;
+  }
+
   // TODO: this currently refreshed everything all the time (except
   // selection, see refreshSelection), choose what to refresh more
   // carefully.
@@ -130,6 +155,7 @@ class LeProvider extends ChangeNotifier {
     refreshSnappedMousePosition();
     refreshSelection();
     refreshLayers();
+    refreshMessages();
     refreshTexture();
     notifyListeners();
   }
@@ -146,16 +172,19 @@ class LeProvider extends ChangeNotifier {
 
   Future<void> readLef(String path) async {
     if (_openLefFiles.contains(path)) {
-      _errors.add("$path already open");
+      _messages.add("ERROR: $path already open");
       refreshAndNotify();
       return;
     }
-
+    _messages.add("INFO: Reading $path");
     if (_editor.readLef(path)) {
       _openLefFiles.add(path);
-    } else {
-      _errors.add("Unable to open $path");
     }
+    // On failure, the backend's own le_message_count/le_message_at
+    // queue already has a more specific error (e.g. "ERROR: Could not
+    // open LEF file ..." or a real parser diagnostic) - refreshAndNotify
+    // below (via refreshMessages) pulls it in, so no generic fallback
+    // message is added here.
     refreshAndNotify();
   }
 

@@ -239,6 +239,8 @@ TEST(LEFReaderErrors, FileNotFoundReturnsOne)
     Root root;
     LEFReader reader;
     EXPECT_EQ(reader.read_lef("/no/such/file.lef", root, "test_lib"), 1);
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().front().find("/no/such/file.lef"), std::string::npos);
 }
 
 TEST(LEFReaderErrors, MalformedFileReturnsTwo)
@@ -246,6 +248,52 @@ TEST(LEFReaderErrors, MalformedFileReturnsTwo)
     Root root;
     LEFReader reader;
     EXPECT_EQ(reader.read_lef(fixture_path("malformed.lef"), root, "test_lib"), 2);
+    EXPECT_FALSE(reader.messages().empty());
+}
+
+// LEFReader::messages() - the queue api.cpp's le_read_lef drains into a
+// persistent, ever-growing handle-owned list for the GUI (UPDATES.md
+// item 3). A distinct suite from LEFReaderErrors above since these
+// tests are about message *content*, not read_lef's own return code.
+TEST(LEFReaderMessages, SuccessfulReadWithNoDiagnosticsLeavesMessagesEmpty)
+{
+    Root root;
+    LEFReader reader;
+    ASSERT_EQ(reader.read_lef(fixture_path("units_1000.lef"), root, "test_lib"), 0);
+    EXPECT_TRUE(reader.messages().empty());
+}
+
+// CURRENTDEN inside a LAYER block is unconditionally flagged obsolete by
+// the vendored parser on any LEF version >= 5.2 (lef.tab.cpp's
+// `layer_option: K_CURRENTDEN int_number ';'` rule calls
+// lefWarning(2079, ...) regardless of layer type once past that version
+// check) - a reliable way to exercise the warning path (routed through
+// lefrSetWarningLogFunction, same registration lefInfo also uses)
+// without the parse itself failing.
+TEST(LEFReaderMessages, ObsoleteCurrentdenStatementProducesAWarningOnAnOtherwiseSuccessfulRead)
+{
+    Root root;
+    LEFReader reader;
+    ASSERT_EQ(reader.read_lef(fixture_path("warning_currentden.lef"), root, "test_lib"), 0);
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().front().find("WARNING"), std::string::npos);
+    EXPECT_NE(reader.messages().front().find("obsolete"), std::string::npos);
+}
+
+// messages_ is cleared at the top of every read_lef() call (not
+// accumulated across calls on a reused instance) - api.cpp's
+// le_read_lef is what accumulates these into a persistent queue, not
+// LEFReader itself.
+TEST(LEFReaderMessages, MessagesAreClearedNotAccumulatedAcrossReusedReaderCalls)
+{
+    Root root;
+    LEFReader reader;
+    ASSERT_EQ(reader.read_lef(fixture_path("malformed.lef"), root, "test_lib"), 2);
+    ASSERT_FALSE(reader.messages().empty());
+
+    Root root2;
+    ASSERT_EQ(reader.read_lef(fixture_path("units_1000.lef"), root2, "test_lib"), 0);
+    EXPECT_TRUE(reader.messages().empty());
 }
 
 // shapes_from_parser() has an `if (!shape.has_value())` guard before every
@@ -274,6 +322,12 @@ TEST(LEFReaderErrors, DuplicateLayerNameIsIgnored)
     LayerId m1_id = root.get_layer_by_name("M1");
     ASSERT_TRUE(m1_id.valid());
     EXPECT_EQ(root.get_layer(m1_id)->direction, RoutingDirection::H);
+
+    // log_warning (UPDATES.md item 3) - internal diagnostics, not just
+    // the vendored parser's own, reach messages() too.
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().front().find("WARNING"), std::string::npos);
+    EXPECT_NE(reader.messages().front().find("M1"), std::string::npos);
 }
 
 TEST(LEFReaderErrors, PinWithoutDirectionDoesNotInheritThePreviousPinsDirection)
@@ -310,6 +364,12 @@ TEST(LEFReaderErrors, SecondReadWithDifferentUnitsIsIgnored)
 
     ASSERT_EQ(root.get_technology_size(), 1u);
     EXPECT_DOUBLE_EQ(root.get_technology(root.get_technology_ids().front())->database_units_microns, 1000.0);
+
+    // The warning fires on the second read (reader2) - log_warning
+    // reaches messages() there, not on the first, unaffected read.
+    ASSERT_FALSE(reader2.messages().empty());
+    EXPECT_NE(reader2.messages().front().find("WARNING"), std::string::npos);
+    EXPECT_TRUE(reader1.messages().empty());
 }
 
 TEST(LEFReaderErrors, DuplicateMacroNameIsRejected)
@@ -320,4 +380,11 @@ TEST(LEFReaderErrors, DuplicateMacroNameIsRejected)
     LEFReader reader;
     EXPECT_EQ(reader.read_lef(fixture_path("duplicate_macro.lef"), root, "test_lib"), 2);
     EXPECT_EQ(root.get_design_ids().size(), 1u);
+
+    // log_error (UPDATES.md item 3) - this failure comes from our own
+    // lefrMacroBeginCbkFn, not the vendored parser's own log callback,
+    // and still reaches messages().
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().front().find("ERROR"), std::string::npos);
+    EXPECT_NE(reader.messages().front().find("DUPTEST"), std::string::npos);
 }

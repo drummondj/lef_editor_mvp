@@ -71,7 +71,7 @@ The API should return the snapped mouse coordinates so they can be displayed in 
 
 Please add a cross shape at the origin of the abstract, which is not necessarily at 0,0 - it depends on the origin property of the abstract view.
 
-# 6. Small shape display
+# 6. Small shape display - DONE
 
 When zoomed out of a large design, very small shapes disappear which makes it look like there is nothing in the design. I would like to see the performance impact of rendering a single pixel instead of nothing for small shapes.
 

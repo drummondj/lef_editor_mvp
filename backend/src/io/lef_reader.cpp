@@ -1,14 +1,84 @@
+#include <fmt/format.h>
 #include <fmt/ostream.h>
 #include "lef_reader.hpp"
 #include "../geometry/geometry.hpp"
 #include <cmath>
+#include <utility>
+
+namespace
+{
+    // Staging buffer for LEFReader::lefrLogFn - the vendored parser's
+    // LEFI_LOG_FUNCTION/LEFI_WARNING_LOG_FUNCTION callbacks carry no
+    // userData (see lefrReader.hpp), so there's no way to route a
+    // message straight to the LEFReader instance that's mid-read_lef();
+    // this file-local buffer bridges that gap instead, moved into the
+    // instance's own messages_ right after lefrRead returns. thread_local
+    // (not just a plain static) so two different LeHandles calling
+    // read_lef concurrently on different threads can't corrupt each
+    // other's capture - though the vendored parser's own global callback
+    // registration (lefrSetLogFunction et al., process-wide state) is
+    // inherently single-parse-at-a-time regardless, a pre-existing
+    // property of this vendored library, not something this fixes.
+    //
+    // log_warning/log_error below (this class's own internal
+    // diagnostics, as opposed to the vendored parser's own text captured
+    // by lefrLogFn) append here too, not directly to LEFReader::messages_
+    // - both this class's own callbacks (lefrLayerCbkFn etc.) and the
+    // vendored parser's own log function run *during* lefrRead(), and
+    // read_lef unconditionally does `messages_ =
+    // std::move(g_pending_lef_messages)` right after lefrRead() returns
+    // - if log_warning/log_error wrote straight to messages_ instead,
+    // that move-assignment would silently wipe out anything they'd
+    // already added. Routing everything through this one staging buffer
+    // keeps every diagnostic from a single read_lef() call in one place,
+    // in true chronological order, with no separate merge step needed.
+    thread_local std::vector<std::string> g_pending_lef_messages;
+
+    // See the comment above for why these target g_pending_lef_messages,
+    // not a LEFReader instance - free functions (not LEFReader methods)
+    // since they need no instance state, only this file-local buffer.
+    // Templated to mirror spdlog::warn/error's own format-string+args
+    // signature, so call sites need only a name change. Formats once
+    // and logs the *already-formatted* text via a safe "{}" passthrough,
+    // not the raw template a second time - reformatting dynamic,
+    // file-controlled content (e.g. a LEF layer/design name) a second
+    // time would misinterpret any literal `{`/`}` it happens to contain
+    // as a format placeholder.
+    template <typename... Args>
+    void log_warning(fmt::format_string<Args...> fmt_str, Args &&...args)
+    {
+        std::string msg = fmt::format(fmt_str, std::forward<Args>(args)...);
+        spdlog::warn("{}", msg);
+        g_pending_lef_messages.push_back("WARNING: " + msg);
+    }
+
+    template <typename... Args>
+    void log_error(fmt::format_string<Args...> fmt_str, Args &&...args)
+    {
+        std::string msg = fmt::format(fmt_str, std::forward<Args>(args)...);
+        spdlog::error("{}", msg);
+        g_pending_lef_messages.push_back("ERROR: " + msg);
+    }
+}
 
 namespace le
 {
+    void LEFReader::lefrLogFn(const char *msg)
+    {
+        if (!msg)
+            return;
+        std::string s(msg);
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
+            s.pop_back();
+        if (!s.empty())
+            g_pending_lef_messages.push_back(std::move(s));
+    }
 
     int LEFReader::read_lef(std::string filename, Root &root, std::string library_name)
     {
         lefrInit();
+        messages_.clear();
+        g_pending_lef_messages.clear();
 
         // Setup callbacks
         lefrSetUnitsCbk(lefrUnitsCbkFn);
@@ -18,6 +88,8 @@ namespace le
         lefrSetPinCbk(lefrPinCbkFn);
         lefrSetObstructionCbk(lefrObstructionCbkFn);
         lefrSetRegisterUnusedCallbacks();
+        lefrSetLogFunction(&LEFReader::lefrLogFn);
+        lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
 
         // If there is no technology, create a new one. Otherwise get the first technology.
         TechnologyId technology_id = root.is_technology_empty() ? root.create_technology(TechnologyData{}) : root.get_technology_ids().front();
@@ -37,14 +109,23 @@ namespace le
         std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(filename.c_str(), "r"), &fclose);
         if (!file)
         {
-            spdlog::error("Could not open LEF file {}.", filename);
+            // Happens before lefrRead() ever runs, so the usual
+            // post-lefrRead `messages_ = std::move(g_pending_lef_messages)`
+            // (see read_lef's own comment further down) never executes on
+            // this path - flush explicitly here instead, or this message
+            // would sit in g_pending_lef_messages forever unseen.
+            log_error("Could not open LEF file {}.", filename);
+            messages_ = std::move(g_pending_lef_messages);
             return 1;
         }
 
         // Read file
         int result = lefrRead(file.get(), filename.c_str(), (void *)this);
+        messages_ = std::move(g_pending_lef_messages);
         if (result != 0)
         {
+            if (messages_.empty())
+                messages_.push_back(fmt::format("ERROR: Could not parse LEF file {}.", filename));
             spdlog::error("Could not parse LEF file {}.", filename);
             return 2;
         }
@@ -106,7 +187,7 @@ namespace le
 
         if (reader->root_->get_layer_by_name(layer_name).valid())
         {
-            spdlog::warn("Layer {} already exists. Ignoring new definition.", layer_name);
+            log_warning("Layer {} already exists. Ignoring new definition.", layer_name);
             return 0;
         }
 
@@ -139,7 +220,7 @@ namespace le
             {
                 if (technology->database_units_microns != lef_database_units)
                 {
-                    spdlog::warn("Database UNITS in LEF {} does not equal current technology units {}. Ignoring new definition.", lef_database_units, technology->database_units_microns);
+                    log_warning("Database UNITS in LEF {} does not equal current technology units {}. Ignoring new definition.", lef_database_units, technology->database_units_microns);
                 }
             }
         }
@@ -173,7 +254,7 @@ namespace le
         auto abstract_id = reader->root_->get_design_abstract(design_id);
         if (abstract_id.valid())
         {
-            spdlog::error("Abstract view for design {} already exists.", name);
+            log_error("Abstract view for design {} already exists.", name);
             return 1;
         }
 
@@ -457,7 +538,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("RECT defined without previous LAYER definition.");
+                    log_error("RECT defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_rect = geometries->getRect(j);
@@ -470,7 +551,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("RECT ITERATE defined without previous LAYER definition.");
+                    log_error("RECT ITERATE defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_rect_iter = geometries->getRectIter(j);
@@ -496,7 +577,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("PATH defined without previous LAYER definition.");
+                    log_error("PATH defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_path = geometries->getPath(j);
@@ -510,7 +591,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("PATH ITERATE defined without previous LAYER definition.");
+                    log_error("PATH ITERATE defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_path_iter = geometries->getPathIter(j);
@@ -536,7 +617,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("POLYGON defined without previous LAYER definition.");
+                    log_error("POLYGON defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_polygon = geometries->getPolygon(j);
@@ -549,7 +630,7 @@ namespace le
             {
                 if (!shape.has_value())
                 {
-                    spdlog::error("POLYGON ITERATE defined without previous LAYER definition.");
+                    log_error("POLYGON ITERATE defined without previous LAYER definition.");
                     break;
                 }
                 auto lef_polygon_iter = geometries->getPolygonIter(j);

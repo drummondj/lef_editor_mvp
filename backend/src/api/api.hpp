@@ -179,6 +179,26 @@ extern "C"
     /// code (nonzero otherwise, including if handle or path is null).
     int le_read_lef(LeHandle *handle, const char *path);
 
+    /// @brief Total number of error/warning/info messages produced by
+    /// this handle's backend operations so far (currently just
+    /// le_read_lef() - file-open/parse errors, parser warnings, parser
+    /// info notes, and a success summary, each already formatted with
+    /// its own "ERROR "/"WARNING "/"INFO " prefix). Monotonically
+    /// increasing - entries are never removed, cleared, or reordered -
+    /// so a caller can poll this like le_selection_version() and only
+    /// fetch le_message_at() for indices at or past what it last saw,
+    /// rather than re-reading everything on every check. 0 if handle is
+    /// null.
+    int32_t le_message_count(LeHandle *handle);
+
+    /// @brief The message at `index` (0..le_message_count()-1). Returns
+    /// null if handle is null or index is out of range. The returned
+    /// pointer is owned by the handle - valid until the handle is
+    /// destroyed (messages are never removed/reordered, so unlike a
+    /// "last error" design this pointer is never invalidated by a later
+    /// le_read_lef() call).
+    const char *le_message_at(LeHandle *handle, int32_t index);
+
     /// @brief Number of Designs currently loaded across every LEF file
     /// read into this handle so far. 0 if handle is null.
     int32_t le_design_count(LeHandle *handle);
