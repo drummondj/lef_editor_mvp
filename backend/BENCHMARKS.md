@@ -719,3 +719,44 @@ eliminating the regression entirely:
 Net: a behaviorally different (and, per the old algorithm's own
 disjoint-geometry flaw, strictly more correct) label-placement algorithm
 at effectively the same cold-start cost as before.
+
+## 2026-08-08 — Release build: LTO tried, measured no benefit, reverted
+
+`flutter_plugin` was switched to link `backend/build_release` (Release)
+instead of `backend/build` (Debug) for the actual runtime library it
+embeds (see `macos/lef_editor_plugin.podspec`) - prompted the question of
+whether Release was using every reasonable optimization option, not just
+CMake's own `-O3 -DNDEBUG` default (confirmed via `CMakeCache.txt` - no
+LTO, no CPU-specific tuning, nothing custom beyond that default).
+
+Tried `CMAKE_INTERPROCEDURAL_OPTIMIZATION` (LTO, `check_ipo_supported`-
+gated, Release-only) and benchmarked before/after on a clean rebuild
+(`--benchmark_min_time=8s --benchmark_repetitions=5`, confirmed `-flto=thin`
+actually present in `compile_commands.json`/`link.txt` before trusting
+the numbers):
+
+| Benchmark | Before (no LTO) | After (LTO) |
+| --- | --- | --- |
+| `BM_GenerateShapes` | 423 ms | 421 ms |
+| `BM_Render` (full cold chain) | 467 ms | 470 ms |
+| `BM_RenderReused_PanOnly` (warm, interactive) | 53.9 ms | 54.1 ms |
+
+All three within noise - no measurable benefit. In hindsight this tracks:
+most of this project's hot path (`geometry`/`pipeline`/`scene`/
+`view_style`) is already header-only, so a single translation unit
+including those headers directly (as every benchmark/caller here does)
+already gives `-O3` full visibility into the same code LTO would
+otherwise expose across a real library boundary - there's little
+cross-TU boundary left in the actual hot paths for LTO to optimize
+across. The one real compiled-library boundary on the render path
+(`Renderer`'s own methods, `render.cpp`) mostly calls into prebuilt
+Skia, which wasn't itself built with LTO, so it's unreachable by this
+project's LTO flag either way.
+
+**Reverted** - per this project's own rule, no measured benefit doesn't
+justify the added build time. Release stays plain `-O3 -DNDEBUG`. Revisit
+if a future profile shows real time inside a genuine cross-library-
+boundary call this project's own code owns (not inside Skia), or
+consider `-march=native` instead (untried - more likely to show a real
+difference for tight numeric loops, at a real portability cost: ties the
+binary to the building machine's specific CPU).

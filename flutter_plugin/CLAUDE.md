@@ -172,10 +172,21 @@ Two separate paths call into the C API — not one:
 ## Native linking (macOS — done and verified; Linux — gated, unverified)
 
 `api.hpp`'s `le_*()` functions are implemented in `backend/src/api/api.cpp`
-and compiled by backend's *own* CMake build (`../backend/build/libapi.a`
+and compiled by backend's *own* CMake build (`../backend/build_release/libapi.a`
 etc.) — this plugin links that output directly rather than recompiling it,
 mirrored by hand in two places since there's no automated sharing between a
-CMakeLists.txt and a podspec:
+CMakeLists.txt and a podspec.
+
+**Deliberately the Release build (`backend/build_release`), not Debug
+(`backend/build`)** - this plugin is what an actual running Flutter app
+embeds, so it needs real optimized performance, not debug-build timings.
+`backend/build` (Debug) still has to exist too, for backend's own
+`ctest`/development workflow - **both trees are expected to exist and be
+kept current going forward**, not just Release built on-demand for
+benchmarking (see backend's own `build-test` skill/CLAUDE.md). Rebuild
+`build_release`'s `api`/`render`/`io` targets after any backend source
+change before rebuilding this plugin, the same way `build`'s targets get
+rebuilt before running `ctest`.
 
 - `macos/lef_editor_plugin.podspec` — `pod_target_xcconfig`'s
   `OTHER_LDFLAGS` force-loads `libapi.a` (its `le_*()` symbols are never
@@ -199,13 +210,14 @@ CMakeLists.txt and a podspec:
     `.symlinks/plugins/...` path, not this repo's real layout — wrap it in
     `File.realpath` before computing `../../backend`, or the relative walk
     silently lands inside `.symlinks` instead.
-  - Requires `backend/build/{libapi,librender,libio}.a` and
+  - Requires `backend/build_release/{libapi,librender,libio}.a` and
     `backend/src/lefdef/lef/lib/liblef.a` to already be built (`build-test`
     skill, step 1) and a Skia checkout at `$SKIA_DIR` or
     `/Users/john/Projects/synthosilicon/skia/skia` (backend's own default).
 - `src/CMakeLists.txt` / `linux/CMakeLists.txt` (Linux) — same recipe via
   `LE_LINK_BACKEND` (`--whole-archive` instead of `-force_load`;
-  `pkg_check_modules` instead of hardcoded Homebrew paths). Structurally
+  `pkg_check_modules` instead of hardcoded Homebrew paths; `LE_BACKEND_BUILD`
+  also defaults to `build_release`, same reasoning). Structurally
   validated (`cmake -S src -B <dir> -DLE_LINK_BACKEND=ON` gets past syntax
   and cache-variable setup and fails only at `find_package(PkgConfig)`,
   which this macOS dev machine doesn't have) but not build-verified — see

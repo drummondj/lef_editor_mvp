@@ -9,20 +9,26 @@
 # here. This link recipe is a manual mirror of backend/CMakeLists.txt's
 # `api`/`render`/`io`/`skia` targets (there's no automated sharing between
 # a CMakeLists.txt and a podspec) - keep the two in sync by hand; see this
-# plugin's CLAUDE.md. Verified against the exact command that already
-# links backend_tests successfully on this machine (see
-# backend/build/CMakeFiles/backend_tests.dir/link.txt).
+# plugin's CLAUDE.md.
+#
+# Deliberately backend/build_release (Release), not backend/build (Debug)
+# - this plugin is what an actual running Flutter app embeds, so it needs
+# real optimized performance, not debug-build timings. backend/build
+# (Debug) still has to exist too, for backend's own ctest/development
+# workflow - both trees are expected to be kept up to date going forward,
+# not just Release-on-demand for benchmarking. See this plugin's CLAUDE.md
+# and backend/CLAUDE.md's Build section.
 #
 # CocoaPods loads this podspec through a `.symlinks/plugins/...` path, not
 # this file's real location - File.realpath resolves that symlink first,
 # or the relative walk below lands inside .symlinks instead of the repo.
 backend_dir = File.expand_path('../../backend', File.realpath(__dir__))
-backend_build = File.join(backend_dir, 'build')
+backend_build = File.join(backend_dir, 'build_release')
 skia_dir = ENV['SKIA_DIR'] || '/Users/john/Projects/synthosilicon/skia/skia'
 
 unless File.exist?(File.join(backend_build, 'libapi.a'))
-  raise "backend/build/libapi.a not found - build it first: " \
-        "cmake -S #{backend_dir} -B #{backend_build} && " \
+  raise "backend/build_release/libapi.a not found - build it first: " \
+        "cmake -S #{backend_dir} -B #{backend_build} -DCMAKE_BUILD_TYPE=Release && " \
         "cmake --build #{backend_build} --target api render io -j"
 end
 

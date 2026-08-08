@@ -157,6 +157,15 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+A second tree, `build_release` (`-DCMAKE_BUILD_TYPE=Release`), is also
+expected to exist and be kept up to date alongside `build` —
+`flutter_plugin/macos/lef_editor_plugin.podspec` links `build_release`'s
+`api`/`render`/`io` output directly (a real running Flutter app needs
+actual optimized performance, not debug-build timings), so it's a
+persistent tree, not a throwaway benchmarking artifact. See the
+`build-test` skill and `flutter_plugin/CLAUDE.md`'s Native linking
+section.
+
 Dependencies: `spdlog`, `fmt`, `Boost` (headers only, for `geometry`) via
 `find_package` — installed on this dev machine via Homebrew; GoogleTest and
 GoogleBenchmark via `FetchContent` (no system install needed). `src/lefdef/lef`

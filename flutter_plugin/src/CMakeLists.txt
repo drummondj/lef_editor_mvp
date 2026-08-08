@@ -45,8 +45,12 @@ if(LE_LINK_BACKEND)
 
   set(LE_BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../backend" CACHE PATH
       "Path to the backend checkout providing libapi.a et al")
-  set(LE_BACKEND_BUILD "${LE_BACKEND_DIR}/build" CACHE PATH
-      "Path to the backend's own CMake build directory")
+  # build_release (Release), not build (Debug) - matches
+  # ../macos/lef_editor_plugin.podspec's own choice: this plugin is what a
+  # real running app embeds, so it needs actual optimized performance, not
+  # debug-build timings. See that podspec's own comment.
+  set(LE_BACKEND_BUILD "${LE_BACKEND_DIR}/build_release" CACHE PATH
+      "Path to the backend's own Release CMake build directory")
   set(LE_SKIA_DIR "$ENV{SKIA_DIR}" CACHE PATH
       "Path to a built Linux Skia checkout (must contain out/<config>/libskia.a) - unset by default since none exists yet")
 

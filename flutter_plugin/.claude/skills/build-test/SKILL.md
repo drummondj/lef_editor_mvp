@@ -14,13 +14,22 @@ allowed-tools:
 The plugin links against the backend's `api`/`render`/`io` targets
 (`backend/src/api/`, `src/render/`, `src/io/`), which transitively pull in
 `database`/`geometry`/`scene`/`view_style`/`pipeline` (all header-only) and
-the vendored `liblef.a`. Build them first so the plugin's native side has
+the vendored `liblef.a`. This plugin deliberately links the **Release**
+build (`backend/build_release`), not Debug - it's what a real running
+Flutter app embeds, so it needs actual optimized performance (see the
+podspec's own comment). Build it first so the plugin's native side has
 something to link against:
 
 ```
-cmake -S ../backend -B ../backend/build -DCMAKE_BUILD_TYPE=Debug
-cmake --build ../backend/build --target api render io -j
+cmake -S ../backend -B ../backend/build_release -DCMAKE_BUILD_TYPE=Release
+cmake --build ../backend/build_release --target api render io -j
 ```
+
+`../backend/build` (Debug) is a separate tree used for backend's own
+`ctest`/development workflow - it's not what this plugin links, but both
+trees are expected to exist and be kept up to date together going
+forward (rebuild both after a backend source change), not just Release
+built on-demand for benchmarking.
 
 See `../backend/CLAUDE.md`'s Build section for Skia/Boost/spdlog/fmt setup
 if this fails to configure.
@@ -45,7 +54,7 @@ cd example
 flutter build macos --debug   # or: flutter run -d macos
 ```
 
-Requires backend/build's `libapi.a`/`librender.a`/`libio.a` (step 1) and a
+Requires backend/build_release's `libapi.a`/`librender.a`/`libio.a` (step 1) and a
 Skia checkout (`$SKIA_DIR` or backend's own default,
 `/Users/john/Projects/synthosilicon/skia/skia`) — the podspec raises a
 clear error naming the missing file/command if these aren't there yet.

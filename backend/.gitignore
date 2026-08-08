@@ -1,4 +1,8 @@
 build/
+# Release build - flutter_plugin/macos/lef_editor_plugin.podspec links
+# this directly (see its own comment); a persistent, always-rebuilt tree
+# now, not a throwaway benchmarking artifact.
+build_release/
 
 # lefdef produces these during `make`; not source, don't commit them.
 # Every subdirectory (lef/, clef/, clefzlib/, lefdiff/, lefrw/, lefwrite/,

@@ -14,12 +14,19 @@ allowed-tools:
 This app depends on `lef_editor_plugin` (`pubspec.yaml`'s
 `path: ../flutter_plugin`), whose macOS podspec force-links the backend's
 `libapi.a`/`librender.a`/`libio.a` + vendored `liblef.a` directly — build
-those first or the macOS build fails at the link step, not compile:
+those first or the macOS build fails at the link step, not compile. The
+podspec deliberately links the **Release** build (`backend/build_release`),
+not Debug - see its own comment:
 
 ```
-cmake -S ../backend -B ../backend/build -DCMAKE_BUILD_TYPE=Debug
-cmake --build ../backend/build --target api render io -j
+cmake -S ../backend -B ../backend/build_release -DCMAKE_BUILD_TYPE=Release
+cmake --build ../backend/build_release --target api render io -j
 ```
+
+`../backend/build` (Debug) is a separate tree for backend's own ctest/
+development workflow, not what this app actually links - both are
+expected to exist and be kept up to date together going forward, not
+just Release built on-demand for benchmarking.
 
 See `../backend/CLAUDE.md`'s Build section for Skia/Boost/spdlog/fmt setup,
 and `../flutter_plugin/CLAUDE.md`'s Native linking section for the full
@@ -40,7 +47,7 @@ flutter test
 flutter run -d macos      # or: flutter build macos --debug
 ```
 
-Requires backend/build's `libapi.a`/`librender.a`/`libio.a` (step 1) and a
+Requires backend/build_release's `libapi.a`/`librender.a`/`libio.a` (step 1) and a
 Skia checkout (`$SKIA_DIR` or backend's own default,
 `/Users/john/Projects/synthosilicon/skia/skia`) — the podspec raises a
 clear error naming the missing file/command if these aren't there yet.
