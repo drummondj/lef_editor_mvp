@@ -228,6 +228,40 @@ TEST_F(ApiFixture, RenderPixelBufferProducesTheRequestedDimensions)
     EXPECT_EQ(buffer.height, 200);
 }
 
+TEST_F(ApiFixture, SubPixelShapeRendersAsASinglePixelDotAndIsNotSelectable)
+{
+    // UPDATES.md item 6: a shape too small to render normally should still
+    // show as a single-pixel dot instead of silently vanishing, but that
+    // dot must not be clickable - see TinyShapeDot's own comment for why
+    // Pipeline::hit_test_point/hit_test_rect never see it.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("tiny_shape.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+
+    // Scene starts at scale 1.0 / pan (0, 0). PIN A's RECT is exactly 1x1
+    // dbu - at scale 1.0 that's exactly at (not below) the sub-pixel
+    // threshold, so it renders normally there. Zooming out to scale 0.5,
+    // anchored at pixel (0, 100) (dbu (0, 0) at the starting pan/scale -
+    // see RenderPixelBufferProducesTheRequestedDimensions's own comment
+    // for why this anchor keeps pan pinned exactly at (0, 0)), doubles the
+    // threshold to 2 dbu, putting the shape below it.
+    le_zoom(handle, -0.5, 0, 100);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+
+    // TinyShapeDot::location is the shape's bbox center: dbu (10, 10)
+    // (integer-division midpoint of (10,10)-(11,11)). Pre-flip pixel =
+    // dbu * scale = (5, 5); rasterize_tiny_shapes_frame's whole-canvas
+    // Y-flip maps that to screen pixel (5, height - 5) = (5, 95).
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 3, 93, 7, 97));
+
+    le_mouse_down(handle, 5, 95);
+    le_mouse_up(handle, 5, 95);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
 TEST_F(ApiFixture, FitSceneWithNullHandleDoesNotCrash)
 {
     le_fit_scene(nullptr, 10);

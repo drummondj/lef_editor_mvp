@@ -69,6 +69,54 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
 }
 BENCHMARK(BM_FilterByLayerVisibility)->Unit(benchmark::kMillisecond);
 
+// Zoomed out far enough that virtually every shape in the 1M-shape stress
+// design (max size ~100um - see stress_data.hpp's ItemGeometry) is below
+// the sub-pixel threshold - the "whole design fits on screen, dots
+// everywhere" case UPDATES.md item 6 targets, as opposed to make_scene's
+// own scale (chosen so shapes straddle the threshold, roughly half tiny).
+namespace
+{
+    Scene make_zoomed_out_scene(const StressData &data)
+    {
+        Scene scene;
+        scene.set_current_abstract(data.abstract_id);
+        scene.set_pan(Point{0, 0});
+        scene.set_scale(0.0000001); // 1px == 10,000,000 dbu == 10,000um
+        scene.set_viewport_size(2000, 2000);
+        return scene;
+    }
+}
+
+// Isolated cost of tiny_shapes_by_viewport's own "second pass" over
+// generate_shapes's output (UPDATES.md item 6, see its own doc comment for
+// why this is a second pass rather than a second return value bolted onto
+// filter_by_viewport_and_size). One Pipeline reused across iterations so
+// generate_shapes itself stays a cache hit (its key, {AbstractId,
+// view_layers.generation()}, doesn't include viewport_version - see its
+// own code); only pan is varied each iteration, which invalidates
+// tiny_shapes_by_viewport's own cache (keyed additionally on
+// viewport_version) without touching generate_shapes's. This isolates
+// exactly the cost this stage adds on top of generate_shapes, the same
+// way BM_FilterByViewportAndSize isolates its own stage above.
+static void BM_TinyShapesByViewport(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_scene(data);
+    Pipeline pipeline;
+    pipeline.generate_shapes(data.root, data.abstract_id, data.view_layers); // warm the cache
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &result = pipeline.tiny_shapes_by_viewport(data.root, data.abstract_id, scene, data.view_layers);
+        const auto *result_ptr = &result;
+        benchmark::DoNotOptimize(result_ptr);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_TinyShapesByViewport)->Unit(benchmark::kMillisecond);
+
 // A fresh Pipeline every iteration, one run() call each - the "just
 // switched to a different Abstract" cold-start case, where every stage is
 // a cache miss.
@@ -208,6 +256,32 @@ static void BM_TransformToPixels(benchmark::State &state)
 }
 BENCHMARK(BM_TransformToPixels)->Unit(benchmark::kMillisecond);
 
+// Isolated cost of transform_tiny_shapes_to_pixels (UPDATES.md item 6), at
+// make_zoomed_out_scene's scale where virtually every one of the 1M
+// stress shapes is tiny - the realistic worst case for this per-point
+// transform.
+static void BM_TransformTinyShapesToPixels(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_zoomed_out_scene(data);
+
+    Pipeline setup_pipeline;
+    const auto &tiny_shapes = setup_pipeline.run_tiny_shapes(data.root, scene, data.view_layers);
+
+    for (auto _ : state)
+    {
+        Renderer renderer;
+        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+        const auto *tiny_pixel_shapes_ptr = &tiny_pixel_shapes;
+        benchmark::DoNotOptimize(tiny_pixel_shapes_ptr);
+    }
+    size_t total_dots = 0;
+    for (const auto &[view_layer, group] : tiny_shapes)
+        total_dots += group.size();
+    state.SetItemsProcessed(state.iterations() * total_dots);
+}
+BENCHMARK(BM_TransformTinyShapesToPixels)->Unit(benchmark::kMillisecond);
+
 static void BM_BuildPicture(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -273,6 +347,35 @@ static void BM_BuildPicture_WithLargeSelection(benchmark::State &state)
     state.SetItemsProcessed(state.iterations() * pixel_shapes.size());
 }
 BENCHMARK(BM_BuildPicture_WithLargeSelection)->Arg(0)->Arg(1000)->Arg(5000)->Arg(20000)->Unit(benchmark::kMillisecond);
+
+// Isolated cost of build_tiny_shapes_picture (UPDATES.md item 6), at
+// make_zoomed_out_scene's scale where virtually every one of the 1M
+// stress shapes is tiny - the realistic worst case for this stage's own
+// batched-drawPoints-per-ViewLayer-group approach (see its own doc
+// comment for why it's one drawPoints call per group, not one per dot).
+static void BM_BuildTinyShapesPicture(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_zoomed_out_scene(data);
+
+    Pipeline setup_pipeline;
+    const auto &tiny_shapes = setup_pipeline.run_tiny_shapes(data.root, scene, data.view_layers);
+    Renderer setup_renderer;
+    const auto &tiny_pixel_shapes = setup_renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+
+    size_t total_dots = 0;
+    for (const auto &[view_layer, group] : tiny_pixel_shapes)
+        total_dots += group.size();
+
+    for (auto _ : state)
+    {
+        Renderer renderer;
+        const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, data.view_layers);
+        benchmark::DoNotOptimize(picture.get());
+    }
+    state.SetItemsProcessed(state.iterations() * total_dots);
+}
+BENCHMARK(BM_BuildTinyShapesPicture)->Unit(benchmark::kMillisecond);
 
 static void BM_Rasterize(benchmark::State &state)
 {
@@ -368,6 +471,103 @@ static void BM_RenderReused_PanOnly(benchmark::State &state)
     state.SetItemsProcessed(state.iterations() * kTotalShapes);
 }
 BENCHMARK(BM_RenderReused_PanOnly)->Unit(benchmark::kMillisecond);
+
+// Full-chain warm/pan-only comparison at make_zoomed_out_scene's scale
+// (UPDATES.md item 6), three variants isolating two different things:
+//
+// - BM_RenderReused_PanOnly_ZoomedOut: the design content pass alone,
+//   via renderer.rasterize() directly (no compositing pass at all) - the
+//   same code BM_RenderReused_PanOnly above exercises, just re-run at a
+//   scale where nearly every shape is tiny so it's dropped from
+//   build_picture's own output almost entirely.
+// - BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes: the same
+//   design content, but composited via compose_with_overlays with a null
+//   tiny-shapes picture - isolates compose_with_overlays's own fixed
+//   overhead (rasterizing+blitting the selection-overlay frame, even
+//   empty, plus the extra blit machinery) from anything tiny-shapes-
+//   specific, since BM_RenderReused_PanOnly_ZoomedOut never goes through
+//   compose_with_overlays at all.
+// - BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut: adds the real
+//   tiny_shapes_by_viewport -> tiny_shapes_by_layer_visibility ->
+//   transform_tiny_shapes_to_pixels -> build_tiny_shapes_picture chain
+//   and a real (non-null) tiny-shapes picture into compose_with_overlays.
+//
+// The delta between the second and third is this feature's own marginal
+// cost on top of compose_with_overlays's pre-existing overhead - a
+// same-scale, single-variable comparison rather than a git-stash
+// before/after of the whole feature, since that isolates exactly what
+// the new stages add without conflating it with anything else changed
+// since the last commit. See BENCHMARKS.md for the actual numbers.
+static void BM_RenderReused_PanOnly_ZoomedOut(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_zoomed_out_scene(data);
+    Pipeline pipeline;
+    Renderer renderer;
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
+        const auto &buffer = renderer.rasterize(picture, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RenderReused_PanOnly_ZoomedOut)->Unit(benchmark::kMillisecond);
+
+static void BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_zoomed_out_scene(data);
+    Pipeline pipeline;
+    Renderer renderer;
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
+        const auto &buffer = renderer.compose_with_overlays(picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes)->Unit(benchmark::kMillisecond);
+
+static void BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut(benchmark::State &state)
+{
+    const auto &data = stress_data();
+    Scene scene = make_zoomed_out_scene(data);
+    Pipeline pipeline;
+    Renderer renderer;
+
+    int64_t pan_x = 0;
+    for (auto _ : state)
+    {
+        scene.set_pan(Point{pan_x++, 0});
+        const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
+
+        const auto &tiny_shapes = pipeline.run_tiny_shapes(data.root, scene, data.view_layers);
+        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+        const auto &tiny_shapes_picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, data.view_layers);
+
+        const auto &buffer = renderer.compose_with_overlays(picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const uint8_t *buffer_data = buffer.data;
+        benchmark::DoNotOptimize(buffer_data);
+    }
+    state.SetItemsProcessed(state.iterations() * kTotalShapes);
+}
+BENCHMARK(BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut)->Unit(benchmark::kMillisecond);
 
 // Isolated micro-benchmark for Geometry::merge_overlapping_fills's own
 // cost. The 1M-shape stress data above can't measure this: every shape
@@ -493,7 +693,7 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
         scene.set_mouse_position(x++ % 2000, 0);
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const auto &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+        const auto &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }

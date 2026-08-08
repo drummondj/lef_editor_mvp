@@ -448,6 +448,91 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityReusesCacheUntilVisibilityVersion
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
 
+TEST_F(PipelineFixture, TinyShapesByViewportKeepsOnlyShapesUnderOnePixelInBothDimensions)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0); // 1 dbu == 1 px, so the sub-pixel threshold is 1 dbu
+    scene.set_viewport_size(200, 200);
+
+    // Sub-pixel dot: 0x0 bbox - the exact case filter_by_viewport_and_size drops.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}});
+    // Normal-sized shape - filter_by_viewport_and_size keeps this, so tiny_shapes_by_viewport must not.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {50, 50}, .ur = {60, 60}}}});
+
+    const auto &result = pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
+    ASSERT_EQ(result.size(), 1u);
+    // bbox center of a 0x0 box is itself
+    EXPECT_EQ(result.front().location.x, 5);
+    EXPECT_EQ(result.front().location.y, 5);
+}
+
+TEST_F(PipelineFixture, TinyShapesByViewportExcludesAThinLongShapeThatSurvivesTheNormalFilter)
+{
+    // Mirrors FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLongShapes -
+    // the two stages must always agree on which shapes are "tiny" vs "normal".
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(200, 200);
+
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 105}}}}); // 0 wide, 100 tall
+
+    EXPECT_TRUE(pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers).empty());
+}
+
+TEST_F(PipelineFixture, TinyShapesByViewportExcludesATinyShapeOutsideTheViewport)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5000, 5000}, .ur = {5000, 5000}}}});
+
+    EXPECT_TRUE(pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers).empty());
+}
+
+TEST_F(PipelineFixture, TinyShapesByLayerVisibilityDropsHiddenViewLayerKeepsVisible)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(200, 200);
+    scene.set_layer_name_visible("M2", false);
+
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}});
+    add_terminal_shape(Shape{.layer_name = "M2", .rects = {Rect{.ll = {50, 50}, .ur = {50, 50}}}});
+
+    const auto &tiny_shapes = pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
+    ASSERT_EQ(tiny_shapes.size(), 2u);
+
+    const auto &result = pipeline.tiny_shapes_by_layer_visibility(tiny_shapes, scene, view_layers);
+    ASSERT_EQ(result.size(), 1u); // only the M1/TERMINAL group survives
+    const auto m1_terminal = view_layers.find(m1, ViewLayerPurpose::TERMINAL);
+    ASSERT_TRUE(result.contains(m1_terminal));
+    ASSERT_EQ(result.at(m1_terminal).size(), 1u);
+    EXPECT_EQ(result.at(m1_terminal).front().x, 5);
+    EXPECT_EQ(result.at(m1_terminal).front().y, 5);
+}
+
+TEST_F(PipelineFixture, TinyShapesByViewportReusesCacheUntilViewportVersionChanges)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(200, 200);
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}});
+
+    pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
+    pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
+    EXPECT_EQ(pipeline.tiny_shapes_viewport_filter_calls(), 1u);
+
+    scene.set_pan(Point{1, 1});
+    pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
+    EXPECT_EQ(pipeline.tiny_shapes_viewport_filter_calls(), 2u);
+}
+
 TEST_F(PipelineFixture, RunChainsAllThreeStagesForCurrentAbstract)
 {
     // Kept: on M1 (visible), inside the viewport, well above the sub-pixel threshold.

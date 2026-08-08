@@ -234,6 +234,43 @@ namespace le
                 return result; });
         }
 
+        /// @brief Transforms Pipeline::tiny_shapes_by_layer_visibility's
+        /// output to pixel space - the same per-point `to_pixel` transform
+        /// transform_to_pixels already applies to every rect/polygon/path
+        /// point, just for the single-point-per-shape case (UPDATES.md
+        /// item 6). Own CachedStage/key (not folded into transform_to_pixels
+        /// itself) so this stays a small, independent addition - see
+        /// TinyShapeDot's own comment for why tiny shapes are a separate
+        /// pipeline/render path throughout, not merged into PixelShape.
+        const std::map<ViewLayerId, std::vector<PixelPoint>> &transform_tiny_shapes_to_pixels(const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            return tiny_pixel_shapes_.get(key, [&]
+                                          {
+                const Point pan = scene.pan();
+                const double scale = scene.scale();
+                auto to_pixel = [&](Point p)
+                {
+                    return PixelPoint{
+                        .x = (static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale,
+                        .y = (static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale,
+                    };
+                };
+
+                std::map<ViewLayerId, std::vector<PixelPoint>> result;
+
+                for (const auto &[view_layer, group] : tiny_shapes)
+                {
+                    std::vector<PixelPoint> pixel_group;
+                    pixel_group.reserve(group.size());
+                    for (const Point &p : group)
+                        pixel_group.push_back(to_pixel(p));
+                    result.emplace(view_layer, std::move(pixel_group));
+                }
+
+                return result; });
+        }
+
         /// @brief Record the pixel-space shapes into an SkPicture, sized to
         /// the Scene's viewport, drawn in map order (bottom-up, see
         /// Pipeline::filter_by_layer_visibility's comment) on top of the
@@ -343,6 +380,53 @@ namespace le
                 return recorder.finishRecordingAsPicture(); });
         }
 
+        /// @brief Records the tiny-shapes dot picture (UPDATES.md item 6) -
+        /// one batched SkCanvas::drawPoints call per ViewLayer group,
+        /// hairline stroke width so each point rasterizes as exactly one
+        /// device pixel, keyed the same shape as build_picture's own key
+        /// (content depends on exactly the same triggers). A group is
+        /// skipped entirely if its ViewLayer's outline_color is fully
+        /// transparent, matching draw_group's own has_outline convention -
+        /// no color to draw a dot in. Deliberately a separate SkPicture
+        /// from build_picture's, not folded into it or drawn via the
+        /// existing PixelShape/RenderedShape plumbing - see TinyShapeDot's
+        /// own comment: this keeps Pipeline::hit_test_point/hit_test_rect
+        /// provably unaware of tiny shapes, so "not selectable" holds by
+        /// construction, not by an exclusion check.
+        const sk_sp<SkPicture> &build_tiny_shapes_picture(const std::map<ViewLayerId, std::vector<PixelPoint>> &tiny_pixel_shapes, const Scene &scene, const ViewLayerSet &view_layers)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            return tiny_shapes_picture_.get(key, [&]
+                                            {
+                SkPictureRecorder recorder;
+                SkCanvas *canvas = recorder.beginRecording(
+                    SkRect::MakeWH(static_cast<SkScalar>(scene.viewport_width_px()), static_cast<SkScalar>(scene.viewport_height_px())));
+
+                for (const auto &[view_layer_id, group] : tiny_pixel_shapes)
+                {
+                    if (group.empty())
+                        continue;
+
+                    const ViewLayerData *view_layer = view_layers.get(view_layer_id);
+                    if (!view_layer || view_layer->style.outline_color.a == 0)
+                        continue;
+
+                    SkPaint paint;
+                    paint.setAntiAlias(false);
+                    paint.setStrokeWidth(0); // hairline - exactly one device pixel per point
+                    paint.setColor(to_sk_color(view_layer->style.outline_color));
+
+                    std::vector<SkPoint> points;
+                    points.reserve(group.size());
+                    for (const auto &p : group)
+                        points.push_back(SkPoint::Make(static_cast<SkScalar>(p.x), static_cast<SkScalar>(p.y)));
+
+                    canvas->drawPoints(SkCanvas::kPoints_PointMode, {points.data(), points.size()}, paint);
+                }
+
+                return recorder.finishRecordingAsPicture(); });
+        }
+
         /// @brief Records a white outline for every selected object that
         /// has a specific piece recorded (see draw_selected_piece_outline,
         /// Scene::SelectedObject - every reachable selection always
@@ -395,24 +479,27 @@ namespace le
 
         /// @brief Composites the design picture's cached, already-rasterized
         /// frame (from rasterize_frame - the expensive step for a large
-        /// design) with the two cheap overlay pictures (see
-        /// build_overlay_picture, build_selection_overlay_picture) into
-        /// one final RGBA8888 buffer, without re-rasterizing the design's
-        /// own vector content on every call. Reuses the design's cached
-        /// raster surface via a cheap SkImage snapshot + blit
-        /// (`SkCanvas::drawImage`, a bitmap copy - not a re-walk of the
-        /// design's draw ops) rather than recording all three pictures
-        /// into one fresh canvas, which would re-execute every shape's
-        /// draw calls again on every mouse move. Both overlay pictures
-        /// are drawn through the same whole-canvas Y-flip rasterize_frame
-        /// applies to the design (translate + scale(1,-1) - see its own
-        /// comment for why that flip exists), since both record pre-flip
-        /// pixel-space coordinates, the same convention build_picture's
-        /// own shapes use.
+        /// design) with the tiny-shapes dot frame (see
+        /// build_tiny_shapes_picture, UPDATES.md item 6) and the two cheap
+        /// overlay pictures (see build_overlay_picture,
+        /// build_selection_overlay_picture) into one final RGBA8888
+        /// buffer, without re-rasterizing the design's own vector content
+        /// on every call. Reuses the design's and tiny-shapes' cached
+        /// raster surfaces via a cheap SkImage snapshot + blit
+        /// (`SkCanvas::drawImage`, a bitmap copy - not a re-walk of either
+        /// one's draw ops) rather than recording every picture into one
+        /// fresh canvas, which would re-execute every shape's draw calls
+        /// again on every mouse move. The mouse overlay picture is drawn
+        /// through the same whole-canvas Y-flip rasterize_frame applies to
+        /// the design (translate + scale(1,-1) - see its own comment for
+        /// why that flip exists), since it records pre-flip pixel-space
+        /// coordinates, the same convention build_picture's own shapes use.
         ///
         /// Cached on all five of AbstractId/viewport_version/
         /// visibility_version/selection_version/mouse_version - a
-        /// superset of both overlay pictures' own keys as well as
+        /// superset of every blitted-in picture's own key (tiny_shapes_picture's
+        /// key matches design_picture's own exactly - see
+        /// build_tiny_shapes_picture's own comment) as well as
         /// rasterize_frame's (selection_version included here for the
         /// same reason it's in rasterize_frame's key: `design_picture`'s
         /// content depends on it, and CachedStage's key comparison is the
@@ -421,14 +508,15 @@ namespace le
         /// doesn't change would silently return a stale composited buffer
         /// even though a *different* picture was passed in). A
         /// mouse-only change *does* invalidate this entry, but
-        /// recomputing it only costs two full-viewport image blits
-        /// (design + selection overlay, both already-rasterized - see
-        /// rasterize_frame/rasterize_selection_overlay_frame) plus
-        /// replaying the small, mouse-version-only overlay_picture - none
-        /// of that is proportional to design or selection size. The
-        /// selection-outline picture is specifically blitted as a cached
-        /// raster image rather than replayed as an SkPicture on every
-        /// call (unlike overlay_picture, which stays a direct
+        /// recomputing it only costs three full-viewport image blits
+        /// (design + tiny shapes + selection overlay, all already-
+        /// rasterized - see rasterize_frame/rasterize_tiny_shapes_frame/
+        /// rasterize_selection_overlay_frame) plus replaying the small,
+        /// mouse-version-only overlay_picture - none of that is
+        /// proportional to design or selection size. The selection-outline
+        /// picture (like the tiny-shapes one) is specifically blitted as a
+        /// cached raster image rather than replayed as an SkPicture on
+        /// every call (unlike overlay_picture, which stays a direct
         /// drawPicture - it's small and mouse-driven, so replaying it
         /// every call is cheap and *should* redraw every call): a
         /// measured regression (see BENCHMARKS.md) showed that
@@ -442,17 +530,18 @@ namespace le
         /// single-picture-per-frame design would re-rasterize the whole
         /// design, or replay an unboundedly large overlay, on every
         /// mouse-move event).
-        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
+        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &tiny_shapes_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
         {
             const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version(), scene.mouse_version()};
             return composed_.get(key, [&]
                                  {
                 const RasterizedFrame &design_frame = rasterize_frame(design_picture, scene);
+                const RasterizedFrame &tiny_shapes_frame = rasterize_tiny_shapes_frame(tiny_shapes_picture, scene);
                 const RasterizedFrame &selection_frame = rasterize_selection_overlay_frame(selection_overlay_picture, scene);
 
                 const int width = scene.viewport_width_px();
                 const int height = scene.viewport_height_px();
-                if (width <= 0 || height <= 0 || !design_frame.surface || !selection_frame.surface)
+                if (width <= 0 || height <= 0 || !design_frame.surface || !tiny_shapes_frame.surface || !selection_frame.surface)
                     return RasterizedFrame{};
 
                 const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
@@ -460,12 +549,17 @@ namespace le
                 SkCanvas *canvas = surface->getCanvas();
                 canvas->clear(SK_ColorTRANSPARENT);
 
-                // Cheap blits of the already-rasterized design/selection
-                // pixels - no re-walk of either's underlying (potentially
-                // large) draw commands. Both source surfaces already have
-                // rasterize_frame's own Y-flip baked in, so no further
-                // transform is needed for these two.
+                // Cheap blits of the already-rasterized design/tiny-shapes/
+                // selection pixels - no re-walk of any of their underlying
+                // (potentially large) draw commands. All three source
+                // surfaces already have rasterize_frame's own Y-flip baked
+                // in, so no further transform is needed for these. Tiny
+                // shapes are design content (UPDATES.md item 6 - they
+                // stand in for shapes too small to otherwise render), so
+                // they're blitted right after the design itself and before
+                // the selection/mouse overlay chrome on top.
                 canvas->drawImage(design_frame.surface->makeImageSnapshot(), 0, 0);
+                canvas->drawImage(tiny_shapes_frame.surface->makeImageSnapshot(), 0, 0);
                 canvas->drawImage(selection_frame.surface->makeImageSnapshot(), 0, 0);
 
                 canvas->translate(0, static_cast<SkScalar>(height));
@@ -490,10 +584,13 @@ namespace le
         // Number of times each stage actually recomputed - exposed purely
         // to make cache hits/misses observable in tests.
         uint64_t transform_calls() const { return pixel_shapes_.call_count(); }
+        uint64_t tiny_shapes_transform_calls() const { return tiny_pixel_shapes_.call_count(); }
         uint64_t picture_calls() const { return picture_.call_count(); }
+        uint64_t tiny_shapes_picture_calls() const { return tiny_shapes_picture_.call_count(); }
         uint64_t overlay_picture_calls() const { return overlay_picture_.call_count(); }
         uint64_t selection_overlay_picture_calls() const { return selection_overlay_picture_.call_count(); }
         uint64_t rasterize_calls() const { return rasterized_.call_count(); }
+        uint64_t rasterize_tiny_shapes_calls() const { return rasterized_tiny_shapes_.call_count(); }
         uint64_t rasterize_selection_overlay_calls() const { return rasterized_selection_overlay_.call_count(); }
         uint64_t compose_calls() const { return composed_.call_count(); }
 
@@ -1364,11 +1461,58 @@ namespace le
                 }; });
         }
 
+        /// @brief Rasterizes `tiny_shapes_picture` into its own cached
+        /// raster surface, mirroring rasterize_frame/
+        /// rasterize_selection_overlay_frame's body (same Y-flip, same
+        /// explicit RGBA8888 format), keyed the same shape as
+        /// build_tiny_shapes_picture's own key. A separate CachedStage
+        /// from rasterized_/rasterized_selection_overlay_, for the same
+        /// single-slot-eviction reason documented on
+        /// rasterize_selection_overlay_frame - reusing one CachedStage
+        /// instance across pictures with different keys would have each
+        /// one's rasterization evict the other's on every alternating call.
+        const RasterizedFrame &rasterize_tiny_shapes_frame(const sk_sp<SkPicture> &tiny_shapes_picture, const Scene &scene)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            return rasterized_tiny_shapes_.get(key, [&]
+                                               {
+                const int width = scene.viewport_width_px();
+                const int height = scene.viewport_height_px();
+
+                if (width <= 0 || height <= 0)
+                    return RasterizedFrame{};
+
+                const SkImageInfo info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
+
+                SkCanvas *canvas = surface->getCanvas();
+                canvas->clear(SK_ColorTRANSPARENT);
+                canvas->translate(0, static_cast<SkScalar>(height));
+                canvas->scale(1, -1);
+                canvas->drawPicture(tiny_shapes_picture);
+
+                SkPixmap pixmap;
+                surface->peekPixels(&pixmap);
+
+                return RasterizedFrame{
+                    .surface = std::move(surface),
+                    .buffer = PixelBuffer{
+                        .data = static_cast<const uint8_t *>(pixmap.addr()),
+                        .width = width,
+                        .height = height,
+                        .row_bytes = pixmap.rowBytes(),
+                    },
+                }; });
+        }
+
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelPoint>>> tiny_pixel_shapes_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> tiny_shapes_picture_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> selection_overlay_picture_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_tiny_shapes_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_selection_overlay_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };

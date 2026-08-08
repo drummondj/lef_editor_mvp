@@ -229,6 +229,109 @@ TEST_F(RenderFixture, TransformToPixelsReusesCacheUntilViewportVersionChanges)
     EXPECT_EQ(renderer.transform_calls(), 2u);
 }
 
+TEST_F(RenderFixture, TransformTinyShapesToPixelsAppliesPanAndScale)
+{
+    // Sub-pixel dot at dbu (25,25) - 0x0 bbox.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {25, 25}, .ur = {25, 25}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{5, 5});
+    scene.set_scale(2.0);
+    scene.set_viewport_size(200, 200);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+
+    ASSERT_EQ(tiny_pixel_shapes.size(), 1u);
+    const auto &group = tiny_pixel_shapes.begin()->second;
+    ASSERT_EQ(group.size(), 1u);
+    EXPECT_DOUBLE_EQ(group.front().x, (25 - 5) * 2.0);
+    EXPECT_DOUBLE_EQ(group.front().y, (25 - 5) * 2.0);
+}
+
+TEST_F(RenderFixture, TransformTinyShapesToPixelsReusesCacheUntilViewportVersionChanges)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    EXPECT_EQ(renderer.tiny_shapes_transform_calls(), 1u);
+
+    scene.set_pan(Point{1, 1});
+    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    EXPECT_EQ(renderer.tiny_shapes_transform_calls(), 2u);
+}
+
+TEST_F(RenderFixture, BuildTinyShapesPictureDrawsASingleOpaquePixelAtEachDotLocation)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {40, 40}, .ur = {40, 40}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+
+    ASSERT_EQ(tiny_pixel_shapes.size(), 1u);
+    const ViewLayerData *view_layer = view_layers.get(tiny_pixel_shapes.begin()->first);
+    ASSERT_NE(view_layer, nullptr);
+
+    SkColor pixel = sample_pixel(picture, 100, 100, 40, 40);
+    EXPECT_EQ(pixel, to_sk_color(view_layer->style.outline_color));
+}
+
+TEST_F(RenderFixture, BuildTinyShapesPictureIsEmptyWhenThereAreNoTinyShapes)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}); // normal-sized, not tiny
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    ASSERT_TRUE(tiny_shapes.empty());
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+
+    SkColor pixel = sample_pixel(picture, 100, 100, 20, 20);
+    EXPECT_EQ(SkColorGetA(pixel), 0);
+}
+
+TEST_F(RenderFixture, BuildTinyShapesPictureRespectsLayerVisibility)
+{
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {40, 40}, .ur = {40, 40}}}});
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_layer_name_visible("M1", false);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    ASSERT_TRUE(tiny_shapes.empty()); // whole M1 group dropped by tiny_shapes_by_layer_visibility
+
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+
+    SkColor pixel = sample_pixel(picture, 100, 100, 40, 40);
+    EXPECT_EQ(SkColorGetA(pixel), 0);
+}
+
 TEST_F(RenderFixture, BuildPictureFillsInteriorPixelWithLayerStyleColor)
 {
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
@@ -449,7 +552,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     // Post-flip (see the Y-flip comment on
     // ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore) -
@@ -485,7 +588,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     // Same square as the rect-piece tests above (10,10)-(30,30) - left
     // edge preflip (9,20) -> post-flip y = 100-20 = 80.
@@ -520,7 +623,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -563,7 +666,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -1007,7 +1110,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
     {
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+        renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
     };
 
     scene.set_mouse_position(1, 1);
@@ -1047,7 +1150,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     scene.set_mouse_position(10, 10);
     const auto &overlay_picture_1 = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, overlay_picture_1, selection_overlay_picture_1, scene);
+    renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
@@ -1058,7 +1161,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     scene.set_mouse_position(20, 20);
     const auto &overlay_picture_2 = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, overlay_picture_2, selection_overlay_picture_2, scene);
+    renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
     EXPECT_EQ(renderer.overlay_picture_calls(), 2u); // cheap overlay picture did recompute
@@ -1096,7 +1199,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, overlay_picture, selection_overlay_picture, scene);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
         // Same Y-flip as rasterize() - see BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges's comment.
         const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
         return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};

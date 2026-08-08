@@ -578,3 +578,84 @@ section since 2026-08-04 - see the `Renderer::rasterize()` entry above),
 so this doesn't cross a new qualitative threshold, and the underlying
 open question (single-threaded rendering) is the same one that would
 need solving regardless of this specific fix.
+
+## 2026-08-08 — UPDATES.md item 6: single-pixel dot fallback for sub-pixel shapes
+
+Requested explicitly with a performance number, not just an
+implementation: `Pipeline::filter_by_viewport_and_size` already dropped
+any shape under 1px in both dimensions at the current scale; zoomed out
+far enough on a large design this could silently drop a large fraction
+of shapes, making the design look emptier than it is. Added a
+completely separate, parallel chain - `TinyShapeDot` /
+`tiny_shapes_by_viewport` / `tiny_shapes_by_layer_visibility`
+(`pipeline.hpp`), `transform_tiny_shapes_to_pixels` /
+`build_tiny_shapes_picture` (`render.hpp`, one batched
+`SkCanvas::drawPoints` call per `ViewLayer` group, hairline stroke width
+so each point rasterizes as exactly one device pixel) - rather than
+touching `filter_by_viewport_and_size`/`build_picture`/`hit_test_point`/
+`hit_test_rect` at all, so "not selectable" holds by construction (tiny
+dots are a different type hit-testing never sees), not by an added
+exclusion check, and every existing selection-critical test stays a
+valid regression guard untouched.
+
+All numbers below use `make_zoomed_out_scene` (a new scene builder in
+`pipeline_benchmark.cpp`, scale `1e-7` - the whole 1M-shape stress
+design's ~200,000um extent fits inside a 2000x2000px viewport, `min_visible_dbu`
+10,000um vs. the design's own ~100um max shape size), the deliberate
+worst case: virtually all ~1M shapes (900K+) become tiny dots at once.
+Per [[stress_lef_not_representative]], real designs don't have anywhere
+near this shape density, so treat these as upper bounds, not typical
+frame costs. `--benchmark_min_time=8s --benchmark_repetitions=3
+--benchmark_report_aggregates_only=true`, medians reported.
+
+Isolated per-stage cost (fresh `Renderer`/one-shot `Pipeline` call per
+iteration, matching this file's existing isolated-stage convention):
+
+| Benchmark | Time |
+| --- | --- |
+| `BM_TinyShapesByViewport` (second pass over `generate_shapes`'s output) | 4.09 ms |
+| `BM_TransformTinyShapesToPixels` | 1.44 ms |
+| `BM_BuildTinyShapesPicture` (record only) | 0.43 ms |
+
+`BM_TinyShapesByViewport`'s 4.09ms is small relative to
+`BM_GenerateShapes`'s own 449ms cold cost (same stress design, same
+session) - confirms the doc comment's claim that this second pass is
+"cheap relative to generate_shapes itself," not just an assumption.
+
+Full-chain warm/pan-only (one `Pipeline`+`Renderer` reused across
+iterations, only `pan` changing each call - the interactive-panning
+case `BM_RenderReused_PanOnly` already benchmarks at a normal scale):
+
+| Benchmark | Time |
+| --- | --- |
+| `BM_RenderReused_PanOnly_ZoomedOut` (design content only, `rasterize()` direct) | 4.40 ms |
+| `BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes` (same content, via `compose_with_overlays`, null tiny-shapes picture) | 9.10 ms |
+| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut` (real tiny-shapes chain) | 22.3 ms |
+
+Read as two deltas, not one: `compose_with_overlays`'s own pre-existing
+fixed overhead (rasterizing+blitting a second full-viewport surface for
+the selection overlay, even when empty) already costs ~4.7ms at this
+2000x2000 viewport size, regardless of tiny shapes - `9.10 - 4.40`. The
+tiny-shapes feature's own marginal cost on top of that is `22.3 - 9.10 ≈
+13.2ms`. The three isolated stages above only account for `4.09 + 1.44 +
+0.43 ≈ 6.0ms` of that 13.2ms; the remaining ~7ms is `rasterize_tiny_
+shapes_frame` (not independently benchmarkable - it's a private method,
+only reachable through the full chain) actually playing back ~900K
+points onto a 2000x2000 raster surface plus its own extra `drawImage`
+blit in `compose_with_overlays`.
+
+**Verdict**: real, non-trivial cost at this deliberately worst-case
+density (900K simultaneous dots), consistent with this project's render
+pipeline already being well over its 60fps/16.6ms interactive-frame
+budget before this change (see the PATH-rendering entry above - the
+same open single-threaded-rendering question applies here, not a new
+one this feature introduces). Not optimized further without a
+real-design report of this actually mattering - per
+[[stress_lef_not_representative]], a real design's largest single-shape
+population is closer to hundreds or low thousands, not 900K, so the
+realistic per-pan-event cost of this feature is closer to the isolated
+per-stage numbers above (a few ms) than the worst-case 13ms figure.
+Revisit `rasterize_tiny_shapes_frame` (e.g. drawing dots directly into
+`compose_with_overlays`'s own canvas instead of a separate cached raster
+surface) if a real design's dot count and pan-frequency ever make this
+show up as a reported interactive-lag complaint.

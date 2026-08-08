@@ -53,6 +53,22 @@ namespace le
         std::shared_ptr<const std::vector<std::vector<Polygon>>> path_outlines = std::make_shared<const std::vector<std::vector<Polygon>>>();
     };
 
+    /// @brief A shape too small to render normally (bbox under 1 pixel in
+    /// both dimensions at the Scene's current scale - see
+    /// Pipeline::tiny_shapes_by_viewport) - just enough to draw a single
+    /// device-pixel dot so the user can see *something* is there, per
+    /// UPDATES.md item 6. Deliberately not a RenderedShape: no `origin`
+    /// (SelectionRef) at all, so Pipeline::hit_test_point/hit_test_rect
+    /// (which only ever see the *normal* filter_by_viewport_and_size/
+    /// filter_by_layer_visibility output, never this type) can't select
+    /// one even by accident - "not selectable" holds by construction, not
+    /// by an exclusion check somewhere.
+    struct TinyShapeDot
+    {
+        Point location; // dbu-space bbox center
+        ViewLayerId view_layer;
+    };
+
     /// @brief Remembers the last (key, value) pair produced by a single
     /// compute function; recomputes only when the key differs from last
     /// time. Not a general reactive/dependency-graph primitive - just
@@ -400,12 +416,115 @@ namespace le
             });
         }
 
+        /// @brief The population filter_by_viewport_and_size *drops* for
+        /// being under 1 pixel in both dimensions (UPDATES.md item 6) -
+        /// one TinyShapeDot per such shape (its bbox center), instead of
+        /// nothing, so the caller can render a single-pixel fallback
+        /// rather than have the shape silently vanish when zoomed out.
+        /// Deliberately a separate stage over the same generate_shapes
+        /// output, not a second return value bolted onto
+        /// filter_by_viewport_and_size: keeps that stage's own signature
+        /// (and everything downstream of it - hit_test_point/
+        /// hit_test_rect, existing tests) untouched, at the cost of a
+        /// second pass over generate_shapes's output - cheap relative to
+        /// generate_shapes itself (no Boost calls here, only bbox/overlap
+        /// arithmetic, the same per-shape cost filter_by_viewport_and_size
+        /// already pays - see BENCHMARKS.md for the measured cost).
+        /// Mirrors filter_by_viewport_and_size's own viewport-overlap
+        /// check exactly (same bbox, same viewport rect, same
+        /// Geometry::rects_overlap call) so the two stages can never
+        /// disagree about which shapes are "tiny" vs "normal" - only the
+        /// size-threshold branch differs.
+        const std::vector<TinyShapeDot> &tiny_shapes_by_viewport(const Root &root, AbstractId abstract_id, const Scene &scene, const ViewLayerSet &view_layers)
+        {
+            const auto key = std::tuple{abstract_id, scene.viewport_version(), view_layers.generation()};
+            return tiny_shapes_viewport_filtered_.get(key, [&]
+            {
+                const auto &shapes = generate_shapes(root, abstract_id, view_layers);
+
+                const double scale = scene.scale();
+                const double min_visible_dbu = 1.0 / scale;
+
+                const Point viewport_ll = scene.pan();
+                const Rect viewport{
+                    .ll = viewport_ll,
+                    .ur = Point{
+                        viewport_ll.x + static_cast<int64_t>(scene.viewport_width_px() / scale),
+                        viewport_ll.y + static_cast<int64_t>(scene.viewport_height_px() / scale),
+                    },
+                };
+
+                std::vector<TinyShapeDot> result;
+
+                for (const auto &s : shapes)
+                {
+                    auto bbox = Geometry::bbox(s.shape);
+                    if (!bbox)
+                        continue;
+
+                    if (!Geometry::rects_overlap(*bbox, viewport))
+                        continue;
+
+                    const double width = static_cast<double>(bbox->ur.x - bbox->ll.x);
+                    const double height = static_cast<double>(bbox->ur.y - bbox->ll.y);
+                    if (!(width < min_visible_dbu && height < min_visible_dbu))
+                        continue;
+
+                    result.push_back(TinyShapeDot{
+                        .location = Point{(bbox->ll.x + bbox->ur.x) / 2, (bbox->ll.y + bbox->ur.y) / 2},
+                        .view_layer = s.view_layer,
+                    });
+                }
+
+                return result;
+            });
+        }
+
+        /// @brief Groups tiny_shapes_by_viewport's output by ViewLayerId,
+        /// dropping any whose ViewLayer the Scene has hidden - mirrors
+        /// filter_by_layer_visibility exactly, but for TinyShapeDot
+        /// (grouping by ViewLayerId drops the now-redundant view_layer
+        /// field per dot, same convention PixelShape already uses -
+        /// callers get it from the map key).
+        const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes_by_layer_visibility(const std::vector<TinyShapeDot> &tiny_shapes, const Scene &scene, const ViewLayerSet &view_layers)
+        {
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), view_layers.generation()};
+            return tiny_shapes_layer_filtered_.get(key, [&]
+            {
+                std::map<ViewLayerId, std::vector<Point>> grouped;
+                for (const auto &dot : tiny_shapes)
+                    grouped[dot.view_layer].push_back(dot.location);
+
+                for (auto it = grouped.begin(); it != grouped.end();)
+                {
+                    const ViewLayerData *data = view_layers.get(it->first);
+                    if (data && !scene.is_view_layer_visible(data->layer_name, data->purpose))
+                        it = grouped.erase(it);
+                    else
+                        ++it;
+                }
+
+                return grouped;
+            });
+        }
+
         /// @brief Run all three stages for the Scene's current_abstract().
         const std::map<ViewLayerId, std::vector<RenderedShape>> &run(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
         {
             const auto &generated = generate_shapes(root, scene.current_abstract(), view_layers);
             const auto &viewport_filtered = filter_by_viewport_and_size(generated, scene, view_layers);
             return filter_by_layer_visibility(viewport_filtered, scene, view_layers);
+        }
+
+        /// @brief Run both tiny-shape stages for the Scene's
+        /// current_abstract() - mirrors `run` above for the parallel
+        /// sub-pixel-dot path (UPDATES.md item 6, see TinyShapeDot's own
+        /// comment for why this is a separate chain rather than folded
+        /// into `run`'s own).
+        const std::map<ViewLayerId, std::vector<Point>> &run_tiny_shapes(const Root &root, const Scene &scene, const ViewLayerSet &view_layers)
+        {
+            const auto &tiny_shapes = tiny_shapes_by_viewport(root, scene.current_abstract(), scene, view_layers);
+            return tiny_shapes_by_layer_visibility(tiny_shapes, scene, view_layers);
         }
 
         /// @brief Topmost-layer-first point hit-test (UPDATES.md 7.1 items
@@ -499,10 +618,14 @@ namespace le
         uint64_t generate_calls() const { return generated_.call_count(); }
         uint64_t viewport_filter_calls() const { return viewport_filtered_.call_count(); }
         uint64_t layer_filter_calls() const { return layer_filtered_.call_count(); }
+        uint64_t tiny_shapes_viewport_filter_calls() const { return tiny_shapes_viewport_filtered_.call_count(); }
+        uint64_t tiny_shapes_layer_filter_calls() const { return tiny_shapes_layer_filtered_.call_count(); }
 
     private:
         CachedStage<std::tuple<AbstractId, uint64_t>, std::vector<RenderedShape>> generated_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::vector<RenderedShape>> viewport_filtered_;
         CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<RenderedShape>>> layer_filtered_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::vector<TinyShapeDot>> tiny_shapes_viewport_filtered_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<Point>>> tiny_shapes_layer_filtered_;
     };
 }
