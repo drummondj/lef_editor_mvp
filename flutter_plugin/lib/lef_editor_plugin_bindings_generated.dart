@@ -842,6 +842,30 @@ class LefEditorPluginBindings {
   late final _le_mouse_up = _le_mouse_upPtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
 
+  /// @brief Instructional text describing which mouse gestures and
+  /// keyboard modifiers are currently available, for display in the
+  /// GUI's status bar below the texture (UPDATES.md item 7.3) - e.g.
+  /// "Left click to select. Shift for multi-select. Left click and
+  /// drag for rectangle multi-select." for the current (and, for now,
+  /// only) interaction mode, Select - see UPDATES.md item 7's own
+  /// intro for the other modes this will eventually distinguish
+  /// between. Unlike every other `const char*`-returning function in
+  /// this header, the returned pointer refers to static, process-
+  /// lifetime storage - not owned by `handle`, never invalidated, safe
+  /// to hold indefinitely. Null only if `handle` is null.
+  ffi.Pointer<ffi.Char> le_tooltip_message(ffi.Pointer<LeHandle> handle) {
+    return _le_tooltip_message(handle);
+  }
+
+  late final _le_tooltip_messagePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>)
+        >
+      >('le_tooltip_message');
+  late final _le_tooltip_message = _le_tooltip_messagePtr
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>)>();
+
   /// @brief Number of currently selected objects (Scene::selection()).
   /// Indexes the `selection_index` parameter of le_selected_object_kind()/
   /// le_selected_object_property_count()/le_selected_object_property_at()

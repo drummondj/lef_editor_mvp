@@ -658,6 +658,18 @@ class LeEditor {
     _bindings.le_mouse_up(_handle, x, y);
   }
 
+  /// Instructional text describing which mouse gestures and keyboard
+  /// modifiers are currently available, for display in the GUI's status
+  /// bar below the texture - e.g. "Left click to select. Shift for
+  /// multi-select. Left click and drag for rectangle multi-select." for
+  /// the current (and, for now, only) interaction mode, Select.
+  String get tooltipMessage {
+    _checkNotDisposed();
+    final msgPtr = _bindings.le_tooltip_message(_handle);
+    if (msgPtr == ffi.nullptr) return '';
+    return msgPtr.cast<pkg_ffi.Utf8>().toDartString();
+  }
+
   /// Number of currently selected objects. Indexes [selectedObjectKind]/
   /// [selectedObjectProperties]' own `selectionIndex` parameter,
   /// 0..this-1, in the same (insertion) order as the selection itself.

@@ -74,6 +74,9 @@ class LeProvider extends ChangeNotifier {
   int _selectedCount = 0;
   int get selectedCount => _selectedCount;
 
+  String _tooltipMessage = '';
+  String get tooltipMessage => _tooltipMessage;
+
   final List<LeSelectedObjectInfo> _selectedObjects = [];
   List<LeSelectedObjectInfo> get selectedObjects => _selectedObjects;
 
@@ -100,6 +103,13 @@ class LeProvider extends ChangeNotifier {
         _editor.snappedMousePosition!.yUm,
       );
     }
+  }
+
+  // A cheap direct read (no version-gating needed, unlike
+  // refreshSelection/refreshMessages - there's no list to accumulate
+  // and nothing costly to skip).
+  void refreshTooltipMessage() {
+    _tooltipMessage = _editor.tooltipMessage;
   }
 
   // Rebuilding _selectedObjects makes several FFI calls per selected
@@ -156,6 +166,7 @@ class LeProvider extends ChangeNotifier {
     refreshSelection();
     refreshLayers();
     refreshMessages();
+    refreshTooltipMessage();
     refreshTexture();
     notifyListeners();
   }

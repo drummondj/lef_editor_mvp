@@ -197,30 +197,23 @@ TEST_F(ApiFixture, ReadLefWithAWarningProducingFileSucceedsAndAppendsAWarningMes
     EXPECT_TRUE(found_warning);
 }
 
-TEST_F(ApiFixture, SuccessfulReadLefAppendsAnInfoMessage)
+TEST_F(ApiFixture, SuccessfulReadLefWithNoDiagnosticsAppendsNoMessages)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
-    ASSERT_GT(le_message_count(handle), 0);
-
-    bool found_info = false;
-    for (int32_t i = 0; i < le_message_count(handle); ++i)
-    {
-        const char *msg = le_message_at(handle, i);
-        ASSERT_NE(msg, nullptr);
-        if (std::string(msg).find("INFO") != std::string::npos)
-            found_info = true;
-    }
-    EXPECT_TRUE(found_info);
+    EXPECT_EQ(le_message_count(handle), 0);
 }
 
 TEST_F(ApiFixture, MessagesAccumulateAcrossMultipleReadLefCalls)
 {
-    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    // warning_currentden.lef - a valid LEF that still produces a WARNING
+    // (CURRENTDEN is obsolete on any version >= 5.2) - used twice so
+    // each read independently contributes at least one message.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("warning_currentden.lef").c_str()), 0);
     const int32_t count_after_first = le_message_count(handle);
     ASSERT_GT(count_after_first, 0);
     const std::string first_message = le_message_at(handle, 0);
 
-    ASSERT_EQ(le_read_lef(handle, fixture_path("othercell.lef").c_str()), 0);
+    ASSERT_EQ(le_read_lef(handle, fixture_path("warning_currentden.lef").c_str()), 0);
     const int32_t count_after_second = le_message_count(handle);
     EXPECT_GT(count_after_second, count_after_first);
 
@@ -232,7 +225,7 @@ TEST_F(ApiFixture, MessagesAccumulateAcrossMultipleReadLefCalls)
 
 TEST_F(ApiFixture, MessageAtOutOfRangeOrNullHandleReturnsNull)
 {
-    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_read_lef(handle, fixture_path("warning_currentden.lef").c_str()), 0);
     const int32_t count = le_message_count(handle);
     ASSERT_GT(count, 0);
 
@@ -240,6 +233,19 @@ TEST_F(ApiFixture, MessageAtOutOfRangeOrNullHandleReturnsNull)
     EXPECT_EQ(le_message_at(handle, -1), nullptr);
     EXPECT_EQ(le_message_at(nullptr, 0), nullptr);
     EXPECT_EQ(le_message_count(nullptr), 0);
+}
+
+// le_tooltip_message (UPDATES.md item 7.3).
+TEST_F(ApiFixture, TooltipMessageReturnsTheSelectModeInstructions)
+{
+    const char *tooltip = le_tooltip_message(handle);
+    ASSERT_NE(tooltip, nullptr);
+    EXPECT_NE(std::string(tooltip).find("Left click to select"), std::string::npos);
+}
+
+TEST_F(ApiFixture, TooltipMessageWithNullHandleReturnsNull)
+{
+    EXPECT_EQ(le_tooltip_message(nullptr), nullptr);
 }
 
 TEST_F(ApiFixture, DesignCountAndNameAreZeroOrNullForNullHandle)

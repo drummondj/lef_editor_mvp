@@ -87,6 +87,14 @@ namespace
     constexpr int32_t kKeyFitPaddingPx = 10;
     constexpr double kKeyPanFactor = 0.25;
 
+    // le_tooltip_message's own text (UPDATES.md item 7.3) - only one
+    // interaction mode (Select) exists today, so this is a single fixed
+    // string rather than a lookup keyed on some not-yet-existing mode
+    // enum; when a second mode is added, le_tooltip_message grows a
+    // branch, not this constant a sibling.
+    constexpr const char *kSelectModeTooltip =
+        "Left click to select. Shift for multi-select. Left click and drag for rectangle multi-select.";
+
     // Maps le::PropertyValue::Type (generated/property.hpp) to the C API's
     // LePropertyType - kept as an explicit switch rather than a bare
     // static_cast so a future reordering of either enum fails to compile
@@ -839,6 +847,13 @@ extern "C"
         }
 
         handle->scene.end_drag();
+    }
+
+    const char *le_tooltip_message(LeHandle *handle)
+    {
+        if (!handle)
+            return nullptr;
+        return kSelectModeTooltip;
     }
 
     int32_t le_selection_count(LeHandle *handle)
