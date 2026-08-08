@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor_plugin/lef_editor_plugin.dart';
 
@@ -345,6 +346,11 @@ class LeProvider extends ChangeNotifier {
 
   void handlePointerEvent(PointerEvent event) {
     _editor.handlePointerEvent(event);
+    refreshAndNotify();
+  }
+
+  void handlePointerSignal(PointerSignalEvent event) {
+    _editor.handlePointerSignal(event);
     refreshAndNotify();
   }
 

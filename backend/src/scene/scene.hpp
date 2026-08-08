@@ -288,7 +288,19 @@ namespace le
             return Point{snap(dbu->x), snap(dbu->y)};
         }
 
-        // --- Drag-select gesture (UPDATES.md 7.1 items 5-6) ---
+        // --- Drag-select / drag-zoom gesture (UPDATES.md 7.1 items 5-6, 9.3) ---
+        // Which high-level action a drag gesture should perform once it
+        // ends - Scene itself doesn't interpret this, it's purely a label
+        // the caller (le_mouse_down/le_zoom_drag_down, and later
+        // le_mouse_up) attaches to and reads back, so the same rubber-band
+        // machinery below serves both left-button drag-select and
+        // right-button drag-zoom without duplicating it.
+        enum class DragKind
+        {
+            SELECT,
+            ZOOM,
+        };
+
         // Tracks a mouse-down-to-mouse-up rubber-band gesture in screen
         // pixels (top-left origin, y down - same convention as
         // set_mouse_position). The frontend calls begin_drag on
@@ -296,15 +308,18 @@ namespace le
         // le_mouse_up), which decide there whether the gesture was a
         // plain click or an actual drag (by comparing the down/up pixel
         // distance against a small threshold) and perform the
-        // corresponding selection - Scene itself doesn't know which
+        // corresponding action - Scene itself doesn't know which
         // interpretation applies, it just tracks the raw gesture state
-        // and derives drag_rect_dbu() from it plus the current mouse
-        // position.
-        void begin_drag(int32_t x_px, int32_t y_px)
+        // (plus which `kind` was requested) and derives drag_rect_dbu()
+        // from it plus the current mouse position. `kind` defaults to
+        // SELECT so the existing le_mouse_down call site (left-button
+        // drag-select) needs no change.
+        void begin_drag(int32_t x_px, int32_t y_px, DragKind kind = DragKind::SELECT)
         {
             dragging_ = true;
             drag_start_x_px_ = x_px;
             drag_start_y_px_ = y_px;
+            drag_kind_ = kind;
             ++mouse_version_; // so the drag-rect overlay (Renderer, see UPDATES.md 7.1 item 5's live rectangle) starts showing immediately
         }
 
@@ -315,6 +330,7 @@ namespace le
         }
 
         bool is_dragging() const { return dragging_; }
+        DragKind drag_kind() const { return drag_kind_; }
         int32_t drag_start_x_px() const { return drag_start_x_px_; }
         int32_t drag_start_y_px() const { return drag_start_y_px_; }
 
@@ -667,6 +683,7 @@ namespace le
         bool has_mouse_position_ = false;
         uint64_t mouse_version_ = 0;
         bool dragging_ = false;
+        DragKind drag_kind_ = DragKind::SELECT;
         int32_t drag_start_x_px_ = 0;
         int32_t drag_start_y_px_ = 0;
         std::unordered_set<int32_t> held_keys_;

@@ -16,7 +16,29 @@ final Map<LogicalKeyboardKey, LeKeyCode> _keyCodeMap = {
   LogicalKeyboardKey.arrowRight: LeKeyCode.LE_KEY_PAN_RIGHT,
   LogicalKeyboardKey.arrowUp: LeKeyCode.LE_KEY_PAN_UP,
   LogicalKeyboardKey.arrowDown: LeKeyCode.LE_KEY_PAN_DOWN,
+  LogicalKeyboardKey.controlLeft: LeKeyCode.LE_KEY_CTRL,
+  LogicalKeyboardKey.controlRight: LeKeyCode.LE_KEY_CTRL,
+  LogicalKeyboardKey.keyA: LeKeyCode.LE_KEY_SELECT_ALL,
+  LogicalKeyboardKey.keyD: LeKeyCode.LE_KEY_DESELECT_ALL,
+  LogicalKeyboardKey.digit1: LeKeyCode.LE_KEY_1,
+  LogicalKeyboardKey.digit2: LeKeyCode.LE_KEY_2,
+  LogicalKeyboardKey.digit3: LeKeyCode.LE_KEY_3,
+  LogicalKeyboardKey.digit4: LeKeyCode.LE_KEY_4,
+  LogicalKeyboardKey.digit5: LeKeyCode.LE_KEY_5,
+  LogicalKeyboardKey.digit6: LeKeyCode.LE_KEY_6,
+  LogicalKeyboardKey.digit7: LeKeyCode.LE_KEY_7,
+  LogicalKeyboardKey.digit8: LeKeyCode.LE_KEY_8,
+  LogicalKeyboardKey.digit9: LeKeyCode.LE_KEY_9,
 };
+
+/// Fixed per-scroll-event zoom step (UPDATES.md 9.2) - smaller than
+/// [LeKeyCode.LE_KEY_ZOOM]'s own fixed step (0.3, see api.cpp's
+/// kKeyZoomFactor) since a single trackpad/wheel gesture fires many
+/// [PointerScrollEvent]s in quick succession; only the sign of
+/// [PointerScrollEvent.scrollDelta]'s y component is used, not its
+/// magnitude, which varies too wildly across input devices to use
+/// directly (same "fixed step" reasoning as the keyboard shortcut).
+const double kScrollZoomFactor = 0.1;
 
 /// Converts standard Flutter `PointerEvent`/`KeyEvent` input straight into
 /// [LeEditor]'s low-level selection API (`mouseDown`/`mouseUp`/
@@ -45,16 +67,20 @@ extension LeEditorInput on LeEditor {
     switch (event) {
       case PointerDownEvent():
         setMousePosition(x, y);
-        // Only the primary (left) button drives selection - a right-click
-        // is left for a future context-menu mode, not a click/drag-select
-        // gesture. `buttons` at down-time is the button(s) that just went
-        // down, so this check is reliable here (unlike on the matching
-        // PointerUpEvent below, where `buttons` reflects what's *still*
-        // held post-release and can't identify which button was lifted -
-        // so mouseUp is forwarded unconditionally instead; le_mouse_up is
-        // already a no-op without a preceding le_mouse_down, so a right-
-        // click's up event is harmless).
+        // The primary (left) button drives click/drag-select; the
+        // secondary (right) button drives click/drag rectangle-zoom
+        // (UPDATES.md 9.3) instead - the two gestures share the same
+        // rubber-band machinery on the backend, differing only in which
+        // one started it. `buttons` at down-time is the button(s) that
+        // just went down, so this check is reliable here (unlike on the
+        // matching PointerUpEvent below, where `buttons` reflects what's
+        // *still* held post-release and can't identify which button was
+        // lifted - so mouseUp is forwarded unconditionally instead;
+        // le_mouse_up is already a no-op without a preceding
+        // mouseDown/zoomDragDown, so an unrelated button's up event is
+        // harmless).
         if (event.buttons & kPrimaryButton != 0) mouseDown(x, y);
+        if (event.buttons & kSecondaryButton != 0) zoomDragDown(x, y);
       case PointerUpEvent():
         setMousePosition(x, y);
         mouseUp(x, y);
@@ -71,6 +97,24 @@ extension LeEditorInput on LeEditor {
         clearMousePosition();
       default:
         break; // e.g. scroll/pan/zoom signal events - not this API's job.
+    }
+  }
+
+  /// Converts a mouse scroll-wheel/trackpad signal straight into
+  /// [LeEditor.zoom] (UPDATES.md 9.2), anchored at the pointer's current
+  /// position. Flutter delivers this via `Listener.onPointerSignal` - a
+  /// different callback/type hierarchy (`PointerSignalEvent`) from
+  /// `onPointerDown`/`onPointerMove`/etc's `PointerEvent`, so it needs its
+  /// own wiring:
+  /// ```dart
+  /// onPointerSignal: editor.handlePointerSignal,
+  /// ```
+  /// No-op for any [PointerSignalEvent] other than [PointerScrollEvent]
+  /// (e.g. a future pointer-pan-zoom event isn't handled here).
+  void handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      final factor = event.scrollDelta.dy < 0 ? kScrollZoomFactor : -kScrollZoomFactor;
+      zoom(factor, event.localPosition.dx.round(), event.localPosition.dy.round());
     }
   }
 

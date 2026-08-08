@@ -646,13 +646,28 @@ class LeEditor {
     _bindings.le_mouse_down(_handle, x, y);
   }
 
+  /// Begins a rectangle-zoom gesture at [x]/[y] (same pixel space as
+  /// [mouseDown]), e.g. on a right-button pointer-down event. Like
+  /// [mouseDown], only records the gesture's anchor point - [mouseUp] is
+  /// the shared endpoint for both gesture kinds (see its own doc for why).
+  void zoomDragDown(int x, int y) {
+    _checkNotDisposed();
+    _bindings.le_zoom_drag_down(_handle, x, y);
+  }
+
   /// Ends a mouse gesture at [x]/[y], e.g. on a pointer-up event. A no-op
-  /// if there was no matching [mouseDown] call first. Click (small down/up
-  /// distance) hit-tests the single point; drag-select (larger distance)
-  /// hit-tests every selectable shape on every layer fully enclosed by the
-  /// down/up rectangle - either way, replaces the current selection unless
-  /// [LeKeyCode.LE_KEY_SHIFT] is currently held ([isKeyHeld]), in which
-  /// case the results are added to it instead.
+  /// if there was no matching [mouseDown]/[zoomDragDown] call first.
+  ///
+  /// - Started by [mouseDown]: click (small down/up distance) hit-tests the
+  ///   single point; drag-select (larger distance) hit-tests every
+  ///   selectable shape on every layer fully enclosed by the down/up
+  ///   rectangle - either way, replaces the current selection unless
+  ///   [LeKeyCode.LE_KEY_SHIFT] is currently held ([isKeyHeld]), in which
+  ///   case the results are added to it instead.
+  /// - Started by [zoomDragDown]: fits the viewport to the down/up
+  ///   rectangle (same math as [fitScene] with 0 padding), unless the drag
+  ///   was click-sized, in which case nothing happens. Selection is
+  ///   untouched either way.
   void mouseUp(int x, int y) {
     _checkNotDisposed();
     _bindings.le_mouse_up(_handle, x, y);

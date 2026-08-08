@@ -743,6 +743,15 @@ namespace le
         static constexpr Color kDragRectStrokeColor = {80, 160, 255, 220};
         static constexpr float kDragRectStrokeWidth = 2.0f;
 
+        // Rectangle-zoom drag (UPDATES.md 9.3) - same translucent-fill +
+        // solid-stroke style as the select-drag rectangle above, but a
+        // different color family (green, not yet used by any other
+        // overlay) so the two gestures read as visually distinct before
+        // release, not just after - draw_drag_rect picks between the two
+        // based on Scene::drag_kind().
+        static constexpr Color kZoomDragRectFillColor = {80, 255, 160, 60};
+        static constexpr Color kZoomDragRectStrokeColor = {80, 255, 160, 220};
+
         // Renders one FillPattern into a small transparent-background tile
         // and wraps it in a kRepeat/kRepeat SkShader - this project's
         // answer to "maybe using a shader?" (UPDATES.md 2.3): Skia's
@@ -1114,14 +1123,17 @@ namespace le
                     stroke_polygon(buffered);
         }
 
-        // Draws the live rubber-band drag-select rectangle (UPDATES.md
-        // 7.1 item 5), in the same pre-flip pixel space as
-        // draw_grid/draw_cursor/draw_hover_outline. No-op if no drag is
-        // in progress or no mouse position has been set yet (see
-        // Scene::drag_rect_dbu) - the same rect le_mouse_up will
-        // eventually hit-test against (Pipeline::hit_test_rect), so what
-        // the user sees while dragging matches what actually gets
-        // selected on release.
+        // Draws the live rubber-band drag rectangle - drag-select
+        // (UPDATES.md 7.1 item 5) or drag-zoom (UPDATES.md 9.3),
+        // distinguished by color via Scene::drag_kind() - in the same
+        // pre-flip pixel space as draw_grid/draw_cursor/
+        // draw_hover_outline. No-op if no drag is in progress or no
+        // mouse position has been set yet (see Scene::drag_rect_dbu) -
+        // for a select-drag, the same rect le_mouse_up will eventually
+        // hit-test against (Pipeline::hit_test_rect), so what the user
+        // sees while dragging matches what actually gets selected on
+        // release; for a zoom-drag, the same rect le_mouse_up will fit
+        // the viewport to (Scene::fit_to_content).
         static void draw_drag_rect(SkCanvas &canvas, const Scene &scene)
         {
             const double scale = scene.scale();
@@ -1144,17 +1156,19 @@ namespace le
                 to_pixel(drag_rect->ll).x(), to_pixel(drag_rect->ll).y(),
                 to_pixel(drag_rect->ur).x(), to_pixel(drag_rect->ur).y());
 
+            const bool is_zoom = scene.drag_kind() == Scene::DragKind::ZOOM;
+
             SkPaint fill;
             fill.setAntiAlias(true);
             fill.setStyle(SkPaint::kFill_Style);
-            fill.setColor(to_sk_color(kDragRectFillColor));
+            fill.setColor(to_sk_color(is_zoom ? kZoomDragRectFillColor : kDragRectFillColor));
             canvas.drawRect(rect, fill);
 
             SkPaint stroke;
             stroke.setAntiAlias(true);
             stroke.setStyle(SkPaint::kStroke_Style);
             stroke.setStrokeWidth(kDragRectStrokeWidth);
-            stroke.setColor(to_sk_color(kDragRectStrokeColor));
+            stroke.setColor(to_sk_color(is_zoom ? kZoomDragRectStrokeColor : kDragRectStrokeColor));
             canvas.drawRect(rect, stroke);
         }
 

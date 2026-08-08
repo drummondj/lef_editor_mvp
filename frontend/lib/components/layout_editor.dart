@@ -53,6 +53,7 @@ class _LayoutEditorState extends State<LayoutEditor> {
                 onPointerHover: provider.handlePointerEvent,
                 onPointerUp: provider.handlePointerEvent,
                 onPointerCancel: provider.handlePointerEvent,
+                onPointerSignal: provider.handlePointerSignal,
                 child: SizedBox(
                   width: constraints.maxWidth,
                   height: constraints.maxHeight,

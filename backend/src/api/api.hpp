@@ -453,6 +453,39 @@ extern "C"
         LE_KEY_PAN_RIGHT = 5,
         LE_KEY_PAN_UP = 6,
         LE_KEY_PAN_DOWN = 7,
+        /// A pure modifier, tracked exactly like LE_KEY_SHIFT - held
+        /// state only, no immediate action of its own. Read by
+        /// LE_KEY_SELECT_ALL (UPDATES.md 9.1), LE_KEY_DESELECT_ALL
+        /// (UPDATES.md 9.5), and LE_KEY_FIT (UPDATES.md 9.6).
+        LE_KEY_CTRL = 8,
+        /// Select-all (UPDATES.md 9.1) - an "action" code like
+        /// LE_KEY_ZOOM/LE_KEY_FIT/LE_KEY_PAN_*, but only actually does
+        /// anything while LE_KEY_CTRL is currently held (see le_key_down's
+        /// own doc comment) - a bare "a" press with Ctrl not held is a
+        /// deliberate no-op, not "select nothing."
+        LE_KEY_SELECT_ALL = 9,
+        /// Digit keys 1-9 toggle the Nth ROUTING layer's visibility
+        /// (UPDATES.md 9.4) - LE_KEY_1 is the first ROUTING layer in the
+        /// current Technology's own declaration order, LE_KEY_2 the
+        /// second, etc.; a no-op if there's no Nth ROUTING layer. See
+        /// le_key_down's own doc comment for the VIA-pairing behavior
+        /// this triggers that a direct le_set_layer_name_visible() call
+        /// deliberately does not.
+        LE_KEY_1 = 10,
+        LE_KEY_2 = 11,
+        LE_KEY_3 = 12,
+        LE_KEY_4 = 13,
+        LE_KEY_5 = 14,
+        LE_KEY_6 = 15,
+        LE_KEY_7 = 16,
+        LE_KEY_8 = 17,
+        LE_KEY_9 = 18,
+        /// Deselect-all (UPDATES.md 9.5) - same "action code, gated on
+        /// LE_KEY_CTRL" shape as LE_KEY_SELECT_ALL, but simply clears the
+        /// current selection rather than building a new one; a bare "d"
+        /// press with Ctrl not held is a deliberate no-op, same reasoning
+        /// as LE_KEY_SELECT_ALL's own comment.
+        LE_KEY_DESELECT_ALL = 19,
     };
 
     /// @brief Mark `key_code` (an LeKeyCode value) as currently held,
@@ -469,9 +502,37 @@ extern "C"
     ///   current mouse position (Scene::mouse_x_px/mouse_y_px - i.e.
     ///   wherever le_set_mouse_position was last called for); zooms in,
     ///   or out if LE_KEY_SHIFT is currently held (le_is_key_held).
-    /// - LE_KEY_FIT: le_fit_scene() with a fixed padding.
+    /// - LE_KEY_FIT: le_fit_scene() with a fixed padding - or, if
+    ///   LE_KEY_CTRL is currently held (UPDATES.md 9.6, "Ctrl-F fit
+    ///   selected"), fits the viewport to the current selection's own
+    ///   combined bbox instead (same fixed padding; piece-scoped for any
+    ///   selection entry with a piece set, same scoping
+    ///   build_selected_object_properties's own bbox_um property uses -
+    ///   see api.cpp), leaving the view unchanged if nothing is selected
+    ///   rather than falling back to the whole-content fit.
     /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
     ///   viewport-fraction step in the corresponding direction.
+    /// - LE_KEY_SELECT_ALL (UPDATES.md 9.1): only while LE_KEY_CTRL is
+    ///   currently held - clears the current selection, then selects
+    ///   every currently selectable shape in the current Abstract
+    ///   regardless of viewport (not just what's on screen), up to a
+    ///   fixed cap of 10,000 objects. If the design has more selectable
+    ///   shapes than that, the selection stops at the cap and a
+    ///   "WARNING: Selection capped..." entry is appended to the
+    ///   le_message_count()/le_message_at() queue (UPDATES.md item 3) -
+    ///   there's no separate "was it capped" return value, this is the
+    ///   same mechanism any other backend-originated message uses.
+    /// - LE_KEY_1..LE_KEY_9 (UPDATES.md 9.4): toggles the Nth ROUTING
+    ///   layer's visibility (a no-op if there's no Nth ROUTING layer),
+    ///   then - only via this keyboard path, never from a direct
+    ///   le_set_layer_name_visible() call - re-checks every pair of
+    ///   adjacent ROUTING layers: if both are now visible, every CUT
+    ///   layer between them (LEF has no distinct "VIA" layer type - vias
+    ///   are TYPE CUT layers - see this header's own LeKeyCode comment)
+    ///   becomes visible too; if not, those CUT layers become invisible.
+    /// - LE_KEY_DESELECT_ALL (UPDATES.md 9.5): only while LE_KEY_CTRL is
+    ///   currently held - clears the current selection. A no-op (not an
+    ///   error) if the selection was already empty.
     ///
     /// A no-op if handle is null.
     void le_key_down(LeHandle *handle, int32_t key_code);
@@ -506,14 +567,32 @@ extern "C"
     /// handle is null.
     void le_mouse_down(LeHandle *handle, int32_t x, int32_t y);
 
+    /// @brief Like le_mouse_down(), but begins a rectangle-*zoom* gesture
+    /// instead of a drag-*select* one (UPDATES.md 9.3 - e.g. on a
+    /// right-button pointer-down event) - le_mouse_up() is still the one
+    /// call that ends either kind, deciding which behavior to run from
+    /// which of le_mouse_down()/le_zoom_drag_down() started it (see its
+    /// own doc comment). A no-op if handle is null.
+    void le_zoom_drag_down(LeHandle *handle, int32_t x, int32_t y);
+
     /// @brief End a mouse gesture at the given pixel position, e.g. on a
-    /// pointer-up event. A no-op if handle is null or there was no
-    /// matching le_mouse_down() call first (a stray/duplicate mouse-up).
-    /// Two outcomes, both subject to Pipeline::hit_test_point/
-    /// hit_test_rect's own topmost-layer-first (click) / all-layers
-    /// (drag) and layer-selectability rules, and both consulting
-    /// LE_KEY_SHIFT's current held state (see le_key_down) rather than
-    /// taking it as a parameter here:
+    /// pointer-up event - the single shared endpoint for both
+    /// le_mouse_down()'s drag-select gesture and
+    /// le_zoom_drag_down()'s drag-zoom gesture (UPDATES.md 9.3); which
+    /// one runs depends entirely on which of those two started the
+    /// in-progress gesture, not on which mouse button this call itself
+    /// corresponds to (a real up-event's own "which button" state isn't
+    /// reliably available at release time on every platform, so the
+    /// frontend doesn't need to track or pass it here - only the down
+    /// side needs to pick correctly). A no-op if handle is null or there
+    /// was no matching le_mouse_down()/le_zoom_drag_down() call first (a
+    /// stray/duplicate mouse-up).
+    ///
+    /// **Started by le_mouse_down()** - two outcomes, both subject to
+    /// Pipeline::hit_test_point/hit_test_rect's own topmost-layer-first
+    /// (click) / all-layers (drag) and layer-selectability rules, and
+    /// both consulting LE_KEY_SHIFT's current held state (see
+    /// le_key_down) rather than taking it as a parameter here:
     ///
     /// - **Click** (down/up pixel distance below a small threshold): hit-
     ///   tests the single point. Without shift held, replaces the
@@ -525,6 +604,14 @@ extern "C"
     ///   rectangle between the down and up points. Without shift held,
     ///   replaces the current selection with the results; with shift
     ///   held, adds them to it.
+    ///
+    /// **Started by le_zoom_drag_down()** (UPDATES.md 9.3): a click-sized
+    /// release (same threshold as above) is a no-op - fitting to a
+    /// near-zero-size rectangle would produce an absurd scale; otherwise
+    /// fits the viewport to the rectangle between the down and up points
+    /// (Scene::fit_to_content, no padding), the same fitting math
+    /// le_fit_scene() uses for a Design's own content bbox. Selection is
+    /// untouched either way - this gesture is purely navigational.
     ///
     /// Either way, ends the in-progress drag gesture (Scene::end_drag) -
     /// see le_mouse_down's own doc comment for the live rubber-band

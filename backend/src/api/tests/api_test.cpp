@@ -578,6 +578,81 @@ TEST_F(ApiFixture, SetLayerNameVisibleWithNullHandleOrNullNameDoesNotCrash)
     le_set_layer_name_visible(handle, nullptr, 0);
 }
 
+TEST_F(ApiFixture, DigitKeysToggleTheNthRoutingLayerAndPairTheCutLayerBetweenThem)
+{
+    // via_pairing.lef: M1 (ROUTING, index 0 -> LE_KEY_1), V1 (CUT, between
+    // M1/M2), M2 (ROUTING, index 1 -> LE_KEY_2). No MACRO needed - the
+    // Technology's own layer list is populated straight from LAYER
+    // statements (see LEFReader::lefrLayerCbkFn), independent of any
+    // Library/Design.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0);
+
+    ASSERT_NE(le_is_layer_name_visible(handle, "M1"), 0); // default-visible
+    ASSERT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "V1"), 0);
+
+    le_key_down(handle, LE_KEY_1); // M1 -> hidden
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V1"), 0); // M1/M2 no longer both visible
+
+    le_key_down(handle, LE_KEY_2); // M2 -> hidden too (M1 already hidden)
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V1"), 0); // still not both visible
+
+    le_key_down(handle, LE_KEY_1); // M1 -> visible again; M2 still hidden
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V1"), 0);
+
+    le_key_down(handle, LE_KEY_2); // M2 -> visible again; now both M1/M2 visible
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0); // V1 paired on
+
+    le_key_down(handle, LE_KEY_1); // M1 -> hidden again
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V1"), 0); // V1 paired back off
+}
+
+TEST_F(ApiFixture, ManualLayerVisibilityDoesNotTriggerViaPairing)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0);
+
+    le_set_layer_name_visible(handle, "M1", 0);
+    le_set_layer_name_visible(handle, "M2", 0);
+    le_set_layer_name_visible(handle, "V1", 0);
+    ASSERT_EQ(le_is_layer_name_visible(handle, "V1"), 0);
+
+    // Manually re-visible-ing both routing layers through the direct API
+    // (as a layer-manager click would) must not re-trigger the pairing
+    // logic - that's only wired into the LE_KEY_1..LE_KEY_9 path.
+    le_set_layer_name_visible(handle, "M1", 1);
+    le_set_layer_name_visible(handle, "M2", 1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V1"), 0); // still hidden - no pairing happened
+}
+
+TEST_F(ApiFixture, DigitKeyWithNoNthRoutingLayerIsANoOp)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0);
+
+    // Only two ROUTING layers (M1, M2) exist - LE_KEY_3..LE_KEY_9 have no
+    // 3rd+ routing layer to toggle.
+    le_key_down(handle, LE_KEY_3);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0);
+}
+
+TEST_F(ApiFixture, DigitKeyWithNoTechnologyReadYetDoesNotCrash)
+{
+    le_key_down(handle, LE_KEY_1); // no le_read_lef call at all
+}
+
+TEST_F(ApiFixture, DigitKeyWithNullHandleDoesNotCrash)
+{
+    le_key_down(nullptr, LE_KEY_1);
+}
+
 TEST_F(ApiFixture, PurposeVisibilityDefaultsTrueAndRoundTrips)
 {
     EXPECT_NE(le_is_purpose_visible(handle, 1), 0); // OBSTRUCTION
@@ -951,6 +1026,98 @@ TEST_F(ApiFixture, KeyDownZoomWithoutAMousePositionSetDoesNotCrash)
     EXPECT_NE(buffer.data, nullptr);
 }
 
+TEST_F(ApiFixture, ZoomDragFitsTheDraggedRectToTheViewport)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+
+    // Scene starts at pan (0,0)/scale 1.0. Drag from pixel (0,100) [dbu
+    // (0,0), via pixel_to_dbu] to pixel (10000,-9900) [dbu (10000,10000)] -
+    // chosen so the resulting drag rect is exactly the macro's own
+    // (0,0)-(10000,10000) bbox. Feeding that into fit_to_content (padding
+    // 0, 100x100 viewport) lands on scale 0.01 / pan (0,0) - the same
+    // state the existing le_zoom(handle, 100.0/10000.0-1.0, 0, 100)-based
+    // zoom tests use - so this reuses their already-verified pixel
+    // assertions (PIN A at device (20,20)-(80,80)) as proof the rect-zoom
+    // math matches Scene::fit_to_content exactly.
+    le_zoom_drag_down(handle, 0, 100);
+    le_mouse_up(handle, 10000, -9900);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 23, 48, 27, 52)); // inside the pin, near its left edge
+    EXPECT_FALSE(region_has_opaque_pixel(buffer, 13, 48, 17, 52)); // just outside the pin's left edge
+}
+
+TEST_F(ApiFixture, ClickSizedZoomDragDoesNotChangeTheView)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100); // -> scale 0.01, pan (0, 0); PIN A at device (20,20)-(80,80)
+
+    le_zoom_drag_down(handle, 50, 50);
+    le_mouse_up(handle, 51, 51); // dx=1,dy=1 - well under kClickDragThresholdPx, so end_drag() with no fit_to_content call
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 23, 48, 27, 52));
+    EXPECT_FALSE(region_has_opaque_pixel(buffer, 13, 48, 17, 52));
+}
+
+TEST_F(ApiFixture, ZoomDragWithoutAMouseUpLeavesTheSceneStillDragging)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+
+    le_zoom_drag_down(handle, 10, 10);
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    EXPECT_NE(buffer.data, nullptr); // no crash while a zoom drag is in progress but never released
+}
+
+TEST_F(ApiFixture, SelectDragRectangleIsBlueZoomDragRectangleIsGreen)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    le_set_viewport_size(handle, 100, 100);
+
+    // Default pan (0,0)/scale 1.0 puts the visible dbu range at
+    // (0,0)-(100,100) - far smaller than PIN A's (2000,2000)-(8000,8000)
+    // rect, so nothing from the design itself renders here; the grid dots
+    // (see draw_grid) are grayscale (R==G==B) and contribute equally to
+    // every channel, so comparing the drag rect's own green vs. blue
+    // channel is robust regardless of whether a grid dot lands on the
+    // sampled pixel.
+    le_mouse_down(handle, 10, 10);
+    le_set_mouse_position(handle, 90, 90); // Scene::drag_rect_dbu() needs a stored mouse position, not just the down-event x/y
+
+    LePixelBuffer select_buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(select_buffer.data, nullptr);
+    const uint8_t *select_pixel = select_buffer.data + static_cast<size_t>(50) * static_cast<size_t>(select_buffer.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_GT(select_pixel[3], 0);
+    EXPECT_GT(select_pixel[2], select_pixel[1]); // kDragRectFillColor = {80,160,255,60} - blue > green
+
+    le_mouse_up(handle, 90, 90);
+
+    le_zoom_drag_down(handle, 10, 10);
+    le_set_mouse_position(handle, 90, 90);
+
+    LePixelBuffer zoom_buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(zoom_buffer.data, nullptr);
+    const uint8_t *zoom_pixel = zoom_buffer.data + static_cast<size_t>(50) * static_cast<size_t>(zoom_buffer.row_bytes) + static_cast<size_t>(50) * 4;
+    EXPECT_GT(zoom_pixel[3], 0);
+    EXPECT_GT(zoom_pixel[1], zoom_pixel[2]); // kZoomDragRectFillColor = {80,255,160,60} - green > blue
+}
+
+TEST_F(ApiFixture, ZoomDragDownWithNullHandleDoesNotCrash)
+{
+    le_zoom_drag_down(nullptr, 10, 10);
+}
+
 TEST_F(ApiFixture, KeyDownFitFitsTheViewportToContent)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
@@ -1168,6 +1335,169 @@ namespace
         le_set_viewport_size(handle, 200, 200);
         le_zoom(handle, 0.01 - 1.0, 0, 200);
     }
+}
+
+TEST_F(ApiFixture, CtrlSelectAllSelectsEveryShapeRegardlessOfViewport)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // Zoom in tight on PIN A alone (huge factor, anchored at its own
+    // center) so PIN B - way off in the opposite corner of the macro - is
+    // no longer inside the viewport. select_all_unlocked bypasses
+    // filter_by_viewport_and_size entirely (see its own comment in
+    // api.cpp), so both shapes should still get selected.
+    le_zoom(handle, 5.0, 25, 175);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 2);
+}
+
+TEST_F(ApiFixture, SelectAllWithoutCtrlHeldIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_key_down(handle, LE_KEY_SELECT_ALL); // Ctrl never pressed
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, SelectAllSkipsUnselectableLayers)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_layer_name_selectable(handle, "M1", 0); // both PIN A and PIN B are on M1
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, SelectAllIsCappedAt10000AndWarns)
+{
+    const std::string path = generate_concurrency_stress_lef(10050);
+    ASSERT_EQ(le_read_lef(handle, path.c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    ASSERT_EQ(le_message_count(handle), 0);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 10000);
+
+    ASSERT_GT(le_message_count(handle), 0);
+    const std::string message = le_message_at(handle, 0);
+    EXPECT_NE(message.find("capped"), std::string::npos);
+}
+
+TEST_F(ApiFixture, SelectAllWithNullHandleDoesNotCrash)
+{
+    le_key_down(nullptr, LE_KEY_SELECT_ALL);
+}
+
+TEST_F(ApiFixture, CtrlDDeselectAllClearsTheSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+    ASSERT_EQ(le_selection_count(handle), 2);
+
+    le_key_down(handle, LE_KEY_DESELECT_ALL); // Ctrl still held from above
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, DeselectAllWithoutCtrlHeldIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_key_down(handle, LE_KEY_DESELECT_ALL); // Ctrl never pressed
+    EXPECT_EQ(le_selection_count(handle), 1);
+}
+
+TEST_F(ApiFixture, DeselectAllWhenNothingIsSelectedIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+    ASSERT_EQ(le_selection_count(handle), 0);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_DESELECT_ALL);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, DeselectAllWithNullHandleDoesNotCrash)
+{
+    le_key_down(nullptr, LE_KEY_DESELECT_ALL);
+}
+
+TEST_F(ApiFixture, CtrlFFitsTheViewportToOnlyTheSelectedShape)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // (100,100) device is empty space at the baseline scale (see
+    // load_two_shapes_at_known_scale's own comment) - neither pin reaches
+    // the viewport center.
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_FALSE(region_has_opaque_pixel(before, 80, 80, 120, 120));
+
+    le_mouse_down(handle, 25, 175); // PIN A only
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_FIT);
+
+    // PIN A's own (1,1)-(4,4) micron bbox now fills the viewport (with
+    // kKeyFitPaddingPx of margin) - the same center window that was empty
+    // at the whole-design baseline scale is now well inside it.
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(after, 80, 80, 120, 120));
+}
+
+TEST_F(ApiFixture, FitSelectedWithNoSelectionLeavesTheViewUnchanged)
+{
+    load_two_shapes_at_known_scale(handle);
+    ASSERT_EQ(le_selection_count(handle), 0);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_FIT);
+
+    // Nothing to fit to - view stays at load_two_shapes_at_known_scale's
+    // own baseline (see its comment for these exact device positions).
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 20, 170, 30, 180)); // PIN A
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 170, 20, 180, 30)); // PIN B
+}
+
+TEST_F(ApiFixture, PlainFKeyStillFitsTheWholeSceneEvenWithASelectionActive)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A only
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_key_down(handle, LE_KEY_FIT); // Ctrl not held - whole-design fit, not Ctrl-F's fit-selected
+
+    // Both pins should still be visible (generous quadrant windows -
+    // le_fit_scene's own computed scale/pan differs slightly from
+    // load_two_shapes_at_known_scale's synthetic baseline, since it fits
+    // with kKeyFitPaddingPx rather than that helper's own zoom trick, but
+    // PIN A stays in the bottom-left quadrant and PIN B in the top-right
+    // either way).
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 0, 140, 60, 200)); // PIN A's quadrant
+    EXPECT_TRUE(region_has_opaque_pixel(buffer, 140, 0, 200, 60)); // PIN B's quadrant
 }
 
 TEST_F(ApiFixture, MouseDownThenUpAsAClickSelectsTheHitShape)

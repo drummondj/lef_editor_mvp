@@ -507,6 +507,23 @@ TEST(Scene, BeginDragSetsStateAndBumpsMouseVersionNotViewportOrVisibilityVersion
     EXPECT_EQ(scene.visibility_version(), visibility_version_before);
 }
 
+TEST(Scene, BeginDragDefaultsToSelectKind)
+{
+    // Regression guard for the defaulted third parameter (UPDATES.md
+    // 9.3) - the existing le_mouse_down call site (begin_drag(x, y), no
+    // third argument) must keep behaving exactly as before.
+    Scene scene;
+    scene.begin_drag(10, 20);
+    EXPECT_EQ(scene.drag_kind(), Scene::DragKind::SELECT);
+}
+
+TEST(Scene, BeginDragAcceptsAnExplicitDragKind)
+{
+    Scene scene;
+    scene.begin_drag(10, 20, Scene::DragKind::ZOOM);
+    EXPECT_EQ(scene.drag_kind(), Scene::DragKind::ZOOM);
+}
+
 TEST(Scene, EndDragClearsDraggingAndBumpsMouseVersion)
 {
     Scene scene;

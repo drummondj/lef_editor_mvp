@@ -87,6 +87,13 @@ namespace
     constexpr int32_t kKeyFitPaddingPx = 10;
     constexpr double kKeyPanFactor = 0.25;
 
+    // LE_KEY_SELECT_ALL's own cap (UPDATES.md 9.1) - a design can have
+    // far more selectable shapes than are reasonable to hold in the
+    // selection at once (Scene::select() is O(1) average per call, but
+    // the resulting selection itself, and every later FFI round-trip
+    // over it, still scales with however many objects are in it).
+    constexpr int32_t kMaxSelectAllCount = 10000;
+
     // le_tooltip_message's own text (UPDATES.md item 7.3) - only one
     // interaction mode (Select) exists today, so this is a single fixed
     // string rather than a lookup keyed on some not-yet-existing mode
@@ -331,6 +338,192 @@ namespace
             shape_ptrs.push_back(&rs.shape);
 
         handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
+    }
+
+    // LE_KEY_FIT's Ctrl-held branch (UPDATES.md 9.6) - fits the viewport
+    // to the current selection's own combined bbox instead of the whole
+    // design's. Collects a pointer per selection entry into the same
+    // owning storage build_selected_object_properties's bbox_um property
+    // reads from (TerminalPortData::shapes/ObstructionData::shapes in
+    // `root`, or the SelectedObject's own `piece` in `scene` - both
+    // outlive this call, no copy needed), then a single Geometry::bbox
+    // call unions them - mirrors fit_scene_unlocked's own shape_ptrs
+    // pattern above. A no-op (view unchanged) if nothing is selected,
+    // unlike fit_scene_unlocked, which always has the whole design to
+    // fall back to.
+    void fit_selected_unlocked(LeHandle *handle, int32_t padding_px)
+    {
+        std::vector<const le::Shape *> shape_ptrs;
+
+        for (const le::SelectedObject &selected : handle->scene.selection())
+        {
+            if (selected.piece)
+            {
+                shape_ptrs.push_back(&*selected.piece);
+                continue;
+            }
+
+            if (const le::TerminalId *terminal_id = std::get_if<le::TerminalId>(&selected.origin))
+            {
+                for (const le::TerminalPortId port_id : handle->root.get_terminal_ports(*terminal_id))
+                {
+                    const le::TerminalPortData *port = handle->root.get_terminal_port(port_id);
+                    if (!port)
+                        continue;
+                    for (const le::Shape &shape : port->shapes)
+                        shape_ptrs.push_back(&shape);
+                }
+            }
+            else if (const le::ObstructionId *obstruction_id = std::get_if<le::ObstructionId>(&selected.origin))
+            {
+                const le::ObstructionData *obstruction = handle->root.get_obstruction(*obstruction_id);
+                if (!obstruction)
+                    continue;
+                for (const le::Shape &shape : obstruction->shapes)
+                    shape_ptrs.push_back(&shape);
+            }
+        }
+
+        if (shape_ptrs.empty())
+            return;
+
+        handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
+    }
+
+    // LE_KEY_SELECT_ALL's own body (UPDATES.md 9.1) - unlocked variant,
+    // same reasoning as zoom_unlocked/pan_unlocked/fit_scene_unlocked
+    // above (called from inside le_key_down, which already holds
+    // handle->mutex_). Deliberately uses generate_shapes +
+    // filter_by_layer_visibility directly, *not* pipeline.run() - run()
+    // also applies filter_by_viewport_and_size, which would silently
+    // exclude anything currently off-screen or sub-pixel from "select
+    // all" (the same viewport-independence fit_scene_unlocked's own
+    // generate_shapes-direct call above needs, for the same reason).
+    // Every selectable shape's own bbox is trivially inside the whole
+    // Abstract's bbox, so hit_test_rect against that bbox correctly
+    // enumerates "everything selectable" with no new traversal.
+    void select_all_unlocked(LeHandle *handle)
+    {
+        const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
+        const auto &filtered = handle->pipeline.filter_by_layer_visibility(generated, handle->scene, handle->view_layers);
+
+        std::vector<const le::Shape *> shape_ptrs;
+        shape_ptrs.reserve(generated.size());
+        for (const auto &rs : generated)
+            shape_ptrs.push_back(&rs.shape);
+        const auto bbox = le::Geometry::bbox(shape_ptrs);
+        if (!bbox)
+            return;
+
+        handle->scene.clear_selection();
+
+        const auto hits = le::Pipeline::hit_test_rect(filtered, handle->view_layers, handle->scene, *bbox);
+        for (const le::HoverTarget &hit : hits)
+        {
+            if (static_cast<int32_t>(handle->scene.selection().size()) >= kMaxSelectAllCount)
+                break;
+            handle->scene.select(hit.origin, hit.outline);
+        }
+
+        if (hits.size() > static_cast<size_t>(kMaxSelectAllCount))
+            handle->messages.push_back(fmt::format("WARNING: Selection capped at {} objects - design has more.", kMaxSelectAllCount));
+    }
+
+    // Every ROUTING-type layer in `technology_id`'s own declaration
+    // order (UPDATES.md 9.4) - LE_KEY_1 maps to index 0 here, LE_KEY_2
+    // to index 1, etc.
+    std::vector<le::LayerId> ordered_routing_layers(const le::Root &root, le::TechnologyId technology_id)
+    {
+        std::vector<le::LayerId> result;
+        for (le::LayerId layer_id : root.get_technology_layers(technology_id))
+        {
+            const le::LayerData *layer = root.get_layer(layer_id);
+            if (layer && layer->type == "ROUTING")
+                result.push_back(layer_id);
+        }
+        return result;
+    }
+
+    // Every CUT-type layer strictly between `a` and `b`'s own positions
+    // in root.get_technology_layers(technology_id)'s declaration order
+    // (UPDATES.md 9.4 - LEF has no distinct "VIA" layer type, vias are
+    // TYPE CUT layers - see LeKeyCode's own doc comment). Order-
+    // independent (a/b can be passed either way); usually exactly one,
+    // but every CUT layer in the gap is returned, not just the first,
+    // for an unusual technology that declares more than one.
+    std::vector<le::LayerId> cut_layers_between(const le::Root &root, le::TechnologyId technology_id, le::LayerId a, le::LayerId b)
+    {
+        const auto &layers = root.get_technology_layers(technology_id);
+
+        auto index_of = [&](le::LayerId id) -> std::optional<size_t>
+        {
+            for (size_t i = 0; i < layers.size(); ++i)
+                if (layers[i] == id)
+                    return i;
+            return std::nullopt;
+        };
+
+        const auto index_a = index_of(a);
+        const auto index_b = index_of(b);
+        if (!index_a || !index_b)
+            return {};
+
+        const size_t lo = std::min(*index_a, *index_b);
+        const size_t hi = std::max(*index_a, *index_b);
+
+        std::vector<le::LayerId> result;
+        for (size_t i = lo + 1; i < hi; ++i)
+        {
+            const le::LayerData *layer = root.get_layer(layers[i]);
+            if (layer && layer->type == "CUT")
+                result.push_back(layers[i]);
+        }
+        return result;
+    }
+
+    // LE_KEY_1..LE_KEY_9's own body (UPDATES.md 9.4) - unlocked-style
+    // helper (already inside le_key_down's held mutex, matches the other
+    // *_unlocked helpers' own convention above). `routing_index` is
+    // 0-based (LE_KEY_1 -> 0). No-op if there's no Nth ROUTING layer or
+    // no Technology has been read yet.
+    void toggle_routing_layer_visibility_unlocked(LeHandle *handle, int routing_index)
+    {
+        if (handle->root.get_technology_ids().empty())
+            return;
+        const le::TechnologyId technology_id = handle->root.get_technology_ids().front();
+
+        const auto routing_layers = ordered_routing_layers(handle->root, technology_id);
+        if (routing_index < 0 || static_cast<size_t>(routing_index) >= routing_layers.size())
+            return;
+
+        const le::LayerData *toggled = handle->root.get_layer(routing_layers[static_cast<size_t>(routing_index)]);
+        if (!toggled)
+            return;
+
+        handle->scene.set_layer_name_visible(toggled->name, !handle->scene.is_layer_name_visible(toggled->name));
+
+        // Only on this keyboard path (never from a direct
+        // le_set_layer_name_visible() call) - re-check every adjacent
+        // routing-layer pair and sync the CUT layer(s) between them to
+        // "both visible" (UPDATES.md 9.4). Recomputed as a full pass,
+        // not just the pairs touching the just-toggled layer - simpler
+        // to reason about/test, and a technology has at most a few
+        // dozen routing layers so the cost is trivial.
+        for (size_t i = 0; i + 1 < routing_layers.size(); ++i)
+        {
+            const le::LayerData *first = handle->root.get_layer(routing_layers[i]);
+            const le::LayerData *second = handle->root.get_layer(routing_layers[i + 1]);
+            if (!first || !second)
+                continue;
+
+            const bool both_visible = handle->scene.is_layer_name_visible(first->name) && handle->scene.is_layer_name_visible(second->name);
+            for (le::LayerId cut_id : cut_layers_between(handle->root, technology_id, routing_layers[i], routing_layers[i + 1]))
+            {
+                const le::LayerData *cut = handle->root.get_layer(cut_id);
+                if (cut)
+                    handle->scene.set_layer_name_visible(cut->name, both_visible);
+            }
+        }
     }
 }
 
@@ -758,7 +951,10 @@ extern "C"
             break;
         }
         case LE_KEY_FIT:
-            fit_scene_unlocked(handle, kKeyFitPaddingPx);
+            if (handle->scene.is_key_held(LE_KEY_CTRL))
+                fit_selected_unlocked(handle, kKeyFitPaddingPx);
+            else
+                fit_scene_unlocked(handle, kKeyFitPaddingPx);
             break;
         case LE_KEY_PAN_LEFT:
             pan_unlocked(handle, -kKeyPanFactor, 0.0);
@@ -771,6 +967,25 @@ extern "C"
             break;
         case LE_KEY_PAN_DOWN:
             pan_unlocked(handle, 0.0, -kKeyPanFactor);
+            break;
+        case LE_KEY_SELECT_ALL:
+            if (handle->scene.is_key_held(LE_KEY_CTRL))
+                select_all_unlocked(handle);
+            break;
+        case LE_KEY_1:
+        case LE_KEY_2:
+        case LE_KEY_3:
+        case LE_KEY_4:
+        case LE_KEY_5:
+        case LE_KEY_6:
+        case LE_KEY_7:
+        case LE_KEY_8:
+        case LE_KEY_9:
+            toggle_routing_layer_visibility_unlocked(handle, key_code - LE_KEY_1);
+            break;
+        case LE_KEY_DESELECT_ALL:
+            if (handle->scene.is_key_held(LE_KEY_CTRL))
+                handle->scene.clear_selection();
             break;
         default:
             break;
@@ -806,6 +1021,14 @@ extern "C"
         handle->scene.begin_drag(x, y);
     }
 
+    void le_zoom_drag_down(LeHandle *handle, int32_t x, int32_t y)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.begin_drag(x, y, le::Scene::DragKind::ZOOM);
+    }
+
     void le_mouse_up(LeHandle *handle, int32_t x, int32_t y)
     {
         if (!handle || !handle->scene.is_dragging())
@@ -815,6 +1038,26 @@ extern "C"
         const int32_t dx = x - handle->scene.drag_start_x_px();
         const int32_t dy = y - handle->scene.drag_start_y_px();
         const bool is_click = dx * dx + dy * dy < kClickDragThresholdPx * kClickDragThresholdPx;
+
+        if (handle->scene.drag_kind() == le::Scene::DragKind::ZOOM)
+        {
+            // Rectangle-zoom (UPDATES.md 9.3) - purely navigational,
+            // selection is untouched. A click-sized release is a no-op
+            // (fitting to a near-zero-size rect would produce an absurd
+            // scale) - same threshold used for the select gesture below.
+            if (!is_click)
+            {
+                const le::Point start = handle->scene.pixel_to_dbu(handle->scene.drag_start_x_px(), handle->scene.drag_start_y_px());
+                const le::Point end = handle->scene.pixel_to_dbu(x, y);
+                const le::Rect zoom_rect{
+                    .ll = le::Point{std::min(start.x, end.x), std::min(start.y, end.y)},
+                    .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
+                };
+                handle->scene.fit_to_content(zoom_rect, 0);
+            }
+            handle->scene.end_drag();
+            return;
+        }
 
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
         const bool shift = handle->scene.is_key_held(LE_KEY_SHIFT);

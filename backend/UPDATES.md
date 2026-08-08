@@ -104,7 +104,7 @@ Simple properties such as int, double, string etc are just sent as is. Coordinat
 
 I would like a toopltip message to be generated, which is used in the GUIs status bar below the texture. This tooltip will contain instructions to the user about which mouse gestures and keyboard shortcuts/modifiers are available at that time. For example, when select mode is activated the tooltip should read something click: "Left click to select. Shift for multi-select. Left click and drag for rectangle multi-select."
 
-# 8. Label placement update
+# 8. Label placement update - DONE
 
 I would like to try a different Geometry::get_label_location algorithm.
 
@@ -114,9 +114,28 @@ I would like to try a different Geometry::get_label_location algorithm.
 
 3. Please draw a cross at the origin of the label because some larger labels can overlap other shapes, so it's not obvious what the label is labeling!
 
-# 9. Mouse and keyboard event additions
+# 9. Mouse and keyboard event additions - DONE
 
 1. Ctrl-A select all but stop at 10,000 objects
 2. Mouse scroll wheel zoom in/out
 3. Right mouse button rectangle zoom
 4. 1, 2, 3 ,4 etc changes layer visibility - where 1 maps to the first routing layer, 2 to the second etc. If two adjacent routing layers are made visible via the keyboard (not when the user clicks on the layer manager), then the VIA layer between then is also made visible. Same logic in reverse for making vias invisible.
+5. Ctrl-D deselect all
+6. Ctrl-F fit selected
+
+# 10. Default layer visibility
+
+By default the only visible layers should be ROUTING, CUT and BOUNDARY, all other layers should not be visible when the user reads a LEF with LAYERs in.
+
+# 11. Modes switching and edit mode
+
+The default select mode (already implemented) can be switched to other modes, initially edit mode. During edit mode only the selected objects can be edited. To change the selection the user must switch back to select mode.
+
+Modes are changed by 2 mechanisms:
+
+1. Keyboard shortcuts: s - select mode, e - edit mode
+2. Via events in the flutter UI which requires a mode switching method in the API
+
+The current mode can be queried via the API.
+
+Details of how objects are edited to follow.
