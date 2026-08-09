@@ -148,6 +148,144 @@ namespace le
         return 0;
     }
 
+    namespace
+    {
+        int write_antenna_pwl(int (*writer)(int, double *, double *), const std::vector<AntennaPWLEntry> &entries)
+        {
+            std::vector<double> diffusions;
+            std::vector<double> ratios;
+            diffusions.reserve(entries.size());
+            ratios.reserve(entries.size());
+            for (const AntennaPWLEntry &entry : entries)
+            {
+                diffusions.push_back(entry.diffusion);
+                ratios.push_back(entry.ratio);
+            }
+            return writer(static_cast<int>(diffusions.size()), diffusions.data(), ratios.data());
+        }
+    }
+
+    int LEFWriter::write_layer_antenna_models(const std::vector<AntennaModel> &models, bool is_cut)
+    {
+        for (const AntennaModel &model : models)
+        {
+            int status = lefwLayerAntennaModel(model.oxide.c_str());
+            if (status)
+                return status;
+
+            if (model.area_ratio)
+            {
+                status = lefwLayerAntennaAreaRatio(*model.area_ratio);
+                if (status)
+                    return status;
+            }
+            if (model.cum_area_ratio)
+            {
+                status = lefwLayerAntennaCumAreaRatio(*model.cum_area_ratio);
+                if (status)
+                    return status;
+            }
+            if (model.area_factor)
+            {
+                status = lefwLayerAntennaAreaFactor(*model.area_factor, model.area_factor_diffuse_only ? "DIFFUSEONLY" : nullptr);
+                if (status)
+                    return status;
+            }
+
+            // KNOWN VENDORED-LIBRARY GAP: every "SideArea"-family writer
+            // (lefwLayerAntennaSideAreaRatio/DiffSideAreaRatio(Pwl)/
+            // CumSideAreaRatio/CumDiffSideAreaRatio(Pwl)/SideAreaFactor)
+            // checks `!lefwIsRouting` and rejects CUT layers outright
+            // (LEFW_BAD_DATA) - unlike AntennaModel/AreaRatio/DiffAreaRatio/
+            // CumAreaRatio/AreaFactor above, which all accept
+            // `!lefwIsRouting && !lefwIsCut` (confirmed by reading
+            // lefwWriter.cpp's own state checks function by function). Some
+            // of these functions' own doc comments in lefwWriter.hpp even
+            // claim "valid... if the layer type is either ROUTING or CUT",
+            // contradicting their actual .cpp implementation. lefiAntennaModel
+            // has no such restriction on the read side - a CUT layer's
+            // ANTENNASIDEAREARATIO etc. reads fine (lefrLayerCbkFn) - so
+            // these fields are readable but not re-writable on a CUT layer
+            // with this vendored writer version. Not fixed here (vendored
+            // code, per CLAUDE.md's "never edit src/lefdef" rule).
+            if (!is_cut)
+            {
+                if (model.side_area_ratio)
+                {
+                    status = lefwLayerAntennaSideAreaRatio(*model.side_area_ratio);
+                    if (status)
+                        return status;
+                }
+                if (model.cum_side_area_ratio)
+                {
+                    status = lefwLayerAntennaCumSideAreaRatio(*model.cum_side_area_ratio);
+                    if (status)
+                        return status;
+                }
+                if (model.side_area_factor)
+                {
+                    status = lefwLayerAntennaSideAreaFactor(*model.side_area_factor, model.side_area_factor_diffuse_only ? "DIFFUSEONLY" : nullptr);
+                    if (status)
+                        return status;
+                }
+            }
+
+            // Each of these four is EITHER the scalar OR the pwl list,
+            // never both (matching lefrLayerCbkFn's own reading of
+            // lefiAntennaModel's mutually-exclusive has* flags).
+            if (!model.diff_area_ratio_pwl.empty())
+                status = write_antenna_pwl(lefwLayerAntennaDiffAreaRatioPwl, model.diff_area_ratio_pwl);
+            else if (model.diff_area_ratio)
+                status = lefwLayerAntennaDiffAreaRatio(*model.diff_area_ratio);
+            else
+                status = 0;
+            if (status)
+                return status;
+
+            if (!model.cum_diff_area_ratio_pwl.empty())
+                status = write_antenna_pwl(lefwLayerAntennaCumDiffAreaRatioPwl, model.cum_diff_area_ratio_pwl);
+            else if (model.cum_diff_area_ratio)
+                status = lefwLayerAntennaCumDiffAreaRatio(*model.cum_diff_area_ratio);
+            else
+                status = 0;
+            if (status)
+                return status;
+
+            if (!is_cut)
+            {
+                if (!model.diff_side_area_ratio_pwl.empty())
+                    status = write_antenna_pwl(lefwLayerAntennaDiffSideAreaRatioPwl, model.diff_side_area_ratio_pwl);
+                else if (model.diff_side_area_ratio)
+                    status = lefwLayerAntennaDiffSideAreaRatio(*model.diff_side_area_ratio);
+                else
+                    status = 0;
+                if (status)
+                    return status;
+
+                if (!model.cum_diff_side_area_ratio_pwl.empty())
+                    status = write_antenna_pwl(lefwLayerAntennaCumDiffSideAreaRatioPwl, model.cum_diff_side_area_ratio_pwl);
+                else if (model.cum_diff_side_area_ratio)
+                    status = lefwLayerAntennaCumDiffSideAreaRatio(*model.cum_diff_side_area_ratio);
+                else
+                    status = 0;
+                if (status)
+                    return status;
+            }
+        }
+        return 0;
+    }
+
+    int LEFWriter::write_pin_antenna_values(const std::vector<PinAntennaValue> &values, int (*writer)(double, const char *))
+    {
+        for (const PinAntennaValue &entry : values)
+        {
+            const int status = writer(entry.value, entry.layer_name.empty() ? nullptr : entry.layer_name.c_str());
+            if (status)
+                return status;
+        }
+        return 0;
+    }
+
     int LEFWriter::write_units(const Root &root, TechnologyId technology_id)
     {
         const TechnologyData *technology = root.get_technology(technology_id);
@@ -454,6 +592,10 @@ namespace le
                         return status;
                 }
 
+                status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/false);
+                if (status)
+                    return status;
+
                 status = write_properties(layer->properties, /*include_numeric=*/false);
                 if (status)
                     return status;
@@ -535,6 +677,10 @@ namespace le
                     if (status)
                         return status;
                 }
+
+                status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/true);
+                if (status)
+                    return status;
 
                 status = write_properties(layer->properties);
                 if (status)
@@ -1109,6 +1255,44 @@ namespace le
         // terminal->leq is deliberately never written - lefwMacroPinLEQ is
         // obsoleted for VERSION >= 5.6 with no replacement (same
         // unreachable-at-5.8 gap as the macro-level LEQ above).
+
+        // Flat pre-5.5 (value, layer) antenna fields - AntennaGateArea has
+        // no such flat form (see lefrPinCbkFn's own comment), only the
+        // oxide-scoped one below.
+        status = write_pin_antenna_values(terminal->antenna_partial_metal_area, lefwMacroPinAntennaPartialMetalArea);
+        if (status)
+            return status;
+        status = write_pin_antenna_values(terminal->antenna_partial_metal_side_area, lefwMacroPinAntennaPartialMetalSideArea);
+        if (status)
+            return status;
+        status = write_pin_antenna_values(terminal->antenna_partial_cut_area, lefwMacroPinAntennaPartialCutArea);
+        if (status)
+            return status;
+        status = write_pin_antenna_values(terminal->antenna_diff_area, lefwMacroPinAntennaDiffArea);
+        if (status)
+            return status;
+
+        // 5.5 oxide-scoped antenna models - lefwMacroPinAntennaModel sets
+        // "current oxide" state, no explicit end call (same flat
+        // sequential-call pattern as lefwLayerAntennaModel above).
+        for (const PinAntennaModel &model : terminal->antenna_models)
+        {
+            status = lefwMacroPinAntennaModel(model.oxide.c_str());
+            if (status)
+                return status;
+            status = write_pin_antenna_values(model.gate_area, lefwMacroPinAntennaGateArea);
+            if (status)
+                return status;
+            status = write_pin_antenna_values(model.max_area_car, lefwMacroPinAntennaMaxAreaCar);
+            if (status)
+                return status;
+            status = write_pin_antenna_values(model.max_side_area_car, lefwMacroPinAntennaMaxSideAreaCar);
+            if (status)
+                return status;
+            status = write_pin_antenna_values(model.max_cut_car, lefwMacroPinAntennaMaxCutCar);
+            if (status)
+                return status;
+        }
 
         // lefwStartMacroPin doesn't change lefwState (it stays LEFW_MACRO,
         // tracked instead via the separate lefwIsMacroPin flag) - PIN

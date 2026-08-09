@@ -842,6 +842,68 @@ TEST_F(LEFReaderViaFixture, ReadsPropertyDefinitionsAndPerConstructPropertyAttac
     EXPECT_EQ(pin_a->properties[0].string_value, "signal");
 }
 
+// UPDATES.md 12 Phase 5 (antenna modeling) - a dedicated fixture file
+// rather than reusing writer_roundtrip.lef: this vendored parser's
+// use5_3/use5_4 flags (see lef.y's VERSION rule) are set once for the
+// WHOLE FILE, not per-LAYER/PIN - M1's own ANTENNALENGTHFACTOR (5.3
+// syntax, Phase 1) would make ANY 5.4+ ANTENNAMODEL/ANTENNAAREARATIO/etc.
+// anywhere else in that same file a hard parse error ("has both old and
+// new ANTENNAMODEL syntax"), confirmed by direct reader.messages()
+// inspection when this was first attempted against writer_roundtrip.lef.
+class LEFAntennaFixture : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        ASSERT_EQ(reader.read_lef(fixture_path("antenna_roundtrip.lef"), root, "test_lib"), 0);
+    }
+
+    Root root;
+    LEFReader reader;
+};
+
+TEST_F(LEFAntennaFixture, ReadsAntennaModelsOnRoutingAndCutLayersAndOnAPin)
+{
+    // Antenna ratios/areas are unitless or declared-unit values, not
+    // geometric coordinates - no microns_to_dbu conversion, matching
+    // resistance/capacitance's own treatment.
+    const LayerData *m1 = root.get_layer(root.get_layer_by_name("M1"));
+    ASSERT_TRUE(m1 != nullptr);
+    ASSERT_EQ(m1->antenna_models.size(), 1u);
+    const AntennaModel &m1_model = m1->antenna_models[0];
+    EXPECT_EQ(m1_model.oxide, "OXIDE1");
+    ASSERT_TRUE(m1_model.area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*m1_model.area_ratio, 100.0);
+    EXPECT_FALSE(m1_model.diff_area_ratio.has_value());
+    ASSERT_EQ(m1_model.diff_area_ratio_pwl.size(), 2u);
+    EXPECT_DOUBLE_EQ(m1_model.diff_area_ratio_pwl[0].diffusion, 0.1);
+    EXPECT_DOUBLE_EQ(m1_model.diff_area_ratio_pwl[0].ratio, 1.0);
+    EXPECT_DOUBLE_EQ(m1_model.diff_area_ratio_pwl[1].diffusion, 0.2);
+    EXPECT_DOUBLE_EQ(m1_model.diff_area_ratio_pwl[1].ratio, 1.5);
+    ASSERT_TRUE(m1_model.side_area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*m1_model.side_area_ratio, 50.0);
+
+    const LayerData *v1 = root.get_layer(root.get_layer_by_name("V1"));
+    ASSERT_TRUE(v1 != nullptr);
+    ASSERT_EQ(v1->antenna_models.size(), 1u);
+    EXPECT_EQ(v1->antenna_models[0].oxide, "OXIDE1");
+    ASSERT_TRUE(v1->antenna_models[0].area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*v1->antenna_models[0].area_ratio, 80.0);
+
+    const AbstractId abstract_id = root.get_design_abstract(root.get_design_by_name("ANTENNATEST"));
+    const TerminalData *pin_a = root.get_terminal(root.get_abstract_terminals(abstract_id).front());
+    ASSERT_TRUE(pin_a != nullptr);
+    ASSERT_EQ(pin_a->antenna_partial_metal_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(pin_a->antenna_partial_metal_area[0].value, 1.5);
+    EXPECT_EQ(pin_a->antenna_partial_metal_area[0].layer_name, "M1");
+
+    ASSERT_EQ(pin_a->antenna_models.size(), 1u);
+    EXPECT_EQ(pin_a->antenna_models[0].oxide, "OXIDE1");
+    ASSERT_EQ(pin_a->antenna_models[0].gate_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(pin_a->antenna_models[0].gate_area[0].value, 2.0);
+    EXPECT_EQ(pin_a->antenna_models[0].gate_area[0].layer_name, "M1");
+}
+
 TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)
 {
     // Re-reading the whole fixture into the same Root also re-declares

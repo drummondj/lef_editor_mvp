@@ -23,9 +23,9 @@ namespace
         return std::string(IO_TEST_FIXTURES_DIR) + "/" + name;
     }
 
-    std::string scratch_output_path()
+    std::string scratch_output_path(const std::string &name = "le_lef_writer_roundtrip.lef")
     {
-        return (std::filesystem::temp_directory_path() / "le_lef_writer_roundtrip.lef").string();
+        return (std::filesystem::temp_directory_path() / name).string();
     }
 
     void expect_shapes_equal(const Shape &original, const Shape &written)
@@ -545,6 +545,93 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsPropertyDefinitionsAndPerConstructPr
     ASSERT_EQ(original_pin->properties.size(), 1u);
     EXPECT_EQ(original_pin->properties[0].name, written_pin->properties[0].name);
     EXPECT_EQ(original_pin->properties[0].string_value, written_pin->properties[0].string_value);
+}
+
+// UPDATES.md 12 Phase 5 (antenna modeling) - a dedicated fixture file,
+// same reasoning as LEFAntennaFixture in lef_reader_test.cpp: the vendored
+// parser's use5_3 flag is set once for the WHOLE FILE (see lef.y's VERSION
+// rule), so writer_roundtrip.lef's own M1 ANTENNALENGTHFACTOR (5.3 syntax,
+// Phase 1) can't coexist in the same file as this phase's 5.4+
+// ANTENNAMODEL/ANTENNAAREARATIO/etc.
+class LEFAntennaRoundtripFixture : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        ASSERT_EQ(reader.read_lef(fixture_path("antenna_roundtrip.lef"), original_root, "test_lib"), 0);
+
+        const std::string out_path = scratch_output_path("le_lef_antenna_roundtrip.lef");
+        ASSERT_EQ(writer.write_lef(out_path, original_root, original_root.get_design_abstract(original_root.get_design_by_name("ANTENNATEST")), LEFWriter::LayerWriteMode::IncludeWithAbstract), 0)
+            << (writer.messages().empty() ? "" : writer.messages().front());
+
+        LEFReader reread;
+        ASSERT_EQ(reread.read_lef(out_path, written_root, "test_lib"), 0)
+            << (reread.messages().empty() ? "" : reread.messages().front());
+    }
+
+    Root original_root;
+    Root written_root;
+    LEFReader reader;
+    LEFWriter writer;
+};
+
+TEST_F(LEFAntennaRoundtripFixture, RoundTripsAntennaModelsOnRoutingAndCutLayersAndOnAPin)
+{
+    // M1 (ROUTING) round-trips every antenna field the fixture sets,
+    // including the ROUTING-only SideAreaRatio (see
+    // write_layer_antenna_models's own comment on the CUT-layer gap).
+    const LayerData *original_m1 = original_root.get_layer(original_root.get_layer_by_name("M1"));
+    const LayerData *written_m1 = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    ASSERT_TRUE(original_m1 != nullptr);
+    ASSERT_TRUE(written_m1 != nullptr);
+    ASSERT_EQ(original_m1->antenna_models.size(), written_m1->antenna_models.size());
+    ASSERT_EQ(original_m1->antenna_models.size(), 1u);
+    const AntennaModel &original_m1_model = original_m1->antenna_models[0];
+    const AntennaModel &written_m1_model = written_m1->antenna_models[0];
+    EXPECT_EQ(original_m1_model.oxide, written_m1_model.oxide);
+    ASSERT_EQ(original_m1_model.area_ratio.has_value(), written_m1_model.area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*original_m1_model.area_ratio, *written_m1_model.area_ratio);
+    ASSERT_EQ(original_m1_model.diff_area_ratio_pwl.size(), written_m1_model.diff_area_ratio_pwl.size());
+    for (size_t i = 0; i < original_m1_model.diff_area_ratio_pwl.size(); i++)
+    {
+        EXPECT_DOUBLE_EQ(original_m1_model.diff_area_ratio_pwl[i].diffusion, written_m1_model.diff_area_ratio_pwl[i].diffusion) << "pwl " << i;
+        EXPECT_DOUBLE_EQ(original_m1_model.diff_area_ratio_pwl[i].ratio, written_m1_model.diff_area_ratio_pwl[i].ratio) << "pwl " << i;
+    }
+    ASSERT_EQ(original_m1_model.side_area_ratio.has_value(), written_m1_model.side_area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*original_m1_model.side_area_ratio, *written_m1_model.side_area_ratio);
+
+    // V1 (CUT) round-trips its plain AREARATIO field (the vendored writer
+    // accepts CUT layers for this one - see write_layer_antenna_models).
+    const LayerData *original_v1 = original_root.get_layer(original_root.get_layer_by_name("V1"));
+    const LayerData *written_v1 = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    ASSERT_TRUE(original_v1 != nullptr);
+    ASSERT_TRUE(written_v1 != nullptr);
+    ASSERT_EQ(original_v1->antenna_models.size(), written_v1->antenna_models.size());
+    ASSERT_EQ(original_v1->antenna_models.size(), 1u);
+    ASSERT_EQ(original_v1->antenna_models[0].area_ratio.has_value(), written_v1->antenna_models[0].area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*original_v1->antenna_models[0].area_ratio, *written_v1->antenna_models[0].area_ratio);
+
+    const AbstractId original_abstract_id = original_root.get_design_abstract(original_root.get_design_by_name("ANTENNATEST"));
+    const AbstractId written_abstract_id = written_root.get_design_abstract(written_root.get_design_by_name("ANTENNATEST"));
+    const TerminalId original_pin_id = original_root.get_abstract_terminals(original_abstract_id).front();
+    const TerminalId written_pin_id = written_root.get_abstract_terminals(written_abstract_id).front();
+    const TerminalData *original_pin = original_root.get_terminal(original_pin_id);
+    const TerminalData *written_pin = written_root.get_terminal(written_pin_id);
+    ASSERT_TRUE(original_pin != nullptr);
+    ASSERT_TRUE(written_pin != nullptr);
+
+    ASSERT_EQ(original_pin->antenna_partial_metal_area.size(), written_pin->antenna_partial_metal_area.size());
+    ASSERT_EQ(original_pin->antenna_partial_metal_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(original_pin->antenna_partial_metal_area[0].value, written_pin->antenna_partial_metal_area[0].value);
+    EXPECT_EQ(original_pin->antenna_partial_metal_area[0].layer_name, written_pin->antenna_partial_metal_area[0].layer_name);
+
+    ASSERT_EQ(original_pin->antenna_models.size(), written_pin->antenna_models.size());
+    ASSERT_EQ(original_pin->antenna_models.size(), 1u);
+    EXPECT_EQ(original_pin->antenna_models[0].oxide, written_pin->antenna_models[0].oxide);
+    ASSERT_EQ(original_pin->antenna_models[0].gate_area.size(), written_pin->antenna_models[0].gate_area.size());
+    ASSERT_EQ(original_pin->antenna_models[0].gate_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(original_pin->antenna_models[0].gate_area[0].value, written_pin->antenna_models[0].gate_area[0].value);
+    EXPECT_EQ(original_pin->antenna_models[0].gate_area[0].layer_name, written_pin->antenna_models[0].gate_area[0].layer_name);
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)

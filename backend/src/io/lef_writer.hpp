@@ -28,7 +28,9 @@ namespace le
     /// VIARULE/MACRO/PIN - the vendored writer's generic property
     /// functions don't accept NONDEFAULTRULE/SITE/GENERATE-VIARULE write
     /// state, see write_via_rules/write_sites/write_non_default_rules's
-    /// own comments). RECT/POLYGON MASK color on VIA, ANTENNAMODEL, AC/DC
+    /// own comments). Phase 5 scope: LAYER ANTENNAMODEL (OXIDE1-4, both
+    /// ROUTING and CUT layers) and PIN ANTENNA* fields (flat pre-5.5 plus
+    /// 5.5 oxide-scoped). RECT/POLYGON MASK color on VIA, AC/DC
     /// CURRENTDENSITY, and ARRAY are still out of scope (deferred to a
     /// later phase, see its own plan).
     class LEFWriter
@@ -84,6 +86,19 @@ namespace le
         // numeric properties there are readable but not writable, unlike
         // every other property-carrying construct including CUT layers.
         static int write_properties(const std::vector<LefProperty> &properties, bool include_numeric = true);
+        // Shared by both the ROUTING and CUT branches of
+        // write_technology_layers - lefwLayerAntennaModel/its per-field
+        // siblings accept LEFW_LAYERROUTING(_START) AND LEFW_LAYER(_START)
+        // alike (confirmed in lefwWriter.cpp), unlike write_properties'
+        // ROUTING-layer numeric gap above.
+        // is_cut selects whether the "SideArea"-family fields are written -
+        // see write_layer_antenna_models's own comment in lef_writer.cpp
+        // for the vendored-writer gap this works around.
+        static int write_layer_antenna_models(const std::vector<AntennaModel> &models, bool is_cut);
+        // Shared helper for write_terminal's 4 flat (value, layer)
+        // PinAntennaValue lists - dispatches to the matching
+        // lefwMacroPinAntenna*(double, const char*) writer per field.
+        static int write_pin_antenna_values(const std::vector<PinAntennaValue> &values, int (*writer)(double, const char *));
         static int write_vias(const Root &root, TechnologyId technology_id);
         static int write_via_rules(const Root &root, TechnologyId technology_id);
         static int write_sites(const Root &root, TechnologyId technology_id);

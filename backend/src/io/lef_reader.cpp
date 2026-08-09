@@ -418,6 +418,78 @@ namespace le
             });
         }
 
+        layer.antenna_models.reserve(static_cast<size_t>(lef_layer->numAntennaModel()));
+        for (int i = 0; i < lef_layer->numAntennaModel(); i++)
+        {
+            lefiAntennaModel *lef_model = lef_layer->antennaModel(i);
+            AntennaModel model{.oxide = lef_model->antennaOxide()};
+
+            if (lef_model->hasAntennaAreaRatio())
+                model.area_ratio = lef_model->antennaAreaRatio();
+            if (lef_model->hasAntennaCumAreaRatio())
+                model.cum_area_ratio = lef_model->antennaCumAreaRatio();
+            if (lef_model->hasAntennaAreaFactor())
+            {
+                model.area_factor = lef_model->antennaAreaFactor();
+                if (lef_model->hasAntennaAreaFactorDUO())
+                    model.area_factor_diffuse_only = true;
+            }
+            if (lef_model->hasAntennaSideAreaRatio())
+                model.side_area_ratio = lef_model->antennaSideAreaRatio();
+            if (lef_model->hasAntennaCumSideAreaRatio())
+                model.cum_side_area_ratio = lef_model->antennaCumSideAreaRatio();
+            if (lef_model->hasAntennaSideAreaFactor())
+            {
+                model.side_area_factor = lef_model->antennaSideAreaFactor();
+                if (lef_model->hasAntennaSideAreaFactorDUO())
+                    model.side_area_factor_diffuse_only = true;
+            }
+
+            // Each of these four is EITHER the scalar OR a PWL list, never
+            // both (lefiAntennaModel's own mutually-exclusive has* flags).
+            if (lef_model->hasAntennaDiffAreaRatioPWL())
+            {
+                lefiAntennaPWL *pwl = lef_model->antennaDiffAreaRatioPWL();
+                model.diff_area_ratio_pwl.reserve(static_cast<size_t>(pwl->numPWL()));
+                for (int j = 0; j < pwl->numPWL(); j++)
+                    model.diff_area_ratio_pwl.push_back(AntennaPWLEntry{.diffusion = pwl->PWLdiffusion(j), .ratio = pwl->PWLratio(j)});
+            }
+            else if (lef_model->hasAntennaDiffAreaRatio())
+                model.diff_area_ratio = lef_model->antennaDiffAreaRatio();
+
+            if (lef_model->hasAntennaCumDiffAreaRatioPWL())
+            {
+                lefiAntennaPWL *pwl = lef_model->antennaCumDiffAreaRatioPWL();
+                model.cum_diff_area_ratio_pwl.reserve(static_cast<size_t>(pwl->numPWL()));
+                for (int j = 0; j < pwl->numPWL(); j++)
+                    model.cum_diff_area_ratio_pwl.push_back(AntennaPWLEntry{.diffusion = pwl->PWLdiffusion(j), .ratio = pwl->PWLratio(j)});
+            }
+            else if (lef_model->hasAntennaCumDiffAreaRatio())
+                model.cum_diff_area_ratio = lef_model->antennaCumDiffAreaRatio();
+
+            if (lef_model->hasAntennaDiffSideAreaRatioPWL())
+            {
+                lefiAntennaPWL *pwl = lef_model->antennaDiffSideAreaRatioPWL();
+                model.diff_side_area_ratio_pwl.reserve(static_cast<size_t>(pwl->numPWL()));
+                for (int j = 0; j < pwl->numPWL(); j++)
+                    model.diff_side_area_ratio_pwl.push_back(AntennaPWLEntry{.diffusion = pwl->PWLdiffusion(j), .ratio = pwl->PWLratio(j)});
+            }
+            else if (lef_model->hasAntennaDiffSideAreaRatio())
+                model.diff_side_area_ratio = lef_model->antennaDiffSideAreaRatio();
+
+            if (lef_model->hasAntennaCumDiffSideAreaRatioPWL())
+            {
+                lefiAntennaPWL *pwl = lef_model->antennaCumDiffSideAreaRatioPWL();
+                model.cum_diff_side_area_ratio_pwl.reserve(static_cast<size_t>(pwl->numPWL()));
+                for (int j = 0; j < pwl->numPWL(); j++)
+                    model.cum_diff_side_area_ratio_pwl.push_back(AntennaPWLEntry{.diffusion = pwl->PWLdiffusion(j), .ratio = pwl->PWLratio(j)});
+            }
+            else if (lef_model->hasAntennaCumDiffSideAreaRatio())
+                model.cum_diff_side_area_ratio = lef_model->antennaCumDiffSideAreaRatio();
+
+            layer.antenna_models.push_back(std::move(model));
+        }
+
         reader->root_->create_layer(std::move(layer));
 
         return 0;
@@ -1027,6 +1099,62 @@ namespace le
                 .string_value = lef_pin->propIsString(i) ? lef_pin->propValue(i) : "",
                 .number_value = lef_pin->propIsNumber(i) ? lef_pin->propNum(i) : 0.0,
             });
+        }
+
+        // Flat pre-5.5 (value, layer) antenna fields directly on lefiPin -
+        // AntennaGateArea has no such flat form, only the oxide-scoped one
+        // below (lefiPin has no numAntennaGateArea()/antennaGateArea()).
+        // LAYER is optional on these statements (confirmed in
+        // complete.5.8.lef, e.g. "ANTENNAGATEAREA 2 ;") - the vendored
+        // parser leaves the matching *Layer(i) entry as a NULL char* (not
+        // an empty string) when omitted (lefiMacro.cpp's own
+        // addAntennaPartialMetalArea et al.), so every *Layer(i) call here
+        // must go through safe_layer_name rather than std::string's
+        // nullptr-crashing implicit conversion.
+        auto safe_layer_name = [](const char *layer_name)
+        { return layer_name ? layer_name : ""; };
+
+        terminal.antenna_partial_metal_area.reserve(static_cast<size_t>(lef_pin->numAntennaPartialMetalArea()));
+        for (int i = 0; i < lef_pin->numAntennaPartialMetalArea(); i++)
+            terminal.antenna_partial_metal_area.push_back(PinAntennaValue{.value = lef_pin->antennaPartialMetalArea(i), .layer_name = safe_layer_name(lef_pin->antennaPartialMetalAreaLayer(i))});
+
+        terminal.antenna_partial_metal_side_area.reserve(static_cast<size_t>(lef_pin->numAntennaPartialMetalSideArea()));
+        for (int i = 0; i < lef_pin->numAntennaPartialMetalSideArea(); i++)
+            terminal.antenna_partial_metal_side_area.push_back(PinAntennaValue{.value = lef_pin->antennaPartialMetalSideArea(i), .layer_name = safe_layer_name(lef_pin->antennaPartialMetalSideAreaLayer(i))});
+
+        terminal.antenna_partial_cut_area.reserve(static_cast<size_t>(lef_pin->numAntennaPartialCutArea()));
+        for (int i = 0; i < lef_pin->numAntennaPartialCutArea(); i++)
+            terminal.antenna_partial_cut_area.push_back(PinAntennaValue{.value = lef_pin->antennaPartialCutArea(i), .layer_name = safe_layer_name(lef_pin->antennaPartialCutAreaLayer(i))});
+
+        terminal.antenna_diff_area.reserve(static_cast<size_t>(lef_pin->numAntennaDiffArea()));
+        for (int i = 0; i < lef_pin->numAntennaDiffArea(); i++)
+            terminal.antenna_diff_area.push_back(PinAntennaValue{.value = lef_pin->antennaDiffArea(i), .layer_name = safe_layer_name(lef_pin->antennaDiffAreaLayer(i))});
+
+        // 5.5 oxide-scoped antenna models - a distinct, narrower
+        // lefiPinAntennaModel class from lefiLayer's own lefiAntennaModel.
+        terminal.antenna_models.reserve(static_cast<size_t>(lef_pin->numAntennaModel()));
+        for (int i = 0; i < lef_pin->numAntennaModel(); i++)
+        {
+            lefiPinAntennaModel *lef_pin_model = lef_pin->antennaModel(i);
+            PinAntennaModel pin_model{.oxide = lef_pin_model->antennaOxide()};
+
+            pin_model.gate_area.reserve(static_cast<size_t>(lef_pin_model->numAntennaGateArea()));
+            for (int j = 0; j < lef_pin_model->numAntennaGateArea(); j++)
+                pin_model.gate_area.push_back(PinAntennaValue{.value = lef_pin_model->antennaGateArea(j), .layer_name = safe_layer_name(lef_pin_model->antennaGateAreaLayer(j))});
+
+            pin_model.max_area_car.reserve(static_cast<size_t>(lef_pin_model->numAntennaMaxAreaCar()));
+            for (int j = 0; j < lef_pin_model->numAntennaMaxAreaCar(); j++)
+                pin_model.max_area_car.push_back(PinAntennaValue{.value = lef_pin_model->antennaMaxAreaCar(j), .layer_name = safe_layer_name(lef_pin_model->antennaMaxAreaCarLayer(j))});
+
+            pin_model.max_side_area_car.reserve(static_cast<size_t>(lef_pin_model->numAntennaMaxSideAreaCar()));
+            for (int j = 0; j < lef_pin_model->numAntennaMaxSideAreaCar(); j++)
+                pin_model.max_side_area_car.push_back(PinAntennaValue{.value = lef_pin_model->antennaMaxSideAreaCar(j), .layer_name = safe_layer_name(lef_pin_model->antennaMaxSideAreaCarLayer(j))});
+
+            pin_model.max_cut_car.reserve(static_cast<size_t>(lef_pin_model->numAntennaMaxCutCar()));
+            for (int j = 0; j < lef_pin_model->numAntennaMaxCutCar(); j++)
+                pin_model.max_cut_car.push_back(PinAntennaValue{.value = lef_pin_model->antennaMaxCutCar(j), .layer_name = safe_layer_name(lef_pin_model->antennaMaxCutCarLayer(j))});
+
+            terminal.antenna_models.push_back(std::move(pin_model));
         }
 
         auto terminal_id = reader->root_->create_terminal(terminal);
