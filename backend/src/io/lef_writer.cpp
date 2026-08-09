@@ -52,7 +52,17 @@ namespace
         // argument is required (LEF's own ROUTING statement always has
         // one), unlike LEFReader's own read side where DIRECTION is
         // optional per-layer (see lefrLayerCbkFn's own has*() guard).
-        return direction == le::RoutingDirection::V ? "VERTICAL" : "HORIZONTAL";
+        switch (direction)
+        {
+        case le::RoutingDirection::V:
+            return "VERTICAL";
+        case le::RoutingDirection::DIAG45:
+            return "DIAG45";
+        case le::RoutingDirection::DIAG135:
+            return "DIAG135";
+        default:
+            return "HORIZONTAL";
+        }
     }
 
     const char *signal_direction_to_string(le::SignalDirection direction)
@@ -65,6 +75,10 @@ namespace
             return "OUTPUT";
         case le::SignalDirection::INOUT:
             return "INOUT";
+        case le::SignalDirection::OUTPUT_TRISTATE:
+            return "OUTPUT TRISTATE";
+        case le::SignalDirection::FEEDTHRU:
+            return "FEEDTHRU";
         default:
             return nullptr; // NONE - DIRECTION is optional, matches read side
         }
@@ -286,6 +300,72 @@ namespace le
         return 0;
     }
 
+    int LEFWriter::write_layer_current_density(
+        const std::vector<LayerDensityEntry> &entries,
+        int (*current_density)(const char *, double),
+        int (*frequency)(int, double *),
+        int (*width)(int, double *),
+        int (*cutarea)(int, double *),
+        int (*table_entries)(int, double *),
+        double dbu_per_micron)
+    {
+        for (const LayerDensityEntry &entry : entries)
+        {
+            // KNOWN VENDORED-WRITER EDGE CASE: lefwLayerACCurrentDensity/
+            // DCCurrentDensity dispatch on `if (value)` - a real one_entry
+            // value of exactly 0.0 would be misread as "open table form"
+            // with no closing TableEntries call, producing an invalid
+            // file. Not a concern for any value seen in complete.5.8.lef;
+            // not worked around here (vendored code).
+            if (entry.one_entry)
+            {
+                int status = current_density(entry.type.c_str(), *entry.one_entry);
+                if (status)
+                    return status;
+                continue;
+            }
+
+            int status = current_density(entry.type.c_str(), 0.0);
+            if (status)
+                return status;
+
+            if (frequency && !entry.frequency.empty())
+            {
+                std::vector<double> frequency_hz = entry.frequency;
+                status = frequency(static_cast<int>(frequency_hz.size()), frequency_hz.data());
+                if (status)
+                    return status;
+            }
+            if (!entry.width.empty())
+            {
+                std::vector<double> width_um;
+                width_um.reserve(entry.width.size());
+                for (int64_t w : entry.width)
+                    width_um.push_back(to_microns(w, dbu_per_micron));
+                status = width(static_cast<int>(width_um.size()), width_um.data());
+                if (status)
+                    return status;
+            }
+            if (!entry.cutarea.empty())
+            {
+                std::vector<double> cutarea_um2;
+                cutarea_um2.reserve(entry.cutarea.size());
+                for (int64_t c : entry.cutarea)
+                    cutarea_um2.push_back(to_microns_squared(c, dbu_per_micron));
+                status = cutarea(static_cast<int>(cutarea_um2.size()), cutarea_um2.data());
+                if (status)
+                    return status;
+            }
+
+            // Required to close the table form.
+            std::vector<double> table_values = entry.table_entries;
+            status = table_entries(static_cast<int>(table_values.size()), table_values.data());
+            if (status)
+                return status;
+        }
+        return 0;
+    }
+
     int LEFWriter::write_units(const Root &root, TechnologyId technology_id)
     {
         const TechnologyData *technology = root.get_technology(technology_id);
@@ -329,17 +409,52 @@ namespace le
                 status = lefwStartLayerRouting(layer->name.c_str());
                 if (status)
                     return status;
+
+                // lefwLayerMask only accepts LEFW_LAYERROUTING_START (not
+                // LEFW_LAYERROUTING) - must be written before the
+                // lefwLayerRouting() call below transitions state away
+                // from _START (confirmed in lefwWriter.cpp; matches the
+                // fixture's own MASK-right-after-TYPE ordering).
+                if (layer->default_mask)
+                {
+                    status = lefwLayerMask(*layer->default_mask);
+                    if (status)
+                        return status;
+                }
+
                 status = lefwLayerRouting(routing_direction_to_string(layer->direction), layer->width ? to_microns(*layer->width, dbu_per_micron) : 0.0);
                 if (status)
                     return status;
 
-                if (layer->pitch)
+                // pitch_xy/offset_xy (two-value form) are mutually
+                // exclusive with pitch/offset (single-value form).
+                //
+                // KNOWN VENDORED-WRITER GAP: pitch_xy/offset_xy/diag_pitch/
+                // diag_pitch_xy/diag_spacing/diag_width all require
+                // lefwIsRouting (confirmed in lefwWriter.cpp) - unwritable
+                // on a CUT layer even though the reader can populate them
+                // there (e.g. complete.5.8.lef's LAYER CUT01, TYPE CUT,
+                // uses DIAGPITCH/two-value PITCH/two-value OFFSET). Still
+                // fully read; just never re-written for a CUT layer.
+                if (layer->pitch_xy)
+                {
+                    status = lefwLayerRoutingPitchXYDistance(to_microns(layer->pitch_xy->x, dbu_per_micron), to_microns(layer->pitch_xy->y, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                else if (layer->pitch)
                 {
                     status = lefwLayerRoutingPitch(to_microns(*layer->pitch, dbu_per_micron));
                     if (status)
                         return status;
                 }
-                if (layer->offset)
+                if (layer->offset_xy)
+                {
+                    status = lefwLayerRoutingOffsetXYDistance(to_microns(layer->offset_xy->x, dbu_per_micron), to_microns(layer->offset_xy->y, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                else if (layer->offset)
                 {
                     status = lefwLayerRoutingOffset(to_microns(*layer->offset, dbu_per_micron));
                     if (status)
@@ -348,6 +463,36 @@ namespace le
                 if (layer->area)
                 {
                     status = lefwLayerRoutingArea(to_microns_squared(*layer->area, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->diag_pitch_xy)
+                {
+                    status = lefwLayerRoutingDiagPitchXYDistance(to_microns(layer->diag_pitch_xy->x, dbu_per_micron), to_microns(layer->diag_pitch_xy->y, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                else if (layer->diag_pitch)
+                {
+                    status = lefwLayerRoutingDiagPitch(to_microns(*layer->diag_pitch, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->diag_spacing)
+                {
+                    status = lefwLayerRoutingDiagSpacing(to_microns(*layer->diag_spacing, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->diag_width)
+                {
+                    status = lefwLayerRoutingDiagWidth(to_microns(*layer->diag_width, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->diag_min_edge_length)
+                {
+                    status = lefwLayerRoutingDiagMinEdgeLength(to_microns(*layer->diag_min_edge_length, dbu_per_micron));
                     if (status)
                         return status;
                 }
@@ -421,6 +566,14 @@ namespace le
                     // (vendored code). ENDOFLINE/PARALLELEDGE/TWOEDGES are
                     // still fully read (see lefrLayerCbkFn) - just never
                     // re-written.
+
+                    // SAME BUG, same root cause: lefwLayerRoutingSpacingNotchLength/
+                    // SpacingEndOfNotchWidth also flush the open SPACING
+                    // statement and emit NOTCHLENGTH/ENDOFNOTCHWIDTH as a
+                    // separate top-level statement, but lef.y only accepts
+                    // them nested inside SPACING's own option grammar - not
+                    // called here either. rule.notch_length/end_of_notch_*
+                    // are read-only.
                 }
 
                 for (const MinimumCut &cut : layer->minimum_cuts)
@@ -537,6 +690,39 @@ namespace le
                         return status;
                 }
 
+                if (!layer->spacing_table_two_widths.empty())
+                {
+                    // lefwLayerRoutingStartSpacingtableTwoWidths is
+                    // ROUTING-only (LEFW_LAYERROUTING_START/LEFW_LAYERROUTING
+                    // - confirmed in lefwWriter.cpp) despite TWOWIDTHS
+                    // appearing on layers named "cutNN" in complete.5.8.lef
+                    // (e.g. cut25) - those are actually TYPE ROUTING, not
+                    // CUT, per the fixture's own TYPE statement.
+                    status = lefwLayerRoutingStartSpacingtableTwoWidths();
+                    if (status)
+                        return status;
+                    // KNOWN VENDORED-WRITER EDGE CASE:
+                    // lefwLayerRoutingSpacingtableTwoWidthsWidth checks
+                    // `if (runLength)` to decide whether to write "PRL ..."
+                    // at all - a real PRL of exactly 0.0 (present in
+                    // complete.5.8.lef's own "WIDTH 0.25 PRL 0.0 ...") is
+                    // indistinguishable from "no PRL" and gets silently
+                    // dropped. Not worked around here (vendored code).
+                    for (const TwoWidthsSpacingEntry &entry : layer->spacing_table_two_widths)
+                    {
+                        std::vector<double> spacings_um;
+                        spacings_um.reserve(entry.spacings.size());
+                        for (int64_t spacing : entry.spacings)
+                            spacings_um.push_back(to_microns(spacing, dbu_per_micron));
+                        status = lefwLayerRoutingSpacingtableTwoWidthsWidth(to_microns(entry.width, dbu_per_micron), entry.prl ? to_microns(*entry.prl, dbu_per_micron) : 0.0, static_cast<int>(spacings_um.size()), spacings_um.data());
+                        if (status)
+                            return status;
+                    }
+                    status = lefwLayerRoutineEndSpacingtable();
+                    if (status)
+                        return status;
+                }
+
                 if (layer->wire_extension)
                 {
                     status = lefwLayerRoutingWireExtension(to_microns(*layer->wire_extension, dbu_per_micron));
@@ -591,6 +777,96 @@ namespace le
                     if (status)
                         return status;
                 }
+                if (layer->max_width)
+                {
+                    status = lefwLayerRoutingMaxwidth(to_microns(*layer->max_width, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->min_width)
+                {
+                    status = lefwLayerRoutingMinwidth(to_microns(*layer->min_width, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (!layer->min_sizes.empty())
+                {
+                    std::vector<double> min_widths_um;
+                    std::vector<double> min_lengths_um;
+                    min_widths_um.reserve(layer->min_sizes.size());
+                    min_lengths_um.reserve(layer->min_sizes.size());
+                    for (const MinSizeEntry &entry : layer->min_sizes)
+                    {
+                        min_widths_um.push_back(to_microns(entry.width, dbu_per_micron));
+                        min_lengths_um.push_back(to_microns(entry.length, dbu_per_micron));
+                    }
+                    status = lefwLayerRoutingMinsize(static_cast<int>(min_widths_um.size()), min_widths_um.data(), min_lengths_um.data());
+                    if (status)
+                        return status;
+                }
+                if (!layer->min_enclosed_areas.empty())
+                {
+                    std::vector<double> areas_um2;
+                    std::vector<double> widths_um;
+                    areas_um2.reserve(layer->min_enclosed_areas.size());
+                    widths_um.reserve(layer->min_enclosed_areas.size());
+                    for (const MinEnclosedAreaEntry &entry : layer->min_enclosed_areas)
+                    {
+                        areas_um2.push_back(to_microns_squared(entry.area, dbu_per_micron));
+                        widths_um.push_back(entry.width ? to_microns(*entry.width, dbu_per_micron) : 0.0);
+                    }
+                    status = lefwLayerRoutingMinenclosedarea(static_cast<int>(areas_um2.size()), areas_um2.data(), widths_um.data());
+                    if (status)
+                        return status;
+                }
+                if (layer->protrusion_width1)
+                {
+                    status = lefwLayerRoutingProtrusion(to_microns(*layer->protrusion_width1, dbu_per_micron), to_microns(*layer->protrusion_length, dbu_per_micron), to_microns(*layer->protrusion_width2, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                // layer->split_wire_width is deliberately never written -
+                // no lefwLayer*SplitWireWidth* function exists anywhere in
+                // the vendored writer (grepped lefwWriter.hpp/.cpp - only
+                // an internal LEFW_SPLITWIREWIDTH state-name constant).
+                // Still fully read (lefrLayerCbkFn) - just unwritable.
+                if (layer->minimum_density)
+                {
+                    status = lefwMinimumDensity(*layer->minimum_density);
+                    if (status)
+                        return status;
+                }
+                if (layer->maximum_density)
+                {
+                    status = lefwMaximumDensity(*layer->maximum_density);
+                    if (status)
+                        return status;
+                }
+                if (layer->density_check_step)
+                {
+                    status = lefwDensityCheckStep(to_microns(*layer->density_check_step, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->density_check_window)
+                {
+                    status = lefwDensityCheckWindow(to_microns(layer->density_check_window->length, dbu_per_micron), to_microns(layer->density_check_window->width, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+                if (layer->fill_active_spacing)
+                {
+                    status = lefwFillActiveSpacing(to_microns(*layer->fill_active_spacing, dbu_per_micron));
+                    if (status)
+                        return status;
+                }
+
+                status = write_layer_current_density(layer->ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
+                if (status)
+                    return status;
+                status = write_layer_current_density(layer->dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
+                if (status)
+                    return status;
 
                 status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/false);
                 if (status)
@@ -609,6 +885,13 @@ namespace le
                 status = lefwStartLayer(layer->name.c_str(), layer->type.c_str());
                 if (status)
                     return status;
+
+                if (layer->default_mask)
+                {
+                    status = lefwLayerMask(*layer->default_mask);
+                    if (status)
+                        return status;
+                }
 
                 if (layer->width)
                 {
@@ -677,6 +960,72 @@ namespace le
                     if (status)
                         return status;
                 }
+
+                // KNOWN VENDORED-WRITER GAP: lefwLayerArraySpacing requires
+                // lefwIsCut (confirmed in lefwWriter.cpp) - unwritable on a
+                // layer whose TYPE is ROUTING even though the reader can
+                // populate it there (e.g. complete.5.8.lef's LAYER cut24,
+                // TYPE ROUTING, uses ARRAYSPACING). Still fully read; just
+                // never re-written for a ROUTING-typed layer.
+                if (!layer->array_cuts.empty() || layer->array_spacing)
+                {
+                    std::vector<int> cuts;
+                    std::vector<double> spacings_um;
+                    cuts.reserve(layer->array_cuts.size());
+                    spacings_um.reserve(layer->array_cuts.size());
+                    for (const ArrayCutsEntry &entry : layer->array_cuts)
+                    {
+                        cuts.push_back(entry.cuts);
+                        spacings_um.push_back(to_microns(entry.spacing, dbu_per_micron));
+                    }
+                    const bool long_array = layer->array_spacing && layer->array_spacing->long_array;
+                    const double via_width_um = (layer->array_spacing && layer->array_spacing->via_width) ? to_microns(*layer->array_spacing->via_width, dbu_per_micron) : 0.0;
+                    const double cut_spacing_um = layer->array_spacing ? to_microns(layer->array_spacing->cut_spacing, dbu_per_micron) : 0.0;
+                    status = lefwLayerArraySpacing(long_array ? 1 : 0, via_width_um, cut_spacing_um, static_cast<int>(cuts.size()), cuts.data(), spacings_um.data());
+                    if (status)
+                        return status;
+                }
+
+                for (const PreferEnclosureEntry &entry : layer->prefer_enclosures)
+                {
+                    status = lefwLayerPreferEnclosure(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), entry.min_width ? to_microns(*entry.min_width, dbu_per_micron) : 0.0);
+                    if (status)
+                        return status;
+                }
+
+                // width/except_extra_cut and min_length are mutually
+                // exclusive per the vendored writer's own three ENCLOSURE
+                // variants (see lefrLayerCbkFn's own matching read side).
+                for (const EnclosureEntry &entry : layer->enclosures)
+                {
+                    if (entry.width)
+                        status = lefwLayerEnclosureWidth(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.width, dbu_per_micron), entry.except_extra_cut ? to_microns(*entry.except_extra_cut, dbu_per_micron) : 0.0);
+                    else if (entry.min_length)
+                        status = lefwLayerEnclosureLength(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.min_length, dbu_per_micron));
+                    else
+                        status = lefwLayerEnclosure(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), 0.0);
+                    if (status)
+                        return status;
+                }
+
+                // KNOWN VENDORED-LIBRARY BUG: lefwLayerResistancePerCut
+                // literally writes the keyword "RESISTANCEPERCUT", but
+                // lef.y has no such token anywhere - the real CUT-layer
+                // grammar rule is plain "RESISTANCE <value> ;" (same
+                // keyword as ROUTING's own, just a different lefiLayer
+                // accessor pair - see lefrLayerCbkFn's own comment). A file
+                // written with this call fails to re-parse entirely
+                // (confirmed: LEFPARS-1 "encountered an error ... on token
+                // RESISTANCEPERCUT"). Not called here - layer->resistance
+                // is read-only for CUT layers with this vendored writer
+                // version (still fully written for ROUTING layers above).
+
+                status = write_layer_current_density(layer->ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
+                if (status)
+                    return status;
+                status = write_layer_current_density(layer->dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
+                if (status)
+                    return status;
 
                 status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/true);
                 if (status)
@@ -1056,6 +1405,15 @@ namespace le
                         return status;
                 }
 
+                // lefwNonDefaultRuleStartVia sets lefwState =
+                // LEFW_VIA_START, the same state a top-level VIA uses -
+                // write_properties' generic property functions already
+                // accept that state (see its own comment), so this works
+                // without any of the SITE/NONDEFAULTRULE-itself gaps.
+                status = write_properties(via.properties);
+                if (status)
+                    return status;
+
                 status = write_via_layers(via.layers, dbu_per_micron);
                 if (status)
                     return status;
@@ -1099,7 +1457,47 @@ namespace le
         auto to_um = [&](int64_t v)
         { return to_microns(v, dbu_per_micron); };
 
-        int status = is_pin_port ? lefwMacroPinPortLayer(shape.layer_name.c_str(), 0) : lefwMacroObsLayer(shape.layer_name.c_str(), 0);
+        // LAYER/DESIGNRULEWIDTH/EXCEPTPGNET are mutually exclusive per
+        // lef.y's own grammar - one combined statement opens this LAYER
+        // occurrence, matching lefwMacroObsLayer's own doc comment
+        // ("Either this routine, lefwMacroObsDesignRuleWidth, ... or
+        // lefwMacroExceptPGNet must be called").
+        int status;
+        if (shape.except_pg_net && !is_pin_port)
+        {
+            // KNOWN VENDORED-WRITER GAP: lefwMacroExceptPGNet only
+            // accepts !lefwIsMacroObs (confirmed in lefwWriter.cpp) - it
+            // cannot be called from a PIN PORT context at all, even
+            // though lef.y's own layer_exceptpgnet grammar rule is shared
+            // by both PORT and OBS geometry. It also guards on an
+            // internal lefwSpacingVal flag reset only once per OBS
+            // section (not per LAYER) - once any LAYER-with-SPACING has
+            // been written anywhere earlier in this OBS section,
+            // EXCEPTPGNET is permanently blocked for the rest of it.
+            // Restricted to OBS here (is_pin_port already excluded above)
+            // and callers should avoid mixing SPACING-layers before an
+            // EXCEPTPGNET-layer in the same OBS, matching how
+            // complete.5.8.lef's own OBS blocks never mix the two.
+            status = lefwMacroExceptPGNet(shape.layer_name.c_str());
+        }
+        else if (shape.design_rule_width != 0)
+        {
+            // KNOWN LIMITATION: a real DESIGNRULEWIDTH of exactly 0
+            // (complete.5.8.lef has one: "LAYER a1sig DESIGNRULEWIDTH 0")
+            // is indistinguishable from "unset" with this 0-means-unset
+            // representation (see schema.py's own field comment on why
+            // Shape.design_rule_width isn't is_optional) and falls
+            // through to the plain LAYER branch below instead - a narrow,
+            // accepted tradeoff matching several other 0-as-sentinel
+            // conventions already in this codebase.
+            status = is_pin_port
+                         ? lefwMacroPinPortDesignRuleWidth(shape.layer_name.c_str(), to_um(shape.design_rule_width))
+                         : lefwMacroObsDesignRuleWidth(shape.layer_name.c_str(), to_um(shape.design_rule_width));
+        }
+        else
+        {
+            status = is_pin_port ? lefwMacroPinPortLayer(shape.layer_name.c_str(), to_um(shape.spacing)) : lefwMacroObsLayer(shape.layer_name.c_str(), to_um(shape.spacing));
+        }
         if (status)
             return status;
 
@@ -1209,6 +1607,28 @@ namespace le
                 return status;
         }
 
+        // lefwMacroObsVia/lefwMacroPinPortVia are callable at any point
+        // once the section is open (lefwIsMacroObs/lefwIsMacroPinPort are
+        // simple flags, not fine-grained state) - matches
+        // complete.5.8.lef's own usage of VIA nested after LAYER/RECT
+        // within one PORT block.
+        for (const ShapeVia &via : shape.vias)
+        {
+            status = is_pin_port
+                         ? lefwMacroPinPortVia(to_um(via.origin.x), to_um(via.origin.y), via.via_name.c_str(), 0, 0, 0, 0, via.mask.value_or(0))
+                         : lefwMacroObsVia(to_um(via.origin.x), to_um(via.origin.y), via.via_name.c_str(), 0, 0, 0, 0, via.mask.value_or(0));
+            if (status)
+                return status;
+        }
+        for (const ShapeViaIterate &via_iter : shape.via_iterates)
+        {
+            status = is_pin_port
+                         ? lefwMacroPinPortVia(to_um(via_iter.origin.x), to_um(via_iter.origin.y), via_iter.via_name.c_str(), via_iter.num_x, via_iter.num_y, to_um(via_iter.space_x), to_um(via_iter.space_y), via_iter.mask.value_or(0))
+                         : lefwMacroObsVia(to_um(via_iter.origin.x), to_um(via_iter.origin.y), via_iter.via_name.c_str(), via_iter.num_x, via_iter.num_y, to_um(via_iter.space_x), to_um(via_iter.space_y), via_iter.mask.value_or(0));
+            if (status)
+                return status;
+        }
+
         return 0;
     }
 
@@ -1255,6 +1675,30 @@ namespace le
         // terminal->leq is deliberately never written - lefwMacroPinLEQ is
         // obsoleted for VERSION >= 5.6 with no replacement (same
         // unreachable-at-5.8 gap as the macro-level LEQ above).
+        if (!terminal->taper_rule.empty())
+        {
+            status = lefwMacroPinTaperRule(terminal->taper_rule.c_str());
+            if (status)
+                return status;
+        }
+        if (!terminal->supply_sensitivity.empty())
+        {
+            status = lefwMacroPinSupplySensitivity(terminal->supply_sensitivity.c_str());
+            if (status)
+                return status;
+        }
+        if (!terminal->ground_sensitivity.empty())
+        {
+            status = lefwMacroPinGroundSensitivity(terminal->ground_sensitivity.c_str());
+            if (status)
+                return status;
+        }
+        // terminal->rise_slew_limit/fall_slew_limit/max_load are
+        // deliberately never written - lefwWriter.hpp/.cpp contain zero
+        // lefwMacroPin* functions for RISESLEWLIMIT/FALLSLEWLIMIT/MAXLOAD
+        // (confirmed by grep) even though lefiPin fully reads all three -
+        // no vendored writer entry point exists at all, same class of gap
+        // as split_wire_width.
 
         // Flat pre-5.5 (value, layer) antenna fields - AntennaGateArea has
         // no such flat form (see lefrPinCbkFn's own comment), only the
@@ -1308,7 +1752,7 @@ namespace le
             if (!port)
                 continue;
 
-            status = lefwStartMacroPinPort(nullptr);
+            status = lefwStartMacroPinPort(port->port_class.empty() ? nullptr : port->port_class.c_str());
             if (status)
                 return status;
 
@@ -1439,6 +1883,18 @@ namespace le
         if (!abstract->site.empty())
         {
             status = lefwMacroSite(abstract->site.c_str());
+            if (status)
+                return status;
+        }
+
+        // Distinct, mutually-exclusive grammar alternative from the
+        // singular site name above (see lefrMacroCbkFn's own comment on
+        // setSiteName vs setSitePattern).
+        for (const MacroSitePlacement &placement : abstract->site_placements)
+        {
+            status = lefwMacroSitePatternStr(placement.site_name.c_str(), to_um(placement.origin.x), to_um(placement.origin.y), orientation_to_string(placement.orient),
+                                              placement.num_x.value_or(0), placement.num_y.value_or(0),
+                                              placement.step_x ? to_um(*placement.step_x) : 0.0, placement.step_y ? to_um(*placement.step_y) : 0.0);
             if (status)
                 return status;
         }

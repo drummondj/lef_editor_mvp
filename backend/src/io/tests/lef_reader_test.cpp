@@ -772,6 +772,12 @@ TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnE
     ASSERT_EQ(via.layers.size(), 2u);
     EXPECT_EQ(via.layers[0].layer_name, "M1");
     EXPECT_EQ(via.layers[1].layer_name, "V1");
+    // UPDATES.md 12 Phase 7 - PROPERTY on a NONDEFAULTRULE-embedded VIA
+    // (same LefProperty mechanism as the already-working top-level Via).
+    ASSERT_EQ(via.properties.size(), 1u);
+    EXPECT_EQ(via.properties[0].name, "vip");
+    EXPECT_TRUE(via.properties[0].is_number);
+    EXPECT_DOUBLE_EQ(via.properties[0].number_value, 7.0);
 
     ASSERT_EQ(rule->use_via_names.size(), 1u);
     EXPECT_EQ(rule->use_via_names[0], "VIA1");
@@ -850,6 +856,12 @@ TEST_F(LEFReaderViaFixture, ReadsPropertyDefinitionsAndPerConstructPropertyAttac
 // anywhere else in that same file a hard parse error ("has both old and
 // new ANTENNAMODEL syntax"), confirmed by direct reader.messages()
 // inspection when this was first attempted against writer_roundtrip.lef.
+// Phase 6 (LAYER field completeness) reuses this same fixture/class for
+// the same reason - its own new fields (MASK, two-value PITCH/OFFSET/
+// DIAGPITCH, MINSIZE, TWOWIDTHS, AC/DC CURRENTDENSITY, CUT-layer
+// ENCLOSURE/ARRAYSPACING/PREFERENCLOSURE, ...) have no such syntax
+// conflict with writer_roundtrip.lef, but keeping everything in one
+// dedicated non-legacy-syntax fixture avoids re-litigating that per field.
 class LEFAntennaFixture : public ::testing::Test
 {
 protected:
@@ -902,6 +914,211 @@ TEST_F(LEFAntennaFixture, ReadsAntennaModelsOnRoutingAndCutLayersAndOnAPin)
     ASSERT_EQ(pin_a->antenna_models[0].gate_area.size(), 1u);
     EXPECT_DOUBLE_EQ(pin_a->antenna_models[0].gate_area[0].value, 2.0);
     EXPECT_EQ(pin_a->antenna_models[0].gate_area[0].layer_name, "M1");
+}
+
+TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6)
+{
+    // Lengths/areas go through microns_to_dbu like every other geometric
+    // LAYER field; MINIMUMDENSITY/MAXIMUMDENSITY are percentages (no
+    // conversion); AC CURRENTDENSITY's frequency/table_entries are
+    // declared-unit values (no conversion) but width IS geometric.
+    const LayerData *m1 = root.get_layer(root.get_layer_by_name("M1"));
+    ASSERT_TRUE(m1 != nullptr);
+
+    EXPECT_EQ(m1->direction, RoutingDirection::DIAG45);
+    ASSERT_TRUE(m1->default_mask.has_value());
+    EXPECT_EQ(*m1->default_mask, 2);
+
+    ASSERT_TRUE(m1->pitch_xy.has_value());
+    EXPECT_EQ(m1->pitch_xy->x, 400);
+    EXPECT_EQ(m1->pitch_xy->y, 500);
+    EXPECT_FALSE(m1->pitch.has_value());
+    ASSERT_TRUE(m1->offset_xy.has_value());
+    EXPECT_EQ(m1->offset_xy->x, 50);
+    EXPECT_EQ(m1->offset_xy->y, 60);
+
+    ASSERT_TRUE(m1->diag_pitch.has_value());
+    EXPECT_EQ(*m1->diag_pitch, 300);
+    ASSERT_TRUE(m1->diag_spacing.has_value());
+    EXPECT_EQ(*m1->diag_spacing, 150);
+    ASSERT_TRUE(m1->diag_width.has_value());
+    EXPECT_EQ(*m1->diag_width, 100);
+    ASSERT_TRUE(m1->diag_min_edge_length.has_value());
+    EXPECT_EQ(*m1->diag_min_edge_length, 80);
+
+    ASSERT_TRUE(m1->max_width.has_value());
+    EXPECT_EQ(*m1->max_width, 2000);
+    ASSERT_TRUE(m1->min_width.has_value());
+    EXPECT_EQ(*m1->min_width, 100);
+
+    ASSERT_EQ(m1->min_sizes.size(), 2u);
+    EXPECT_EQ(m1->min_sizes[0].width, 100);
+    EXPECT_EQ(m1->min_sizes[0].length, 200);
+    EXPECT_EQ(m1->min_sizes[1].width, 300);
+    EXPECT_EQ(m1->min_sizes[1].length, 400);
+
+    ASSERT_EQ(m1->min_enclosed_areas.size(), 2u);
+    EXPECT_EQ(m1->min_enclosed_areas[0].area, 400000);
+    ASSERT_TRUE(m1->min_enclosed_areas[0].width.has_value());
+    EXPECT_EQ(*m1->min_enclosed_areas[0].width, 150);
+    EXPECT_EQ(m1->min_enclosed_areas[1].area, 800000);
+    EXPECT_FALSE(m1->min_enclosed_areas[1].width.has_value());
+
+    ASSERT_TRUE(m1->protrusion_width1.has_value());
+    EXPECT_EQ(*m1->protrusion_width1, 300);
+    ASSERT_TRUE(m1->protrusion_length.has_value());
+    EXPECT_EQ(*m1->protrusion_length, 600);
+    ASSERT_TRUE(m1->protrusion_width2.has_value());
+    EXPECT_EQ(*m1->protrusion_width2, 1200);
+
+    ASSERT_EQ(m1->spacing_table_two_widths.size(), 2u);
+    EXPECT_EQ(m1->spacing_table_two_widths[0].width, 100);
+    EXPECT_FALSE(m1->spacing_table_two_widths[0].prl.has_value());
+    ASSERT_EQ(m1->spacing_table_two_widths[0].spacings.size(), 2u);
+    EXPECT_EQ(m1->spacing_table_two_widths[0].spacings[0], 200);
+    EXPECT_EQ(m1->spacing_table_two_widths[0].spacings[1], 300);
+    EXPECT_EQ(m1->spacing_table_two_widths[1].width, 200);
+    ASSERT_TRUE(m1->spacing_table_two_widths[1].prl.has_value());
+    EXPECT_EQ(*m1->spacing_table_two_widths[1].prl, 150);
+
+    ASSERT_TRUE(m1->split_wire_width.has_value());
+    EXPECT_EQ(*m1->split_wire_width, 500);
+    ASSERT_TRUE(m1->minimum_density.has_value());
+    EXPECT_DOUBLE_EQ(*m1->minimum_density, 4.0);
+    ASSERT_TRUE(m1->maximum_density.has_value());
+    EXPECT_DOUBLE_EQ(*m1->maximum_density, 10.0);
+    ASSERT_TRUE(m1->density_check_step.has_value());
+    EXPECT_EQ(*m1->density_check_step, 200);
+    ASSERT_TRUE(m1->density_check_window.has_value());
+    EXPECT_EQ(m1->density_check_window->length, 1000);
+    EXPECT_EQ(m1->density_check_window->width, 1000);
+    ASSERT_TRUE(m1->fill_active_spacing.has_value());
+    EXPECT_EQ(*m1->fill_active_spacing, 400);
+
+    ASSERT_EQ(m1->ac_current_density.size(), 2u);
+    const LayerDensityEntry &ac_peak = m1->ac_current_density[0];
+    EXPECT_EQ(ac_peak.type, "PEAK");
+    EXPECT_FALSE(ac_peak.one_entry.has_value());
+    ASSERT_EQ(ac_peak.frequency.size(), 2u);
+    EXPECT_DOUBLE_EQ(ac_peak.frequency[0], 1000000.0);
+    EXPECT_DOUBLE_EQ(ac_peak.frequency[1], 100000000.0);
+    ASSERT_EQ(ac_peak.width.size(), 2u);
+    EXPECT_EQ(ac_peak.width[0], 100);
+    EXPECT_EQ(ac_peak.width[1], 200);
+    ASSERT_EQ(ac_peak.table_entries.size(), 2u);
+    EXPECT_DOUBLE_EQ(ac_peak.table_entries[0], 0.0000005);
+    const LayerDensityEntry &ac_average = m1->ac_current_density[1];
+    EXPECT_EQ(ac_average.type, "AVERAGE");
+    ASSERT_TRUE(ac_average.one_entry.has_value());
+    EXPECT_DOUBLE_EQ(*ac_average.one_entry, 5.5);
+
+    ASSERT_EQ(m1->dc_current_density.size(), 1u);
+    ASSERT_TRUE(m1->dc_current_density[0].one_entry.has_value());
+    EXPECT_DOUBLE_EQ(*m1->dc_current_density[0].one_entry, 4.9);
+}
+
+TEST_F(LEFAntennaFixture, ReadsCutLayerArraySpacingEnclosureAndCurrentDensityAddedInPhase6)
+{
+    const LayerData *v1 = root.get_layer(root.get_layer_by_name("V1"));
+    ASSERT_TRUE(v1 != nullptr);
+
+    ASSERT_EQ(v1->array_cuts.size(), 2u);
+    EXPECT_EQ(v1->array_cuts[0].cuts, 3);
+    EXPECT_EQ(v1->array_cuts[0].spacing, 1000);
+    EXPECT_EQ(v1->array_cuts[1].cuts, 4);
+    EXPECT_EQ(v1->array_cuts[1].spacing, 1500);
+    ASSERT_TRUE(v1->array_spacing.has_value());
+    EXPECT_TRUE(v1->array_spacing->long_array);
+    ASSERT_TRUE(v1->array_spacing->via_width.has_value());
+    EXPECT_EQ(*v1->array_spacing->via_width, 500);
+    EXPECT_EQ(v1->array_spacing->cut_spacing, 200);
+
+    ASSERT_EQ(v1->prefer_enclosures.size(), 1u);
+    EXPECT_EQ(v1->prefer_enclosures[0].location, "BELOW");
+    EXPECT_EQ(v1->prefer_enclosures[0].overhang1, 60);
+    EXPECT_EQ(v1->prefer_enclosures[0].overhang2, 10);
+
+    ASSERT_EQ(v1->enclosures.size(), 2u);
+    EXPECT_EQ(v1->enclosures[0].location, "ABOVE");
+    EXPECT_EQ(v1->enclosures[0].overhang1, 50);
+    EXPECT_EQ(v1->enclosures[0].overhang2, 10);
+    EXPECT_FALSE(v1->enclosures[0].width.has_value());
+    EXPECT_TRUE(v1->enclosures[1].location.empty());
+    ASSERT_TRUE(v1->enclosures[1].width.has_value());
+    EXPECT_EQ(*v1->enclosures[1].width, 1000);
+
+    // CUT-layer RESISTANCE (resistancePerCut()) - readable but, per the
+    // vendored writer's own RESISTANCEPERCUT-keyword bug (see
+    // write_technology_layers's own comment), never re-written.
+    ASSERT_TRUE(v1->resistance.has_value());
+    EXPECT_DOUBLE_EQ(*v1->resistance, 10.0);
+
+    ASSERT_EQ(v1->dc_current_density.size(), 1u);
+    const LayerDensityEntry &dc = v1->dc_current_density[0];
+    EXPECT_FALSE(dc.one_entry.has_value());
+    ASSERT_EQ(dc.cutarea.size(), 2u);
+    EXPECT_EQ(dc.cutarea[0], 2000000);
+    EXPECT_EQ(dc.cutarea[1], 5000000);
+    ASSERT_EQ(dc.table_entries.size(), 2u);
+    EXPECT_DOUBLE_EQ(dc.table_entries[0], 0.0000005);
+}
+
+TEST_F(LEFAntennaFixture, ReadsPinScalarFieldsDirectionEnumPortClassViaAndSiteArrayPlacementsAddedInPhase7)
+{
+    const AbstractId abstract_id = root.get_design_abstract(root.get_design_by_name("ANTENNATEST"));
+    const AbstractData *abstract = root.get_abstract(abstract_id);
+    ASSERT_TRUE(abstract != nullptr);
+
+    // MACRO SITE array placements (distinct from the singular `site` name
+    // form, which ANTENNATEST doesn't use).
+    ASSERT_EQ(abstract->site_placements.size(), 2u);
+    EXPECT_EQ(abstract->site_placements[0].site_name, "CORE");
+    EXPECT_EQ(abstract->site_placements[0].orient, Orientation::N);
+    ASSERT_TRUE(abstract->site_placements[0].num_x.has_value());
+    EXPECT_EQ(*abstract->site_placements[0].num_x, 2);
+    EXPECT_EQ(*abstract->site_placements[0].num_y, 1);
+    EXPECT_EQ(*abstract->site_placements[0].step_x, 10000);
+    EXPECT_EQ(abstract->site_placements[1].orient, Orientation::FN);
+    EXPECT_FALSE(abstract->site_placements[1].num_x.has_value());
+
+    const std::vector<TerminalId> &terminal_ids = root.get_abstract_terminals(abstract_id);
+    const TerminalData *pin_a = root.get_terminal(terminal_ids[0]);
+    ASSERT_TRUE(pin_a != nullptr);
+    EXPECT_EQ(pin_a->name, "A");
+    EXPECT_EQ(pin_a->taper_rule, "RULE1");
+    EXPECT_EQ(pin_a->supply_sensitivity, "vddpin1");
+    EXPECT_EQ(pin_a->ground_sensitivity, "gndpin");
+    // rise_slew_limit/fall_slew_limit/max_load are declared-unit values -
+    // no dbu conversion, matching resistance/capacitance's own treatment.
+    EXPECT_DOUBLE_EQ(pin_a->rise_slew_limit, 0.01);
+    EXPECT_DOUBLE_EQ(pin_a->fall_slew_limit, 0.02);
+    EXPECT_DOUBLE_EQ(pin_a->max_load, 0.1);
+
+    const std::vector<TerminalPortId> &pin_a_port_ids = root.get_terminal_ports(terminal_ids[0]);
+    ASSERT_EQ(pin_a_port_ids.size(), 1u);
+    const TerminalPortData *port_a = root.get_terminal_port(pin_a_port_ids[0]);
+    ASSERT_TRUE(port_a != nullptr);
+    EXPECT_EQ(port_a->port_class, "CORE");
+    ASSERT_EQ(port_a->shapes.size(), 1u);
+    const Shape &shape_a = port_a->shapes[0];
+    EXPECT_EQ(shape_a.layer_name, "M1");
+    EXPECT_EQ(shape_a.spacing, 50);
+    ASSERT_EQ(shape_a.vias.size(), 1u);
+    EXPECT_EQ(shape_a.vias[0].via_name, "MYVIA");
+    EXPECT_EQ(shape_a.vias[0].origin.x, 200);
+    EXPECT_EQ(shape_a.vias[0].origin.y, 200);
+
+    const TerminalData *pin_b = root.get_terminal(terminal_ids[1]);
+    ASSERT_TRUE(pin_b != nullptr);
+    EXPECT_EQ(pin_b->name, "B");
+    EXPECT_EQ(pin_b->direction, SignalDirection::FEEDTHRU);
+
+    ASSERT_EQ(root.get_abstract_obstructions(abstract_id).size(), 1u);
+    const ObstructionData *obs = root.get_obstruction(root.get_abstract_obstructions(abstract_id).front());
+    ASSERT_TRUE(obs != nullptr);
+    ASSERT_EQ(obs->shapes.size(), 1u);
+    EXPECT_EQ(obs->shapes[0].layer_name, "V1");
+    EXPECT_TRUE(obs->shapes[0].except_pg_net);
 }
 
 TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)

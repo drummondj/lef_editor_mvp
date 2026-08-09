@@ -30,9 +30,16 @@ namespace le
     /// state, see write_via_rules/write_sites/write_non_default_rules's
     /// own comments). Phase 5 scope: LAYER ANTENNAMODEL (OXIDE1-4, both
     /// ROUTING and CUT layers) and PIN ANTENNA* fields (flat pre-5.5 plus
-    /// 5.5 oxide-scoped). RECT/POLYGON MASK color on VIA, AC/DC
-    /// CURRENTDENSITY, and ARRAY are still out of scope (deferred to a
-    /// later phase, see its own plan).
+    /// 5.5 oxide-scoped). Phase 6 scope: the remaining LAYER scalar/table
+    /// fields (MASK, two-value PITCH/OFFSET/DIAGPITCH, DIAGSPACING/WIDTH/
+    /// MINEDGELENGTH, MAXWIDTH/MINWIDTH/MINSIZE/MINENCLOSEDAREA/
+    /// PROTRUSIONWIDTH, ARRAYCUTS/ARRAYSPACING, SPACINGTABLE TWOWIDTHS,
+    /// PREFERENCLOSURE, SPLITWIREWIDTH (read-only)/MINIMUMDENSITY/
+    /// MAXIMUMDENSITY/DENSITYCHECKSTEP/DENSITYCHECKWINDOW/
+    /// FILLACTIVESPACING, AC/DC CURRENTDENSITY, and DIRECTION DIAG45/
+    /// DIAG135) plus SPACING's NOTCHLENGTH/ENDOFNOTCHWIDTH (read-only).
+    /// RECT/POLYGON MASK color on VIA and the top-level ARRAY section are
+    /// still out of scope (deferred to a later phase, see its own plan).
     class LEFWriter
     {
     public:
@@ -99,6 +106,22 @@ namespace le
         // PinAntennaValue lists - dispatches to the matching
         // lefwMacroPinAntenna*(double, const char*) writer per field.
         static int write_pin_antenna_values(const std::vector<PinAntennaValue> &values, int (*writer)(double, const char *));
+        // Shared by both AC and DC CURRENTDENSITY - the four writer
+        // functions differ per family (lefwLayerAC*/lefwLayerDC*), passed
+        // in directly; frequency is nullptr for DC (no such statement -
+        // DCCURRENTDENSITY has no FREQUENCY, confirmed absent from
+        // lefwWriter.hpp). See the .cpp definition for the one_entry-vs-
+        // table dispatch and its own documented vendored-writer edge case
+        // (a real value of exactly 0.0 would be misread as "open table
+        // form").
+        static int write_layer_current_density(
+            const std::vector<LayerDensityEntry> &entries,
+            int (*current_density)(const char *, double),
+            int (*frequency)(int, double *),
+            int (*width)(int, double *),
+            int (*cutarea)(int, double *),
+            int (*table_entries)(int, double *),
+            double dbu_per_micron);
         static int write_vias(const Root &root, TechnologyId technology_id);
         static int write_via_rules(const Root &root, TechnologyId technology_id);
         static int write_sites(const Root &root, TechnologyId technology_id);

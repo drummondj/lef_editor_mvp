@@ -458,6 +458,11 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsANonDefaultRuleWithAnEmbeddedViaAndU
     ASSERT_TRUE(written->vias[0].resistance.has_value());
     EXPECT_DOUBLE_EQ(*original->vias[0].resistance, *written->vias[0].resistance);
     ASSERT_EQ(original->vias[0].layers.size(), written->vias[0].layers.size());
+    // UPDATES.md 12 Phase 7 - PROPERTY on a NONDEFAULTRULE-embedded VIA.
+    ASSERT_EQ(original->vias[0].properties.size(), written->vias[0].properties.size());
+    ASSERT_EQ(original->vias[0].properties.size(), 1u);
+    EXPECT_EQ(original->vias[0].properties[0].name, written->vias[0].properties[0].name);
+    EXPECT_DOUBLE_EQ(original->vias[0].properties[0].number_value, written->vias[0].properties[0].number_value);
 
     EXPECT_EQ(original->use_via_names, written->use_via_names);
 
@@ -632,6 +637,264 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsAntennaModelsOnRoutingAndCutLayersA
     ASSERT_EQ(original_pin->antenna_models[0].gate_area.size(), 1u);
     EXPECT_DOUBLE_EQ(original_pin->antenna_models[0].gate_area[0].value, written_pin->antenna_models[0].gate_area[0].value);
     EXPECT_EQ(original_pin->antenna_models[0].gate_area[0].layer_name, written_pin->antenna_models[0].gate_area[0].layer_name);
+}
+
+TEST_F(LEFAntennaRoundtripFixture, RoundTripsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6)
+{
+    const LayerData *original_m1 = original_root.get_layer(original_root.get_layer_by_name("M1"));
+    const LayerData *written_m1 = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    ASSERT_TRUE(original_m1 != nullptr);
+    ASSERT_TRUE(written_m1 != nullptr);
+
+    EXPECT_EQ(original_m1->direction, written_m1->direction);
+    ASSERT_EQ(original_m1->default_mask.has_value(), written_m1->default_mask.has_value());
+    EXPECT_EQ(*original_m1->default_mask, *written_m1->default_mask);
+
+    ASSERT_EQ(original_m1->pitch_xy.has_value(), written_m1->pitch_xy.has_value());
+    EXPECT_EQ(original_m1->pitch_xy->x, written_m1->pitch_xy->x);
+    EXPECT_EQ(original_m1->pitch_xy->y, written_m1->pitch_xy->y);
+    ASSERT_EQ(original_m1->offset_xy.has_value(), written_m1->offset_xy.has_value());
+    EXPECT_EQ(original_m1->offset_xy->x, written_m1->offset_xy->x);
+    EXPECT_EQ(original_m1->offset_xy->y, written_m1->offset_xy->y);
+
+    ASSERT_EQ(original_m1->diag_pitch.has_value(), written_m1->diag_pitch.has_value());
+    EXPECT_EQ(*original_m1->diag_pitch, *written_m1->diag_pitch);
+    ASSERT_EQ(original_m1->diag_spacing.has_value(), written_m1->diag_spacing.has_value());
+    EXPECT_EQ(*original_m1->diag_spacing, *written_m1->diag_spacing);
+    ASSERT_EQ(original_m1->diag_width.has_value(), written_m1->diag_width.has_value());
+    EXPECT_EQ(*original_m1->diag_width, *written_m1->diag_width);
+    ASSERT_EQ(original_m1->diag_min_edge_length.has_value(), written_m1->diag_min_edge_length.has_value());
+    EXPECT_EQ(*original_m1->diag_min_edge_length, *written_m1->diag_min_edge_length);
+
+    ASSERT_EQ(original_m1->max_width.has_value(), written_m1->max_width.has_value());
+    EXPECT_EQ(*original_m1->max_width, *written_m1->max_width);
+    ASSERT_EQ(original_m1->min_width.has_value(), written_m1->min_width.has_value());
+    EXPECT_EQ(*original_m1->min_width, *written_m1->min_width);
+
+    ASSERT_EQ(original_m1->min_sizes.size(), written_m1->min_sizes.size());
+    for (size_t i = 0; i < original_m1->min_sizes.size(); i++)
+    {
+        EXPECT_EQ(original_m1->min_sizes[i].width, written_m1->min_sizes[i].width) << "entry " << i;
+        EXPECT_EQ(original_m1->min_sizes[i].length, written_m1->min_sizes[i].length) << "entry " << i;
+    }
+
+    ASSERT_EQ(original_m1->min_enclosed_areas.size(), written_m1->min_enclosed_areas.size());
+    for (size_t i = 0; i < original_m1->min_enclosed_areas.size(); i++)
+    {
+        EXPECT_EQ(original_m1->min_enclosed_areas[i].area, written_m1->min_enclosed_areas[i].area) << "entry " << i;
+        EXPECT_EQ(original_m1->min_enclosed_areas[i].width.has_value(), written_m1->min_enclosed_areas[i].width.has_value()) << "entry " << i;
+        if (original_m1->min_enclosed_areas[i].width)
+            EXPECT_EQ(*original_m1->min_enclosed_areas[i].width, *written_m1->min_enclosed_areas[i].width) << "entry " << i;
+    }
+
+    ASSERT_EQ(original_m1->protrusion_width1.has_value(), written_m1->protrusion_width1.has_value());
+    EXPECT_EQ(*original_m1->protrusion_width1, *written_m1->protrusion_width1);
+    EXPECT_EQ(*original_m1->protrusion_length, *written_m1->protrusion_length);
+    EXPECT_EQ(*original_m1->protrusion_width2, *written_m1->protrusion_width2);
+
+    ASSERT_EQ(original_m1->spacing_table_two_widths.size(), written_m1->spacing_table_two_widths.size());
+    for (size_t i = 0; i < original_m1->spacing_table_two_widths.size(); i++)
+    {
+        const TwoWidthsSpacingEntry &o = original_m1->spacing_table_two_widths[i];
+        const TwoWidthsSpacingEntry &w = written_m1->spacing_table_two_widths[i];
+        EXPECT_EQ(o.width, w.width) << "row " << i;
+        // Row 1's PRL is nonzero (150) and round-trips fine; row 0 has no
+        // PRL at all, also unaffected - the documented PRL==0 vendored-
+        // writer edge case (write_technology_layers's own comment) isn't
+        // exercised by this fixture's own values, deliberately.
+        EXPECT_EQ(o.prl.has_value(), w.prl.has_value()) << "row " << i;
+        if (o.prl)
+            EXPECT_EQ(*o.prl, *w.prl) << "row " << i;
+        ASSERT_EQ(o.spacings.size(), w.spacings.size()) << "row " << i;
+        for (size_t j = 0; j < o.spacings.size(); j++)
+            EXPECT_EQ(o.spacings[j], w.spacings[j]) << "row " << i << " col " << j;
+    }
+
+    // split_wire_width is deliberately excluded here - read-only, no
+    // vendored writer function exists (see write_technology_layers's own
+    // comment); written_m1->split_wire_width stays unset.
+    EXPECT_FALSE(written_m1->split_wire_width.has_value());
+
+    ASSERT_EQ(original_m1->minimum_density.has_value(), written_m1->minimum_density.has_value());
+    EXPECT_DOUBLE_EQ(*original_m1->minimum_density, *written_m1->minimum_density);
+    ASSERT_EQ(original_m1->maximum_density.has_value(), written_m1->maximum_density.has_value());
+    EXPECT_DOUBLE_EQ(*original_m1->maximum_density, *written_m1->maximum_density);
+    ASSERT_EQ(original_m1->density_check_step.has_value(), written_m1->density_check_step.has_value());
+    EXPECT_EQ(*original_m1->density_check_step, *written_m1->density_check_step);
+    ASSERT_EQ(original_m1->density_check_window.has_value(), written_m1->density_check_window.has_value());
+    EXPECT_EQ(original_m1->density_check_window->length, written_m1->density_check_window->length);
+    EXPECT_EQ(original_m1->density_check_window->width, written_m1->density_check_window->width);
+    ASSERT_EQ(original_m1->fill_active_spacing.has_value(), written_m1->fill_active_spacing.has_value());
+    EXPECT_EQ(*original_m1->fill_active_spacing, *written_m1->fill_active_spacing);
+
+    ASSERT_EQ(original_m1->ac_current_density.size(), written_m1->ac_current_density.size());
+    ASSERT_EQ(original_m1->ac_current_density.size(), 2u);
+    for (size_t i = 0; i < 2; i++)
+    {
+        const LayerDensityEntry &o = original_m1->ac_current_density[i];
+        const LayerDensityEntry &w = written_m1->ac_current_density[i];
+        EXPECT_EQ(o.type, w.type) << "entry " << i;
+        EXPECT_EQ(o.one_entry.has_value(), w.one_entry.has_value()) << "entry " << i;
+        if (o.one_entry)
+            EXPECT_DOUBLE_EQ(*o.one_entry, *w.one_entry) << "entry " << i;
+        ASSERT_EQ(o.frequency.size(), w.frequency.size()) << "entry " << i;
+        for (size_t j = 0; j < o.frequency.size(); j++)
+            EXPECT_DOUBLE_EQ(o.frequency[j], w.frequency[j]) << "entry " << i << " freq " << j;
+        ASSERT_EQ(o.width.size(), w.width.size()) << "entry " << i;
+        for (size_t j = 0; j < o.width.size(); j++)
+            EXPECT_EQ(o.width[j], w.width[j]) << "entry " << i << " width " << j;
+        ASSERT_EQ(o.table_entries.size(), w.table_entries.size()) << "entry " << i;
+        for (size_t j = 0; j < o.table_entries.size(); j++)
+            EXPECT_DOUBLE_EQ(o.table_entries[j], w.table_entries[j]) << "entry " << i << " table " << j;
+    }
+
+    ASSERT_EQ(original_m1->dc_current_density.size(), written_m1->dc_current_density.size());
+    ASSERT_EQ(original_m1->dc_current_density.size(), 1u);
+    ASSERT_EQ(original_m1->dc_current_density[0].one_entry.has_value(), written_m1->dc_current_density[0].one_entry.has_value());
+    EXPECT_DOUBLE_EQ(*original_m1->dc_current_density[0].one_entry, *written_m1->dc_current_density[0].one_entry);
+}
+
+TEST_F(LEFAntennaRoundtripFixture, RoundTripsCutLayerArraySpacingEnclosureAndCurrentDensityAddedInPhase6)
+{
+    const LayerData *original_v1 = original_root.get_layer(original_root.get_layer_by_name("V1"));
+    const LayerData *written_v1 = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    ASSERT_TRUE(original_v1 != nullptr);
+    ASSERT_TRUE(written_v1 != nullptr);
+
+    ASSERT_EQ(original_v1->array_cuts.size(), written_v1->array_cuts.size());
+    for (size_t i = 0; i < original_v1->array_cuts.size(); i++)
+    {
+        EXPECT_EQ(original_v1->array_cuts[i].cuts, written_v1->array_cuts[i].cuts) << "entry " << i;
+        EXPECT_EQ(original_v1->array_cuts[i].spacing, written_v1->array_cuts[i].spacing) << "entry " << i;
+    }
+    ASSERT_EQ(original_v1->array_spacing.has_value(), written_v1->array_spacing.has_value());
+    EXPECT_EQ(original_v1->array_spacing->long_array, written_v1->array_spacing->long_array);
+    ASSERT_EQ(original_v1->array_spacing->via_width.has_value(), written_v1->array_spacing->via_width.has_value());
+    EXPECT_EQ(*original_v1->array_spacing->via_width, *written_v1->array_spacing->via_width);
+    EXPECT_EQ(original_v1->array_spacing->cut_spacing, written_v1->array_spacing->cut_spacing);
+
+    ASSERT_EQ(original_v1->prefer_enclosures.size(), written_v1->prefer_enclosures.size());
+    ASSERT_EQ(original_v1->prefer_enclosures.size(), 1u);
+    EXPECT_EQ(original_v1->prefer_enclosures[0].location, written_v1->prefer_enclosures[0].location);
+    EXPECT_EQ(original_v1->prefer_enclosures[0].overhang1, written_v1->prefer_enclosures[0].overhang1);
+    EXPECT_EQ(original_v1->prefer_enclosures[0].overhang2, written_v1->prefer_enclosures[0].overhang2);
+
+    ASSERT_EQ(original_v1->enclosures.size(), written_v1->enclosures.size());
+    for (size_t i = 0; i < original_v1->enclosures.size(); i++)
+    {
+        const EnclosureEntry &o = original_v1->enclosures[i];
+        const EnclosureEntry &w = written_v1->enclosures[i];
+        EXPECT_EQ(o.location, w.location) << "entry " << i;
+        EXPECT_EQ(o.overhang1, w.overhang1) << "entry " << i;
+        EXPECT_EQ(o.overhang2, w.overhang2) << "entry " << i;
+        EXPECT_EQ(o.width.has_value(), w.width.has_value()) << "entry " << i;
+        if (o.width)
+            EXPECT_EQ(*o.width, *w.width) << "entry " << i;
+    }
+
+    // KNOWN VENDORED-LIBRARY BUG: lefwLayerResistancePerCut writes the
+    // wrong keyword ("RESISTANCEPERCUT", not a real lef.y token - see
+    // write_technology_layers's own comment) - CUT-layer resistance is
+    // read-only, so written_v1->resistance stays unset even though
+    // original_v1->resistance is populated from the fixture's own
+    // "RESISTANCE 10.0 ;".
+    ASSERT_TRUE(original_v1->resistance.has_value());
+    EXPECT_FALSE(written_v1->resistance.has_value());
+
+    ASSERT_EQ(original_v1->dc_current_density.size(), written_v1->dc_current_density.size());
+    ASSERT_EQ(original_v1->dc_current_density.size(), 1u);
+    const LayerDensityEntry &o_dc = original_v1->dc_current_density[0];
+    const LayerDensityEntry &w_dc = written_v1->dc_current_density[0];
+    ASSERT_EQ(o_dc.cutarea.size(), w_dc.cutarea.size());
+    for (size_t i = 0; i < o_dc.cutarea.size(); i++)
+        EXPECT_EQ(o_dc.cutarea[i], w_dc.cutarea[i]) << "cutarea " << i;
+    ASSERT_EQ(o_dc.table_entries.size(), w_dc.table_entries.size());
+    for (size_t i = 0; i < o_dc.table_entries.size(); i++)
+        EXPECT_DOUBLE_EQ(o_dc.table_entries[i], w_dc.table_entries[i]) << "table " << i;
+}
+
+TEST_F(LEFAntennaRoundtripFixture, RoundTripsPinScalarFieldsDirectionEnumPortClassViaAndSiteArrayPlacementsAddedInPhase7)
+{
+    const AbstractId original_abstract_id = original_root.get_design_abstract(original_root.get_design_by_name("ANTENNATEST"));
+    const AbstractId written_abstract_id = written_root.get_design_abstract(written_root.get_design_by_name("ANTENNATEST"));
+    const AbstractData *original_abstract = original_root.get_abstract(original_abstract_id);
+    const AbstractData *written_abstract = written_root.get_abstract(written_abstract_id);
+    ASSERT_TRUE(original_abstract != nullptr);
+    ASSERT_TRUE(written_abstract != nullptr);
+
+    ASSERT_EQ(original_abstract->site_placements.size(), written_abstract->site_placements.size());
+    ASSERT_EQ(original_abstract->site_placements.size(), 2u);
+    for (size_t i = 0; i < 2; i++)
+    {
+        const MacroSitePlacement &o = original_abstract->site_placements[i];
+        const MacroSitePlacement &w = written_abstract->site_placements[i];
+        EXPECT_EQ(o.site_name, w.site_name) << "entry " << i;
+        EXPECT_EQ(o.orient, w.orient) << "entry " << i;
+        EXPECT_EQ(o.num_x.has_value(), w.num_x.has_value()) << "entry " << i;
+        if (o.num_x)
+        {
+            EXPECT_EQ(*o.num_x, *w.num_x) << "entry " << i;
+            EXPECT_EQ(*o.step_x, *w.step_x) << "entry " << i;
+        }
+    }
+
+    const std::vector<TerminalId> &original_terminal_ids = original_root.get_abstract_terminals(original_abstract_id);
+    const std::vector<TerminalId> &written_terminal_ids = written_root.get_abstract_terminals(written_abstract_id);
+    ASSERT_EQ(original_terminal_ids.size(), written_terminal_ids.size());
+    ASSERT_EQ(original_terminal_ids.size(), 2u);
+
+    const TerminalData *original_pin_a = original_root.get_terminal(original_terminal_ids[0]);
+    const TerminalData *written_pin_a = written_root.get_terminal(written_terminal_ids[0]);
+    ASSERT_TRUE(original_pin_a != nullptr);
+    ASSERT_TRUE(written_pin_a != nullptr);
+    EXPECT_EQ(original_pin_a->taper_rule, written_pin_a->taper_rule);
+    EXPECT_EQ(original_pin_a->supply_sensitivity, written_pin_a->supply_sensitivity);
+    EXPECT_EQ(original_pin_a->ground_sensitivity, written_pin_a->ground_sensitivity);
+    // rise_slew_limit/fall_slew_limit/max_load are read-only - no vendored
+    // writer function exists (see write_terminal's own comment) -
+    // written_pin_a stays unset (0, the sentinel) even though
+    // original_pin_a has real values from the fixture.
+    ASSERT_DOUBLE_EQ(original_pin_a->rise_slew_limit, 0.01);
+    EXPECT_DOUBLE_EQ(written_pin_a->rise_slew_limit, 0.0);
+    EXPECT_DOUBLE_EQ(written_pin_a->fall_slew_limit, 0.0);
+    EXPECT_DOUBLE_EQ(written_pin_a->max_load, 0.0);
+
+    const std::vector<TerminalPortId> &original_port_ids = original_root.get_terminal_ports(original_terminal_ids[0]);
+    const std::vector<TerminalPortId> &written_port_ids = written_root.get_terminal_ports(written_terminal_ids[0]);
+    ASSERT_EQ(original_port_ids.size(), written_port_ids.size());
+    ASSERT_EQ(original_port_ids.size(), 1u);
+    const TerminalPortData *original_port_a = original_root.get_terminal_port(original_port_ids[0]);
+    const TerminalPortData *written_port_a = written_root.get_terminal_port(written_port_ids[0]);
+    ASSERT_TRUE(original_port_a != nullptr);
+    ASSERT_TRUE(written_port_a != nullptr);
+    EXPECT_EQ(original_port_a->port_class, written_port_a->port_class);
+    ASSERT_EQ(original_port_a->shapes.size(), written_port_a->shapes.size());
+    ASSERT_EQ(original_port_a->shapes.size(), 1u);
+    EXPECT_EQ(original_port_a->shapes[0].spacing, written_port_a->shapes[0].spacing);
+    ASSERT_EQ(original_port_a->shapes[0].vias.size(), written_port_a->shapes[0].vias.size());
+    ASSERT_EQ(original_port_a->shapes[0].vias.size(), 1u);
+    EXPECT_EQ(original_port_a->shapes[0].vias[0].via_name, written_port_a->shapes[0].vias[0].via_name);
+    EXPECT_EQ(original_port_a->shapes[0].vias[0].origin.x, written_port_a->shapes[0].vias[0].origin.x);
+
+    const TerminalData *original_pin_b = original_root.get_terminal(original_terminal_ids[1]);
+    const TerminalData *written_pin_b = written_root.get_terminal(written_terminal_ids[1]);
+    ASSERT_TRUE(original_pin_b != nullptr);
+    ASSERT_TRUE(written_pin_b != nullptr);
+    EXPECT_EQ(original_pin_b->direction, SignalDirection::FEEDTHRU);
+    EXPECT_EQ(original_pin_b->direction, written_pin_b->direction);
+
+    const std::vector<ObstructionId> &original_obs_ids = original_root.get_abstract_obstructions(original_abstract_id);
+    const std::vector<ObstructionId> &written_obs_ids = written_root.get_abstract_obstructions(written_abstract_id);
+    ASSERT_EQ(original_obs_ids.size(), written_obs_ids.size());
+    ASSERT_EQ(original_obs_ids.size(), 1u);
+    const ObstructionData *original_obs = original_root.get_obstruction(original_obs_ids.front());
+    const ObstructionData *written_obs = written_root.get_obstruction(written_obs_ids.front());
+    ASSERT_TRUE(original_obs != nullptr);
+    ASSERT_TRUE(written_obs != nullptr);
+    ASSERT_EQ(original_obs->shapes.size(), written_obs->shapes.size());
+    ASSERT_EQ(original_obs->shapes.size(), 1u);
+    EXPECT_TRUE(original_obs->shapes[0].except_pg_net);
+    EXPECT_EQ(original_obs->shapes[0].except_pg_net, written_obs->shapes[0].except_pg_net);
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)

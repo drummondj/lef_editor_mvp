@@ -6,7 +6,9 @@ consumed by a Flutter plugin. This is an MVP/proof-of-concept: the goal right
 now is finding the right architecture for editing hierarchical designs with
 millions of objects, not shipping features. See `README.md` for the full
 brief and the live plan checklist; see `BENCHMARKS.md` for benchmark history
-and design-decision writeups — neither is duplicated here.
+and design-decision writeups; see `LEFDEF_BUGS.md` for confirmed bugs in
+the vendored LEF/DEF parser/writer and how `src/io/` works around each —
+none of these are duplicated here.
 
 ## Requirements (non-negotiable)
 

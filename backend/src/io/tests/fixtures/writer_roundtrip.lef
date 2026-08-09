@@ -97,6 +97,7 @@ NONDEFAULTRULE WIDE_M1
    END M1
    VIA ND_VIA1
       RESISTANCE 0.3 ;
+      PROPERTY vip 7 ;
       LAYER M1 ;
          RECT -1 -1 1 1 ;
       LAYER V1 ;

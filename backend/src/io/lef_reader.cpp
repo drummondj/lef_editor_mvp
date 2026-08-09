@@ -235,12 +235,162 @@ namespace le
 
         if (lef_layer->hasWidth())
             layer.width = reader->microns_to_dbu(lef_layer->width());
-        if (lef_layer->hasPitch())
+        // hasXYPitch()/hasXYOffset() (two-value form) are mutually
+        // exclusive with hasPitch()/hasOffset() (single-value form) per
+        // lefiLayer's own setPitch() vs setPitchXY() - never both set.
+        if (lef_layer->hasXYPitch())
+            layer.pitch_xy = Point{.x = reader->microns_to_dbu(lef_layer->pitchX()), .y = reader->microns_to_dbu(lef_layer->pitchY())};
+        else if (lef_layer->hasPitch())
             layer.pitch = reader->microns_to_dbu(lef_layer->pitch());
-        if (lef_layer->hasOffset())
+        if (lef_layer->hasXYOffset())
+            layer.offset_xy = Point{.x = reader->microns_to_dbu(lef_layer->offsetX()), .y = reader->microns_to_dbu(lef_layer->offsetY())};
+        else if (lef_layer->hasOffset())
             layer.offset = reader->microns_to_dbu(lef_layer->offset());
         if (lef_layer->hasArea())
             layer.area = reader->microns_squared_to_dbu(lef_layer->area());
+        if (lef_layer->hasXYDiagPitch())
+            layer.diag_pitch_xy = Point{.x = reader->microns_to_dbu(lef_layer->diagPitchX()), .y = reader->microns_to_dbu(lef_layer->diagPitchY())};
+        else if (lef_layer->hasDiagPitch())
+            layer.diag_pitch = reader->microns_to_dbu(lef_layer->diagPitch());
+        if (lef_layer->hasDiagSpacing())
+            layer.diag_spacing = reader->microns_to_dbu(lef_layer->diagSpacing());
+        if (lef_layer->hasDiagWidth())
+            layer.diag_width = reader->microns_to_dbu(lef_layer->diagWidth());
+        if (lef_layer->hasDiagMinEdgeLength())
+            layer.diag_min_edge_length = reader->microns_to_dbu(lef_layer->diagMinEdgeLength());
+        if (lef_layer->hasMask())
+            layer.default_mask = lef_layer->mask();
+        if (lef_layer->hasMaxwidth())
+            layer.max_width = reader->microns_to_dbu(lef_layer->maxwidth());
+        if (lef_layer->hasMinwidth())
+            layer.min_width = reader->microns_to_dbu(lef_layer->minwidth());
+        layer.min_sizes.reserve(static_cast<size_t>(lef_layer->numMinSize()));
+        for (int i = 0; i < lef_layer->numMinSize(); i++)
+        {
+            layer.min_sizes.push_back(MinSizeEntry{
+                .width = reader->microns_to_dbu(lef_layer->minSizeWidth(i)),
+                .length = reader->microns_to_dbu(lef_layer->minSizeLength(i)),
+            });
+        }
+        layer.min_enclosed_areas.reserve(static_cast<size_t>(lef_layer->numMinenclosedarea()));
+        for (int i = 0; i < lef_layer->numMinenclosedarea(); i++)
+        {
+            MinEnclosedAreaEntry entry{.area = reader->microns_squared_to_dbu(lef_layer->minenclosedarea(i))};
+            if (lef_layer->hasMinenclosedareaWidth(i))
+                entry.width = reader->microns_to_dbu(lef_layer->minenclosedareaWidth(i));
+            layer.min_enclosed_areas.push_back(entry);
+        }
+        if (lef_layer->hasProtrusion())
+        {
+            layer.protrusion_width1 = reader->microns_to_dbu(lef_layer->protrusionWidth1());
+            layer.protrusion_length = reader->microns_to_dbu(lef_layer->protrusionLength());
+            layer.protrusion_width2 = reader->microns_to_dbu(lef_layer->protrusionWidth2());
+        }
+        layer.array_cuts.reserve(static_cast<size_t>(lef_layer->numArrayCuts()));
+        for (int i = 0; i < lef_layer->numArrayCuts(); i++)
+        {
+            layer.array_cuts.push_back(ArrayCutsEntry{
+                .cuts = lef_layer->arrayCuts(i),
+                .spacing = reader->microns_to_dbu(lef_layer->arraySpacing(i)),
+            });
+        }
+        if (lef_layer->hasArraySpacing())
+        {
+            ArraySpacing array_spacing{
+                .long_array = static_cast<bool>(lef_layer->hasLongArray()),
+                .cut_spacing = reader->microns_to_dbu(lef_layer->cutSpacing()),
+            };
+            if (lef_layer->hasViaWidth())
+                array_spacing.via_width = reader->microns_to_dbu(lef_layer->viaWidth());
+            layer.array_spacing = std::move(array_spacing);
+        }
+        layer.prefer_enclosures.reserve(static_cast<size_t>(lef_layer->numPreferEnclosure()));
+        for (int i = 0; i < lef_layer->numPreferEnclosure(); i++)
+        {
+            PreferEnclosureEntry entry{
+                .location = lef_layer->hasPreferEnclosureRule(i) ? lef_layer->preferEnclosureRule(i) : "",
+                .overhang1 = reader->microns_to_dbu(lef_layer->preferEnclosureOverhang1(i)),
+                .overhang2 = reader->microns_to_dbu(lef_layer->preferEnclosureOverhang2(i)),
+            };
+            if (lef_layer->hasPreferEnclosureWidth(i))
+                entry.min_width = reader->microns_to_dbu(lef_layer->preferEnclosureMinWidth(i));
+            layer.prefer_enclosures.push_back(std::move(entry));
+        }
+        layer.enclosures.reserve(static_cast<size_t>(lef_layer->numEnclosure()));
+        for (int i = 0; i < lef_layer->numEnclosure(); i++)
+        {
+            EnclosureEntry entry{
+                .location = lef_layer->hasEnclosureRule(i) ? lef_layer->enclosureRule(i) : "",
+                .overhang1 = reader->microns_to_dbu(lef_layer->enclosureOverhang1(i)),
+                .overhang2 = reader->microns_to_dbu(lef_layer->enclosureOverhang2(i)),
+            };
+            // width/except_extra_cut and min_length are mutually exclusive
+            // per the vendored writer's own three ENCLOSURE variants (see
+            // write_technology_layers's own comment).
+            if (lef_layer->hasEnclosureWidth(i))
+            {
+                entry.width = reader->microns_to_dbu(lef_layer->enclosureMinWidth(i));
+                if (lef_layer->hasEnclosureExceptExtraCut(i))
+                    entry.except_extra_cut = reader->microns_to_dbu(lef_layer->enclosureExceptExtraCut(i));
+            }
+            else if (lef_layer->hasEnclosureMinLength(i))
+                entry.min_length = reader->microns_to_dbu(lef_layer->enclosureMinLength(i));
+            layer.enclosures.push_back(std::move(entry));
+        }
+        if (lef_layer->hasSplitWireWidth())
+            layer.split_wire_width = reader->microns_to_dbu(lef_layer->splitWireWidth());
+        if (lef_layer->hasMinimumDensity())
+            layer.minimum_density = lef_layer->minimumDensity();
+        if (lef_layer->hasMaximumDensity())
+            layer.maximum_density = lef_layer->maximumDensity();
+        if (lef_layer->hasDensityCheckStep())
+            layer.density_check_step = reader->microns_to_dbu(lef_layer->densityCheckStep());
+        if (lef_layer->hasDensityCheckWindow())
+        {
+            layer.density_check_window = DensityCheckWindow{
+                .length = reader->microns_to_dbu(lef_layer->densityCheckWindowLength()),
+                .width = reader->microns_to_dbu(lef_layer->densityCheckWindowWidth()),
+            };
+        }
+        if (lef_layer->hasFillActiveSpacing())
+            layer.fill_active_spacing = reader->microns_to_dbu(lef_layer->fillActiveSpacing());
+
+        // AC/DC CURRENTDENSITY - lefiLayerDensity's type() is always set
+        // ("PEAK"/"AVERAGE"/"RMS"); hasOneEntry() selects the plain-scalar
+        // form, otherwise it's the table form (frequency/width-or-cutarea +
+        // table_entries, mutually exclusive with one_entry per grammar).
+        // table_entries is a single flat array per block (addTableEntry()
+        // is called once per grammar rule, no 2D structure in the API) -
+        // stored as-is, matching the vendored reader's own lack of any
+        // cross-count validation between it and frequency/width/cutarea.
+        auto read_current_density = [reader](lefiLayerDensity *density) -> LayerDensityEntry
+        {
+            LayerDensityEntry entry{.type = density->type()};
+            if (density->hasOneEntry())
+            {
+                entry.one_entry = density->oneEntry();
+                return entry;
+            }
+            entry.frequency.reserve(static_cast<size_t>(density->numFrequency()));
+            for (int f = 0; f < density->numFrequency(); f++)
+                entry.frequency.push_back(density->frequency(f));
+            entry.width.reserve(static_cast<size_t>(density->numWidths()));
+            for (int w = 0; w < density->numWidths(); w++)
+                entry.width.push_back(reader->microns_to_dbu(density->width(w)));
+            entry.cutarea.reserve(static_cast<size_t>(density->numCutareas()));
+            for (int c = 0; c < density->numCutareas(); c++)
+                entry.cutarea.push_back(reader->microns_squared_to_dbu(density->cutArea(c)));
+            entry.table_entries.reserve(static_cast<size_t>(density->numTableEntries()));
+            for (int t = 0; t < density->numTableEntries(); t++)
+                entry.table_entries.push_back(density->tableEntry(t));
+            return entry;
+        };
+        layer.ac_current_density.reserve(static_cast<size_t>(lef_layer->numAccurrentDensity()));
+        for (int i = 0; i < lef_layer->numAccurrentDensity(); i++)
+            layer.ac_current_density.push_back(read_current_density(lef_layer->accurrent(i)));
+        layer.dc_current_density.reserve(static_cast<size_t>(lef_layer->numDccurrentDensity()));
+        for (int i = 0; i < lef_layer->numDccurrentDensity(); i++)
+            layer.dc_current_density.push_back(read_current_density(lef_layer->dccurrent(i)));
         layer.spacing_rules.reserve(static_cast<size_t>(lef_layer->numSpacing()));
         for (int i = 0; i < lef_layer->numSpacing(); i++)
         {
@@ -299,6 +449,16 @@ namespace le
                 rule.adjacent_within = reader->microns_to_dbu(lef_layer->spacingAdjacentWithin(i));
                 if (lef_layer->hasSpacingAdjacentExcept(i))
                     rule.adjacent_except_same_pg_net = true;
+            }
+            // Read-only (see write_technology_layers's own comment on the
+            // vendored writer bug - these are never written back out).
+            if (lef_layer->hasSpacingNotchLength(i))
+                rule.notch_length = reader->microns_to_dbu(lef_layer->spacingNotchLength(i));
+            if (lef_layer->hasSpacingEndOfNotchWidth(i))
+            {
+                rule.end_of_notch_width = reader->microns_to_dbu(lef_layer->spacingEndOfNotchWidth(i));
+                rule.end_of_notch_spacing = reader->microns_to_dbu(lef_layer->spacingEndOfNotchSpacing(i));
+                rule.end_of_notch_length = reader->microns_to_dbu(lef_layer->spacingEndOfNotchLength(i));
             }
 
             layer.spacing_rules.push_back(std::move(rule));
@@ -368,6 +528,23 @@ namespace le
                     });
                 }
             }
+            else if (lefiTwoWidths *two_widths = table->twoWidths())
+            {
+                // No isTwoWidths() guard exists on lefiSpacingTable - the
+                // null-check on twoWidths() itself is the only way to
+                // detect this form (mutually exclusive with isParallel()/
+                // isInfluence() per the grammar).
+                for (int w = 0; w < two_widths->numWidth(); w++)
+                {
+                    TwoWidthsSpacingEntry entry{.width = reader->microns_to_dbu(two_widths->width(w))};
+                    if (two_widths->hasWidthPRL(w))
+                        entry.prl = reader->microns_to_dbu(two_widths->widthPRL(w));
+                    entry.spacings.reserve(static_cast<size_t>(two_widths->numWidthSpacing(w)));
+                    for (int s = 0; s < two_widths->numWidthSpacing(w); s++)
+                        entry.spacings.push_back(reader->microns_to_dbu(two_widths->widthSpacing(w, s)));
+                    layer.spacing_table_two_widths.push_back(std::move(entry));
+                }
+            }
         }
 
         if (lef_layer->hasSpacingTableOrtho())
@@ -384,6 +561,13 @@ namespace le
         }
         if (lef_layer->hasResistance())
             layer.resistance = lef_layer->resistance();
+        // hasResistancePerCut()/resistancePerCut() is a distinct
+        // accessor pair from hasResistance()/resistance() - the CUT-layer
+        // RESISTANCE statement (5.6) parses differently from ROUTING's own
+        // RESISTANCE, but both land in the same layer.resistance field
+        // (mutually exclusive per layer type, never both set on one layer).
+        else if (lef_layer->hasResistancePerCut())
+            layer.resistance = lef_layer->resistancePerCut();
         if (lef_layer->hasCapacitance())
             layer.capacitance = lef_layer->capacitance();
         if (lef_layer->hasHeight())
@@ -874,6 +1058,17 @@ namespace le
             }
             via.layers = via_layers_from_parser(reader, lef_via);
 
+            via.properties.reserve(static_cast<size_t>(lef_via->numProperties()));
+            for (int j = 0; j < lef_via->numProperties(); j++)
+            {
+                via.properties.push_back(LefProperty{
+                    .name = lef_via->propName(j),
+                    .is_number = static_cast<bool>(lef_via->propIsNumber(j)),
+                    .string_value = lef_via->propIsString(j) ? lef_via->propValue(j) : "",
+                    .number_value = lef_via->propIsNumber(j) ? lef_via->propNumber(j) : 0.0,
+                });
+            }
+
             rule.vias.push_back(std::move(via));
         }
 
@@ -1012,6 +1207,28 @@ namespace le
             reader->abstract_data_.site = lef_macro->siteName();
         }
 
+        // Distinct, mutually-exclusive grammar alternative from the
+        // singular hasSiteName()/siteName() above - a macro uses one form
+        // or the other (lefiMacro's own setSiteName vs setSitePattern).
+        reader->abstract_data_.site_placements.reserve(static_cast<size_t>(lef_macro->numSitePattern()));
+        for (int i = 0; i < lef_macro->numSitePattern(); i++)
+        {
+            lefiSitePattern *pattern = lef_macro->sitePattern(i);
+            MacroSitePlacement placement{
+                .site_name = pattern->name(),
+                .origin = Point{.x = reader->microns_to_dbu(pattern->x()), .y = reader->microns_to_dbu(pattern->y())},
+                .orient = orientation_from_parser(pattern->orient()),
+            };
+            if (pattern->hasStepPattern())
+            {
+                placement.num_x = static_cast<int>(pattern->xStart());
+                placement.num_y = static_cast<int>(pattern->yStart());
+                placement.step_x = reader->microns_to_dbu(pattern->xStep());
+                placement.step_y = reader->microns_to_dbu(pattern->yStep());
+            }
+            reader->abstract_data_.site_placements.push_back(std::move(placement));
+        }
+
         if (lef_macro->hasEEQ())
             reader->abstract_data_.eeq = lef_macro->EEQ();
         if (lef_macro->hasLEQ())
@@ -1087,6 +1304,21 @@ namespace le
             terminal.net_expr = lef_pin->netExpr();
         if (lef_pin->hasLEQ())
             terminal.leq = lef_pin->LEQ();
+        if (lef_pin->hasTaperRule())
+            terminal.taper_rule = lef_pin->taperRule();
+        if (lef_pin->hasSupplySensitivity())
+            terminal.supply_sensitivity = lef_pin->supplySensitivity();
+        if (lef_pin->hasGroundSensitivity())
+            terminal.ground_sensitivity = lef_pin->groundSensitivity();
+        // rise_slew_limit/fall_slew_limit/max_load are read-only - no
+        // vendored writer function exists for any of them (see
+        // write_terminal's own comment).
+        if (lef_pin->hasRiseSlewLimit())
+            terminal.rise_slew_limit = lef_pin->riseSlewLimit();
+        if (lef_pin->hasFallSlewLimit())
+            terminal.fall_slew_limit = lef_pin->fallSlewLimit();
+        if (lef_pin->hasMaxload())
+            terminal.max_load = lef_pin->maxload();
 
         // lefiPin's own accessors are numProperties()/propNum(), matching
         // lefiMacro's own naming quirk (see lefrMacroCbkFn's own comment).
@@ -1167,6 +1399,18 @@ namespace le
             port.shapes.insert(port.shapes.end(),
                                shapes.begin(),
                                shapes.end());
+
+            // lefiGeomClassE doesn't belong to any one Shape (see
+            // shapes_from_parser's own comment) - scan for it separately.
+            for (int j = 0; j < lef_port->numItems(); j++)
+            {
+                if (lef_port->itemType(j) == lefiGeomEnum::lefiGeomClassE)
+                {
+                    port.port_class = lef_port->getClass(j);
+                    break;
+                }
+            }
+
             reader->root_->create_terminal_port(port);
         }
 
@@ -1289,6 +1533,12 @@ namespace le
         if (strcmp(name, "VERTICAL") == 0)
             return RoutingDirection::V;
 
+        if (strcmp(name, "DIAG45") == 0)
+            return RoutingDirection::DIAG45;
+
+        if (strcmp(name, "DIAG135") == 0)
+            return RoutingDirection::DIAG135;
+
         return RoutingDirection::NONE;
     }
 
@@ -1303,8 +1553,14 @@ namespace le
         if (strcmp(name, "OUTPUT") == 0)
             return SignalDirection::OUTPUT;
 
-        if (strcmp(name, "INOUT") == 0 || strcmp(name, "FEEDTHRU") == 0 || strcmp(name, "OUTPUT TRISTATE") == 0)
+        if (strcmp(name, "INOUT") == 0)
             return SignalDirection::INOUT;
+
+        if (strcmp(name, "OUTPUT TRISTATE") == 0)
+            return SignalDirection::OUTPUT_TRISTATE;
+
+        if (strcmp(name, "FEEDTHRU") == 0)
+            return SignalDirection::FEEDTHRU;
 
         return SignalDirection::NONE;
     }
@@ -1505,6 +1761,106 @@ namespace le
                 geo_count++;
                 break;
             }
+            case lefiGeomEnum::lefiGeomLayerMinSpacingE:
+            {
+                if (!shape.has_value())
+                {
+                    log_error("SPACING defined without previous LAYER definition.");
+                    break;
+                }
+                shape.value().spacing = reader->microns_to_dbu(geometries->getLayerMinSpacing(j));
+                // A LAYER occurrence can legitimately carry only a
+                // SPACING/DESIGNRULEWIDTH/EXCEPTPGNET override with no
+                // RECT/POLYGON/PATH/VIA at all (e.g. complete.5.8.lef's
+                // own "PORT CLASS BUMP ; LAYER M2 SPACING 0.06 ; END") -
+                // without this, the shape.has_value() && geo_count > 0
+                // guard below would silently drop the whole Shape
+                // (including this field) since nothing else ever
+                // incremented geo_count.
+                geo_count++;
+                break;
+            }
+            case lefiGeomEnum::lefiGeomLayerRuleWidthE:
+            {
+                if (!shape.has_value())
+                {
+                    log_error("DESIGNRULEWIDTH defined without previous LAYER definition.");
+                    break;
+                }
+                shape.value().design_rule_width = reader->microns_to_dbu(geometries->getLayerRuleWidth(j));
+                geo_count++;
+                break;
+            }
+            case lefiGeomEnum::lefiGeomLayerExceptPgNetE:
+            {
+                if (!shape.has_value())
+                {
+                    log_error("EXCEPTPGNET defined without previous LAYER definition.");
+                    break;
+                }
+                shape.value().except_pg_net = true;
+                geo_count++;
+                break;
+            }
+            case lefiGeomEnum::lefiGeomViaE:
+            {
+                if (!shape.has_value())
+                {
+                    log_error("VIA defined without previous LAYER definition.");
+                    break;
+                }
+                lefiGeomVia *lef_via = geometries->getVia(j);
+                ShapeVia via{
+                    .via_name = lef_via->name,
+                    .origin = Point{.x = reader->microns_to_dbu(lef_via->x), .y = reader->microns_to_dbu(lef_via->y)},
+                };
+                // Only the top mask is captured - the vendored writer's
+                // own lefwMacroObsVia/lefwMacroPinPortVia accept a single
+                // combined mask parameter, not 3 distinct ones, so
+                // cutMaskNum/bottomMaskNum couldn't be round-tripped
+                // separately even if stored here.
+                if (lef_via->topMaskNum)
+                    via.mask = lef_via->topMaskNum;
+                shape.value().vias.push_back(std::move(via));
+                geo_count++;
+                break;
+            }
+            case lefiGeomEnum::lefiGeomViaIterE:
+            {
+                if (!shape.has_value())
+                {
+                    log_error("VIA ITERATE defined without previous LAYER definition.");
+                    break;
+                }
+                lefiGeomViaIter *lef_via_iter = geometries->getViaIter(j);
+                if (safe_iteration_count(lef_via_iter->xStart, lef_via_iter->yStart) == 0)
+                    break;
+
+                ShapeViaIterate via_iter{
+                    .via_name = lef_via_iter->name,
+                    .origin = Point{.x = reader->microns_to_dbu(lef_via_iter->x), .y = reader->microns_to_dbu(lef_via_iter->y)},
+                    .num_x = static_cast<int>(lef_via_iter->xStart),
+                    .num_y = static_cast<int>(lef_via_iter->yStart),
+                    .space_x = reader->microns_to_dbu(lef_via_iter->xStep),
+                    .space_y = reader->microns_to_dbu(lef_via_iter->yStep),
+                };
+                if (lef_via_iter->topMaskNum)
+                    via_iter.mask = lef_via_iter->topMaskNum;
+                shape.value().via_iterates.push_back(std::move(via_iter));
+                geo_count++;
+                break;
+            }
+            // lefiGeomClassE (PORT CLASS) doesn't belong to any one Shape -
+            // extracted separately by the caller (see lefrPinCbkFn's own
+            // PORT loop). lefiGeomPropE (a PROPERTY on one placed VIA
+            // occurrence) and lefiGeomObsTypeE are deliberately unhandled -
+            // out of this phase's scope.
+            case lefiGeomEnum::lefiGeomClassE:
+            case lefiGeomEnum::lefiGeomPropE:
+            case lefiGeomEnum::lefiGeomObsTypeE:
+            case lefiGeomEnum::lefiGeomUnknown:
+            case lefiGeomEnum::lefiGeomEnd:
+                break;
             }
         }
         if (shape.has_value() && geo_count > 0)

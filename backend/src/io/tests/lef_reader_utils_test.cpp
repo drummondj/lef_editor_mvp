@@ -7,8 +7,8 @@ using namespace le;
 // LEFReader::*_from_parser are pure, static, and take no parser/instance
 // state - exercised directly here rather than only incidentally through
 // src/lefdef/lef/TEST/complete.5.8.lef (lef_reader_test.cpp), since the
-// fixture doesn't hit every branch (e.g. FS/FE/FW orientations, INOUT's
-// FEEDTHRU/"OUTPUT TRISTATE" aliases, unknown/default fallbacks).
+// fixture doesn't hit every branch (e.g. FS/FE/FW orientations,
+// FEEDTHRU/"OUTPUT TRISTATE", unknown/default fallbacks).
 
 TEST(OrientationFromParser, MapsEachLefOrientationCode)
 {
@@ -59,10 +59,10 @@ TEST(SignalDirectionFromParser, MapsKnownStrings)
     EXPECT_EQ(LEFReader::signal_direction_from_parser("INOUT"), SignalDirection::INOUT);
 }
 
-TEST(SignalDirectionFromParser, FeedthruAndOutputTristateAliasToInout)
+TEST(SignalDirectionFromParser, FeedthruAndOutputTristateAreDistinctFromInout)
 {
-    EXPECT_EQ(LEFReader::signal_direction_from_parser("FEEDTHRU"), SignalDirection::INOUT);
-    EXPECT_EQ(LEFReader::signal_direction_from_parser("OUTPUT TRISTATE"), SignalDirection::INOUT);
+    EXPECT_EQ(LEFReader::signal_direction_from_parser("FEEDTHRU"), SignalDirection::FEEDTHRU);
+    EXPECT_EQ(LEFReader::signal_direction_from_parser("OUTPUT TRISTATE"), SignalDirection::OUTPUT_TRISTATE);
 }
 
 TEST(SignalDirectionFromParser, NullOrUnknownIsNone)
