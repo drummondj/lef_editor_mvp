@@ -553,6 +553,23 @@ extern "C"
             return 1;
         }
 
+        // UPDATES.md 10 - snapshot the Technology's own layer count before
+        // this read, so the default-visibility pass below (after the read)
+        // can tell which physical layers this specific call newly
+        // introduced, as opposed to ones a prior le_read_lef call already
+        // defaulted - LEF layers are only ever appended to a Technology
+        // within a session (see LEFReader's own is_technology_empty()-
+        // gated create-vs-reuse), so get_technology_layers' existing
+        // declaration-order prefix stays stable across reads and re-
+        // running the default over it would silently re-hide a layer the
+        // user has since made visible via the layer manager.
+        size_t old_layer_count = 0;
+        {
+            const auto existing_technology_ids = handle->root.get_technology_ids();
+            if (!existing_technology_ids.empty())
+                old_layer_count = handle->root.get_technology_layers(existing_technology_ids.front()).size();
+        }
+
         const std::filesystem::path lef_path(path);
         le::LEFReader reader;
         const int result = reader.read_lef(lef_path.string(), handle->root, lef_path.stem().string());
@@ -570,7 +587,23 @@ extern "C"
         // small extra cost without needing a benchmark to justify it.
         const auto technology_ids = handle->root.get_technology_ids();
         if (!technology_ids.empty())
+        {
+            // UPDATES.md 10 - every physical layer this read newly
+            // introduced defaults to hidden unless it's ROUTING or CUT.
+            // BOUNDARY isn't a physical layer (no LayerId of its own - see
+            // ViewLayerSet::build_for_technology) so it's untouched here,
+            // staying visible via Scene::is_layer_name_visible's own
+            // default-true-until-toggled behavior.
+            const auto &layers = handle->root.get_technology_layers(technology_ids.front());
+            for (size_t i = old_layer_count; i < layers.size(); ++i)
+            {
+                const le::LayerData *layer = handle->root.get_layer(layers[i]);
+                if (layer && layer->type != "ROUTING" && layer->type != "CUT")
+                    handle->scene.set_layer_name_visible(layer->name, false);
+            }
+
             handle->view_layers = le::ViewLayerSet::build_for_technology(handle->root, technology_ids.front());
+        }
 
         return 0;
     }

@@ -572,6 +572,40 @@ TEST_F(ApiFixture, LayerNameVisibilityDefaultsTrueAndRoundTrips)
     EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
 }
 
+TEST_F(ApiFixture, ReadLefDefaultsNonRoutingCutLayersToHidden)
+{
+    // mixed_layer_types.lef: M1 (ROUTING), V1 (CUT), OVERLAP (OVERLAP),
+    // SLICE (MASTERSLICE) - UPDATES.md 10 says only ROUTING/CUT/BOUNDARY
+    // should default visible.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("mixed_layer_types.lef").c_str()), 0);
+
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "OVERLAP"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "SLICE"), 0);
+    // BOUNDARY isn't a physical layer (no LayerId of its own), so it's
+    // untouched by the new default-hiding pass and stays visible via
+    // Scene's own default-true-until-toggled behavior.
+    EXPECT_NE(le_is_layer_name_visible(handle, "BOUNDARY"), 0);
+}
+
+TEST_F(ApiFixture, ReadLefDefaultHidingOnlyAppliesToNewlyIntroducedLayers)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("mixed_layer_types.lef").c_str()), 0);
+    ASSERT_EQ(le_is_layer_name_visible(handle, "OVERLAP"), 0);
+
+    le_set_layer_name_visible(handle, "OVERLAP", 1); // user explicitly reveals it via the layer manager
+    ASSERT_NE(le_is_layer_name_visible(handle, "OVERLAP"), 0);
+
+    // A second le_read_lef call (e.g. a macro file with its own inline
+    // LAYER declarations) must not re-default OVERLAP back to hidden -
+    // only layers newly introduced by *this* read get defaulted (see
+    // le_read_lef's own comment). via_pairing.lef doesn't declare an
+    // OVERLAP layer at all.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "OVERLAP"), 0);
+}
+
 TEST_F(ApiFixture, SetLayerNameVisibleWithNullHandleOrNullNameDoesNotCrash)
 {
     le_set_layer_name_visible(nullptr, "M1", 0);

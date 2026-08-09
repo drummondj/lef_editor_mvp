@@ -122,9 +122,8 @@ I would like to try a different Geometry::get_label_location algorithm.
 4. 1, 2, 3 ,4 etc changes layer visibility - where 1 maps to the first routing layer, 2 to the second etc. If two adjacent routing layers are made visible via the keyboard (not when the user clicks on the layer manager), then the VIA layer between then is also made visible. Same logic in reverse for making vias invisible.
 5. Ctrl-D deselect all
 6. Ctrl-F fit selected
-7. Digit key 0 maps to the 10th routing layer (M10); Ctrl-1 through Ctrl-9 map to the 11th through 19th routing layers (M11-M19). Same VIA-pairing logic as item 4 applies.
 
-# 10. Default layer visibility
+# 10. Default layer visibility - DONE
 
 By default the only visible layers should be ROUTING, CUT and BOUNDARY, all other layers should not be visible when the user reads a LEF with LAYERs in to initialize a Technology.
 
@@ -141,4 +140,21 @@ The current mode can be queried via the API.
 
 Details of how objects are edited to follow.
 
-# 12.
+# 12. LEF Syntax Completion (big task)
+
+The LEF parser only supports a subset of the available syntax. I need it to support all LEF syntax.
+
+There is an example LEF file that contains all LEF syntax that needs to be parsed: src/lefdef/lef/TEST/complete.5.8.lef
+
+There is a utility to compare to LEF files: src/lefdef/lef/lefdiff/lefdiff
+
+Here is an outline of a plan to follow (you may modify as long as the results are the same):
+
+1. Create a LEFWriter class that creates a LEF file for the specified AbstractId. The LEFWriter needs an option to choose wether to include Technology layers or not, or just write out Technology layers.
+2. Read the complete.5.8.lef and write it out, then run lefdiff
+3. Update the LEFReader and LEFWriter to fix the differences reported by lefdiff. You will also need to update schema.py and rebuild the database. Make sure any coordinates are converted from microns to dbu.
+4. Repeat step 2 until there are no reported differences.
+
+There will be ambiguous cases where you need to ask me what to do. For example, should you store other values as integers, or us the units in the LEF file, or use SI units. Please ask me and we will discuss each individual case.
+
+Known issue: the current LEFReader splits ITERATE statements into separate shapes, we need to store the raw ITERATE as an object in the database then split during generate_shapes in the pipeline.
