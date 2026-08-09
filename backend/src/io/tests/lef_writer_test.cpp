@@ -218,6 +218,80 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsCutLayerWidthAndSpacing)
     EXPECT_FALSE(written->resistance.has_value());
 }
 
+TEST_F(LEFWriterRoundtripFixture, RoundTripsAPlainViaWithLayerGeometryAndResistance)
+{
+    const ViaData *original = original_root.get_via(original_root.get_via_by_name("VIA1"));
+    const ViaData *written = written_root.get_via(written_root.get_via_by_name("VIA1"));
+    ASSERT_TRUE(original != nullptr);
+    ASSERT_TRUE(written != nullptr);
+
+    EXPECT_EQ(original->is_default, written->is_default);
+    ASSERT_TRUE(original->resistance.has_value());
+    ASSERT_TRUE(written->resistance.has_value());
+    EXPECT_DOUBLE_EQ(*original->resistance, *written->resistance);
+    EXPECT_FALSE(original->via_rule.has_value());
+    EXPECT_FALSE(written->via_rule.has_value());
+
+    ASSERT_EQ(original->layers.size(), written->layers.size());
+    for (size_t i = 0; i < original->layers.size(); i++)
+    {
+        const ViaLayer &o = original->layers[i];
+        const ViaLayer &w = written->layers[i];
+        EXPECT_EQ(o.layer_name, w.layer_name);
+        ASSERT_EQ(o.rects.size(), w.rects.size());
+        for (size_t j = 0; j < o.rects.size(); j++)
+        {
+            EXPECT_EQ(o.rects[j].ll.x, w.rects[j].ll.x);
+            EXPECT_EQ(o.rects[j].ll.y, w.rects[j].ll.y);
+            EXPECT_EQ(o.rects[j].ur.x, w.rects[j].ur.x);
+            EXPECT_EQ(o.rects[j].ur.y, w.rects[j].ur.y);
+        }
+    }
+}
+
+TEST_F(LEFWriterRoundtripFixture, RoundTripsAGenerateViaRuleWithEnclosureAndACutLayer)
+{
+    const ViaRuleData *original = original_root.get_via_rule(original_root.get_via_rule_by_name("VIARULE1"));
+    const ViaRuleData *written = written_root.get_via_rule(written_root.get_via_rule_by_name("VIARULE1"));
+    ASSERT_TRUE(original != nullptr);
+    ASSERT_TRUE(written != nullptr);
+
+    EXPECT_TRUE(original->is_generate);
+    EXPECT_TRUE(written->is_generate);
+    ASSERT_EQ(original->layers.size(), written->layers.size());
+    ASSERT_EQ(original->layers.size(), 3u);
+
+    for (size_t i = 0; i < 2; i++)
+    {
+        const ViaRuleLayer &o = original->layers[i];
+        const ViaRuleLayer &w = written->layers[i];
+        EXPECT_EQ(o.layer_name, w.layer_name);
+        ASSERT_TRUE(o.enclosure_overhang1.has_value());
+        ASSERT_TRUE(w.enclosure_overhang1.has_value());
+        EXPECT_EQ(*o.enclosure_overhang1, *w.enclosure_overhang1);
+        ASSERT_TRUE(o.enclosure_overhang2.has_value());
+        ASSERT_TRUE(w.enclosure_overhang2.has_value());
+        EXPECT_EQ(*o.enclosure_overhang2, *w.enclosure_overhang2);
+        ASSERT_TRUE(o.width_min.has_value());
+        ASSERT_TRUE(w.width_min.has_value());
+        EXPECT_EQ(*o.width_min, *w.width_min);
+        ASSERT_TRUE(o.width_max.has_value());
+        ASSERT_TRUE(w.width_max.has_value());
+        EXPECT_EQ(*o.width_max, *w.width_max);
+    }
+
+    const ViaRuleLayer &original_cut = original->layers[2];
+    const ViaRuleLayer &written_cut = written->layers[2];
+    EXPECT_EQ(original_cut.layer_name, written_cut.layer_name);
+    ASSERT_TRUE(original_cut.rect.has_value());
+    ASSERT_TRUE(written_cut.rect.has_value());
+    EXPECT_EQ(original_cut.rect->ll.x, written_cut.rect->ll.x);
+    EXPECT_EQ(original_cut.rect->ur.x, written_cut.rect->ur.x);
+    ASSERT_TRUE(original_cut.resistance.has_value());
+    ASSERT_TRUE(written_cut.resistance.has_value());
+    EXPECT_DOUBLE_EQ(*original_cut.resistance, *written_cut.resistance);
+}
+
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
 {
     const DesignId original_design_id = original_root.get_design_by_name("WRITERTEST");

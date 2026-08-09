@@ -466,3 +466,201 @@ TEST(LEFReaderErrors, DuplicateMacroNameIsRejected)
     EXPECT_NE(reader.messages().front().find("ERROR"), std::string::npos);
     EXPECT_NE(reader.messages().front().find("DUPTEST"), std::string::npos);
 }
+
+// UPDATES.md 12 Phase 2 (VIA/VIARULE) - writer_roundtrip.lef (shared with
+// lef_writer_test.cpp) exercises a plain VIA (rects on M1/V1 + RESISTANCE),
+// a GENERATE VIARULE (2 M1 layers + a V1 cut layer with RECT/SPACING/
+// RESISTANCE), a non-GENERATE VIARULE (2 M1 layers + a VIA name list), and
+// a VIA referencing that VIARULE via the 5.6 VIARULE-inside-VIA syntax
+// (CUTSIZE/LAYERS/CUTSPACING/ENCLOSURE). DATABASE MICRONS 1000 throughout.
+class LEFReaderViaFixture : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        ASSERT_EQ(reader.read_lef(fixture_path("writer_roundtrip.lef"), root, "test_lib"), 0);
+    }
+
+    Root root;
+    LEFReader reader;
+};
+
+TEST_F(LEFReaderViaFixture, ReadsAPlainViaWithLayerGeometryAndResistance)
+{
+    const ViaId via_id = root.get_via_by_name("VIA1");
+    ASSERT_TRUE(via_id.valid());
+    const ViaData *via = root.get_via(via_id);
+    ASSERT_TRUE(via != nullptr);
+
+    EXPECT_FALSE(via->is_default);
+    ASSERT_TRUE(via->resistance.has_value());
+    EXPECT_DOUBLE_EQ(*via->resistance, 1.5);
+    EXPECT_FALSE(via->foreign.has_value());
+    EXPECT_FALSE(via->via_rule.has_value());
+
+    ASSERT_EQ(via->layers.size(), 2u);
+    EXPECT_EQ(via->layers[0].layer_name, "M1");
+    ASSERT_EQ(via->layers[0].rects.size(), 1u);
+    EXPECT_EQ(via->layers[0].rects[0].ll.x, -1000);
+    EXPECT_EQ(via->layers[0].rects[0].ll.y, -1000);
+    EXPECT_EQ(via->layers[0].rects[0].ur.x, 1000);
+    EXPECT_EQ(via->layers[0].rects[0].ur.y, 1000);
+
+    EXPECT_EQ(via->layers[1].layer_name, "V1");
+    ASSERT_EQ(via->layers[1].rects.size(), 1u);
+    EXPECT_EQ(via->layers[1].rects[0].ll.x, -500);
+    EXPECT_EQ(via->layers[1].rects[0].ll.y, -500);
+    EXPECT_EQ(via->layers[1].rects[0].ur.x, 500);
+    EXPECT_EQ(via->layers[1].rects[0].ur.y, 500);
+}
+
+TEST_F(LEFReaderViaFixture, ReadsAGenerateViaRuleWithDirectionsWidthsAndACutLayer)
+{
+    const ViaRuleId via_rule_id = root.get_via_rule_by_name("VIARULE1");
+    ASSERT_TRUE(via_rule_id.valid());
+    const ViaRuleData *via_rule = root.get_via_rule(via_rule_id);
+    ASSERT_TRUE(via_rule != nullptr);
+
+    EXPECT_TRUE(via_rule->is_generate);
+    EXPECT_FALSE(via_rule->is_default);
+    EXPECT_TRUE(via_rule->via_names.empty()); // GENERATE - no VIA name list
+
+    ASSERT_EQ(via_rule->layers.size(), 3u);
+
+    // DIRECTION and OVERHANG/METALOVERHANG are obsolete for VIARULE
+    // GENERATE at LEF >= 5.6 (the vendored parser silently ignores
+    // DIRECTION - see lef.y's K_DIRECTION rule under viarule_layer_option
+    // - and translates OVERHANG/METALOVERHANG into ENCLOSURE instead of
+    // setOverhang()/setMetalOverhang() - see the K_OVERHANG rule's own
+    // "In 5.6 & later, set it to either ENCLOSURE overhang1 or overhang2"
+    // comment), so the fixture uses ENCLOSURE directly and direction is
+    // never set for a GENERATE rule's layers.
+    const ViaRuleLayer &m1_horizontal = via_rule->layers[0];
+    EXPECT_EQ(m1_horizontal.layer_name, "M1");
+    EXPECT_EQ(m1_horizontal.direction, RoutingDirection::NONE);
+    ASSERT_TRUE(m1_horizontal.width_min.has_value());
+    ASSERT_TRUE(m1_horizontal.width_max.has_value());
+    EXPECT_EQ(*m1_horizontal.width_min, 100);
+    EXPECT_EQ(*m1_horizontal.width_max, 1900);
+    EXPECT_FALSE(m1_horizontal.overhang.has_value());
+    EXPECT_FALSE(m1_horizontal.metal_overhang.has_value());
+    ASSERT_TRUE(m1_horizontal.enclosure_overhang1.has_value());
+    ASSERT_TRUE(m1_horizontal.enclosure_overhang2.has_value());
+    EXPECT_EQ(*m1_horizontal.enclosure_overhang1, 100);
+    EXPECT_EQ(*m1_horizontal.enclosure_overhang2, 150);
+
+    const ViaRuleLayer &m1_vertical = via_rule->layers[1];
+    EXPECT_EQ(m1_vertical.layer_name, "M1");
+    EXPECT_EQ(m1_vertical.direction, RoutingDirection::NONE);
+
+    const ViaRuleLayer &cut = via_rule->layers[2];
+    EXPECT_EQ(cut.layer_name, "V1");
+    ASSERT_TRUE(cut.rect.has_value());
+    EXPECT_EQ(cut.rect->ll.x, -100);
+    EXPECT_EQ(cut.rect->ll.y, -100);
+    EXPECT_EQ(cut.rect->ur.x, 100);
+    EXPECT_EQ(cut.rect->ur.y, 100);
+    ASSERT_TRUE(cut.spacing_step_x.has_value());
+    ASSERT_TRUE(cut.spacing_step_y.has_value());
+    EXPECT_EQ(*cut.spacing_step_x, 500);
+    EXPECT_EQ(*cut.spacing_step_y, 500);
+    ASSERT_TRUE(cut.resistance.has_value());
+    EXPECT_DOUBLE_EQ(*cut.resistance, 0.2);
+}
+
+// VIARULE2/VIA2 (a non-GENERATE VIARULE, and a VIA referencing one) live in
+// their own fixture file/class rather than writer_roundtrip.lef, since they
+// can't round-trip through LEFWriter: lefwViaRuleLayer (the non-GENERATE
+// writer call) rejects any non-null DIRECTION with LEFW_OBSOLETE for
+// VERSION >= 5.6 (see lefwWriter.cpp's shared lefwViaRulePrtLayer helper),
+// but unlike the GENERATE path (lefwViaRuleGenLayerEnclosure) has no
+// ENCLOSURE-based alternative - so a non-GENERATE VIARULE's first two
+// layers can never satisfy the reader's own "requires DIRECTION or
+// ENCLOSURE" check (lef.y's viarule_layer rule) once re-read, at any
+// version >= 5.6. A real gap in the vendored 6.0.62-p004 writer/reader
+// pair, not something fixable on our side without hand-editing vendored
+// code - reader-only coverage here, kept out of the writer round-trip
+// fixture used by LEFWriterRoundtripFixture.
+class LEFReaderViaRuleReferenceFixture : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        ASSERT_EQ(reader.read_lef(fixture_path("via_rule_reference.lef"), root, "test_lib"), 0);
+    }
+
+    Root root;
+    LEFReader reader;
+};
+
+TEST_F(LEFReaderViaRuleReferenceFixture, ReadsANonGenerateViaRuleWithAViaNameList)
+{
+    const ViaRuleId via_rule_id = root.get_via_rule_by_name("VIARULE2");
+    ASSERT_TRUE(via_rule_id.valid());
+    const ViaRuleData *via_rule = root.get_via_rule(via_rule_id);
+    ASSERT_TRUE(via_rule != nullptr);
+
+    EXPECT_FALSE(via_rule->is_generate);
+    ASSERT_EQ(via_rule->layers.size(), 2u);
+    EXPECT_EQ(via_rule->layers[0].direction, RoutingDirection::H);
+    EXPECT_EQ(via_rule->layers[1].direction, RoutingDirection::V);
+    // Neither layer sets OVERHANG/METALOVERHANG in this VIARULE.
+    EXPECT_FALSE(via_rule->layers[0].overhang.has_value());
+    EXPECT_FALSE(via_rule->layers[0].metal_overhang.has_value());
+
+    ASSERT_EQ(via_rule->via_names.size(), 1u);
+    EXPECT_EQ(via_rule->via_names[0], "VIA1");
+}
+
+TEST_F(LEFReaderViaRuleReferenceFixture, ReadsAViaReferencingAViaRuleWithCutGeometry)
+{
+    const ViaId via_id = root.get_via_by_name("VIA2");
+    ASSERT_TRUE(via_id.valid());
+    const ViaData *via = root.get_via(via_id);
+    ASSERT_TRUE(via != nullptr);
+
+    EXPECT_FALSE(via->resistance.has_value()); // mutually exclusive with via_rule
+    ASSERT_TRUE(via->via_rule.has_value());
+
+    const ViaRuleReference &vr = *via->via_rule;
+    EXPECT_EQ(vr.via_rule_name, "VIARULE2");
+    EXPECT_EQ(vr.cut_size.x, 100);
+    EXPECT_EQ(vr.cut_size.y, 100);
+    EXPECT_EQ(vr.bot_layer_name, "M1");
+    EXPECT_EQ(vr.cut_layer_name, "V1");
+    EXPECT_EQ(vr.top_layer_name, "M1");
+    EXPECT_EQ(vr.cut_spacing.x, 100);
+    EXPECT_EQ(vr.cut_spacing.y, 100);
+    // ENCLOSURE 0.05 0.01 0.01 0.05 -> xBotEnc yBotEnc xTopEnc yTopEnc
+    // (confirmed via lef.y's via_viarule grammar rule's own positional
+    // setViaRule(...) call).
+    EXPECT_EQ(vr.bot_enclosure.x, 50);
+    EXPECT_EQ(vr.bot_enclosure.y, 10);
+    EXPECT_EQ(vr.top_enclosure.x, 10);
+    EXPECT_EQ(vr.top_enclosure.y, 50);
+}
+
+TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)
+{
+    // Re-reading the whole fixture into the same Root also re-declares
+    // MACRO WRITERTEST, which DuplicateMacroNameIsRejected already covers
+    // as its own hard failure (result 2) - VIA/VIARULE appear earlier in
+    // the file than MACRO, so their own warnings are logged (and land in
+    // messages(), moved from g_pending_lef_messages regardless of the
+    // later abort - see read_lef's own structure) before that happens.
+    LEFReader second_reader;
+    ASSERT_EQ(second_reader.read_lef(fixture_path("writer_roundtrip.lef"), root, "test_lib"), 2);
+
+    ASSERT_FALSE(second_reader.messages().empty());
+    bool saw_via_warning = false;
+    bool saw_via_rule_warning = false;
+    for (const auto &msg : second_reader.messages())
+    {
+        if (msg.find("WARNING") != std::string::npos && msg.find("Via VIA1") != std::string::npos)
+            saw_via_warning = true;
+        if (msg.find("WARNING") != std::string::npos && msg.find("ViaRule VIARULE1") != std::string::npos)
+            saw_via_rule_warning = true;
+    }
+    EXPECT_TRUE(saw_via_warning);
+    EXPECT_TRUE(saw_via_rule_warning);
+}

@@ -248,6 +248,214 @@ namespace le
         return 0;
     }
 
+    int LEFWriter::write_vias(const Root &root, TechnologyId technology_id)
+    {
+        const TechnologyData *technology = root.get_technology(technology_id);
+        if (!technology)
+            return 0;
+        const double dbu_per_micron = technology->database_units_microns;
+        auto to_um = [&](int64_t v)
+        { return to_microns(v, dbu_per_micron); };
+
+        for (ViaId via_id : root.get_technology_vias(technology_id))
+        {
+            const ViaData *via = root.get_via(via_id);
+            if (!via)
+                continue;
+
+            int status = lefwStartVia(via->name.c_str(), via->is_default ? "DEFAULT" : nullptr);
+            if (status)
+                return status;
+
+            if (via->foreign)
+            {
+                status = lefwViaForeignStr(via->foreign->name.c_str(), to_um(via->foreign->origin.x), to_um(via->foreign->origin.y), orientation_to_string(via->foreign->orient));
+                if (status)
+                    return status;
+            }
+
+            // Mutually exclusive per lefwViaResistance/lefwViaViarule's
+            // own "either...or" contract - the reader only ever sets one
+            // or the other (see lefrViaCbkFn's own comment).
+            if (via->resistance)
+            {
+                status = lefwViaResistance(*via->resistance);
+                if (status)
+                    return status;
+            }
+            else if (via->via_rule)
+            {
+                const ViaRuleReference &vr = *via->via_rule;
+                status = lefwViaViarule(vr.via_rule_name.c_str(), to_um(vr.cut_size.x), to_um(vr.cut_size.y),
+                                         vr.bot_layer_name.c_str(), vr.cut_layer_name.c_str(), vr.top_layer_name.c_str(),
+                                         to_um(vr.cut_spacing.x), to_um(vr.cut_spacing.y),
+                                         to_um(vr.bot_enclosure.x), to_um(vr.bot_enclosure.y),
+                                         to_um(vr.top_enclosure.x), to_um(vr.top_enclosure.y));
+                if (status)
+                    return status;
+            }
+
+            for (const ViaLayer &layer : via->layers)
+            {
+                status = lefwViaLayer(layer.layer_name.c_str());
+                if (status)
+                    return status;
+
+                for (const Rect &rect : layer.rects)
+                {
+                    status = lefwViaLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0);
+                    if (status)
+                        return status;
+                }
+
+                // KNOWN VENDORED-LIBRARY BUG (lefwWriter.cpp's own
+                // lefwViaLayerPolygon, not our code, so not something to
+                // hand-edit per CLAUDE.md's "never edit src/lefdef/" rule):
+                // its non-encrypted branch prints the first point as
+                // "%.11g %.11g" (no trailing separator) and every later
+                // point as "%.11g %.11g " (no LEADING separator either),
+                // so point 0's y and point 1's x land back-to-back with
+                // zero characters between them - e.g. y0=-1, x1=-0.2
+                // writes as the single unparseable token "-1-0.2" (found
+                // via the lef_roundtrip_diff dev tool against
+                // complete.5.8.lef's myVia23, which has real via-layer
+                // POLYGON geometry - it made lefdiff choke partway through
+                // and silently truncate the rest of that dump). Every
+                // OTHER polygon writer in this file (lefwMacroPinPortLayerPolygon/
+                // lefwMacroObsLayerPolygon, called from write_shape_geometry)
+                // does NOT have this bug - only the VIA-specific one does.
+                // No fixture in this codebase's own test suite exercises a
+                // multi-point VIA POLYGON, so this doesn't affect CI, but a
+                // real design with polygonal via geometry would write a
+                // corrupt, unreadable LEF file - flagging for anyone
+                // touching this path next, not fixing here (out of scope:
+                // would require patching vendored source).
+                for (const Polygon &polygon : layer.polygons)
+                {
+                    std::vector<double> xs;
+                    std::vector<double> ys;
+                    xs.reserve(polygon.points.size());
+                    ys.reserve(polygon.points.size());
+                    for (const Point &point : polygon.points)
+                    {
+                        xs.push_back(to_um(point.x));
+                        ys.push_back(to_um(point.y));
+                    }
+                    status = lefwViaLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), 0);
+                    if (status)
+                        return status;
+                }
+            }
+
+            status = lefwEndVia(via->name.c_str());
+            if (status)
+                return status;
+        }
+
+        return 0;
+    }
+
+    int LEFWriter::write_via_rules(const Root &root, TechnologyId technology_id)
+    {
+        const TechnologyData *technology = root.get_technology(technology_id);
+        if (!technology)
+            return 0;
+        const double dbu_per_micron = technology->database_units_microns;
+        auto to_um = [&](int64_t v)
+        { return to_microns(v, dbu_per_micron); };
+        auto to_um_opt = [&](const std::optional<int64_t> &v)
+        { return v ? to_um(*v) : 0.0; };
+
+        for (ViaRuleId via_rule_id : root.get_technology_via_rules(technology_id))
+        {
+            const ViaRuleData *via_rule = root.get_via_rule(via_rule_id);
+            if (!via_rule)
+                continue;
+
+            int status;
+            if (via_rule->is_generate)
+            {
+                status = lefwStartViaRuleGen(via_rule->name.c_str());
+                if (status)
+                    return status;
+
+                if (via_rule->is_default)
+                {
+                    status = lefwViaRuleGenDefault();
+                    if (status)
+                        return status;
+                }
+
+                for (size_t i = 0; i < via_rule->layers.size() && i < 2; i++)
+                {
+                    const ViaRuleLayer &layer = via_rule->layers[i];
+                    // lefwViaRuleGenLayer's DIRECTION/OVERHANG/METALOVERHANG
+                    // args are rejected with LEFW_OBSOLETE for any version
+                    // >= 5.6 (see lefwWriter.cpp's shared lefwViaRulePrtLayer
+                    // helper) - write_lef always writes VERSION 5.8, so
+                    // those three must never be passed; ENCLOSURE is the
+                    // only way to write overhang data at this version,
+                    // matching the reader's own translation (see
+                    // lefrViaRuleCbkFn / K_OVERHANG in lef.y).
+                    if (layer.enclosure_overhang1 && layer.enclosure_overhang2)
+                        status = lefwViaRuleGenLayerEnclosure(layer.layer_name.c_str(), to_um(*layer.enclosure_overhang1), to_um(*layer.enclosure_overhang2), to_um_opt(layer.width_min), to_um_opt(layer.width_max));
+                    else
+                        status = lefwViaRuleGenLayer(layer.layer_name.c_str(), nullptr, to_um_opt(layer.width_min), to_um_opt(layer.width_max), 0.0, 0.0);
+                    if (status)
+                        return status;
+                }
+
+                if (via_rule->layers.size() >= 3 && via_rule->layers[2].rect)
+                {
+                    const ViaRuleLayer &cut_layer = via_rule->layers[2];
+                    status = lefwViaRuleGenLayer3(cut_layer.layer_name.c_str(),
+                                                   to_um(cut_layer.rect->ll.x), to_um(cut_layer.rect->ll.y),
+                                                   to_um(cut_layer.rect->ur.x), to_um(cut_layer.rect->ur.y),
+                                                   to_um_opt(cut_layer.spacing_step_x), to_um_opt(cut_layer.spacing_step_y),
+                                                   cut_layer.resistance.value_or(0.0));
+                    if (status)
+                        return status;
+                }
+
+                status = lefwEndViaRuleGen(via_rule->name.c_str());
+                if (status)
+                    return status;
+            }
+            else
+            {
+                status = lefwStartViaRule(via_rule->name.c_str());
+                if (status)
+                    return status;
+
+                for (size_t i = 0; i < via_rule->layers.size() && i < 2; i++)
+                {
+                    const ViaRuleLayer &layer = via_rule->layers[i];
+                    // Same LEFW_OBSOLETE-at-5.6+ restriction as the
+                    // GENERATE branch above - lefwViaRuleLayer shares the
+                    // same lefwViaRulePrtLayer helper, so DIRECTION/
+                    // OVERHANG/METALOVERHANG can't be written here either
+                    // at this writer's fixed VERSION 5.8.
+                    status = lefwViaRuleLayer(layer.layer_name.c_str(), nullptr, to_um_opt(layer.width_min), to_um_opt(layer.width_max), 0.0, 0.0);
+                    if (status)
+                        return status;
+                }
+
+                for (const std::string &via_name : via_rule->via_names)
+                {
+                    status = lefwViaRuleVia(via_name.c_str());
+                    if (status)
+                        return status;
+                }
+
+                status = lefwEndViaRule(via_rule->name.c_str());
+                if (status)
+                    return status;
+            }
+        }
+
+        return 0;
+    }
+
     int LEFWriter::write_shape_geometry(const Shape &shape, double dbu_per_micron, bool is_pin_port)
     {
         auto to_um = [&](int64_t v)
@@ -577,6 +785,22 @@ namespace le
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: Writing LAYERs failed with status {}.", status));
+                return status;
+            }
+
+            // After LAYER (VIA/VIARULE reference layers by name), before
+            // MACRO (LEF's own required ordering).
+            status = write_vias(root, technology_id);
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: Writing VIAs failed with status {}.", status));
+                return status;
+            }
+
+            status = write_via_rules(root, technology_id);
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: Writing VIARULEs failed with status {}.", status));
                 return status;
             }
         }

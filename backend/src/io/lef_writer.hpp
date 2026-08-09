@@ -19,9 +19,12 @@ namespace le
     /// lef_reader.cpp's lefrLayerCbkFn for the exact set and why it stops
     /// there), and MACRO/PIN/PORT/OBS (class, foreigns, size, origin,
     /// symmetry, site, geometry including RECT/PATH/POLYGON ITERATE).
-    /// VIA/VIARULE/SITE/NONDEFAULTRULE/PROPERTYDEFINITIONS/SPACING/ARRAY
-    /// and the electrical/misc sections are out of scope for this phase -
-    /// see the phase's own plan for the follow-up ordering.
+    /// Phase 2 scope: VIA (layers, resistance, foreign, the 5.6
+    /// VIARULE-inside-VIA reference) and VIARULE (GENERATE and
+    /// non-GENERATE). PROPERTY attachments on either, and RECT/POLYGON
+    /// MASK color, are still out of scope (deferred to a later phase, see
+    /// its own plan) - as are SITE/NONDEFAULTRULE/PROPERTYDEFINITIONS/
+    /// SPACING/ARRAY and the electrical/misc sections.
     class LEFWriter
     {
     public:
@@ -62,6 +65,8 @@ namespace le
     private:
         static int write_technology_layers(const Root &root, TechnologyId technology_id);
         static int write_units(const Root &root, TechnologyId technology_id);
+        static int write_vias(const Root &root, TechnologyId technology_id);
+        static int write_via_rules(const Root &root, TechnologyId technology_id);
         static int write_macro(const Root &root, AbstractId abstract_id, double dbu_per_micron);
         static int write_terminal(const Root &root, TerminalId terminal_id, double dbu_per_micron);
         static int write_obstruction(const Root &root, ObstructionId obstruction_id, double dbu_per_micron);

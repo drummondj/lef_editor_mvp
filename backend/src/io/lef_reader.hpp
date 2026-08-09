@@ -58,6 +58,8 @@ namespace le
         static int lefrObstructionCbkFn(lefrCallbackType_e typ, lefiObstruction *lef_obs, void *user_data);
         static int lefrBusBitCharsCbkFn(lefrCallbackType_e typ, const char *bus_bit_chars, void *user_data);
         static int lefrDividerCharCbkFn(lefrCallbackType_e typ, const char *divider_char, void *user_data);
+        static int lefrViaCbkFn(lefrCallbackType_e typ, lefiVia *lef_via, void *user_data);
+        static int lefrViaRuleCbkFn(lefrCallbackType_e typ, lefiViaRule *lef_via_rule, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through

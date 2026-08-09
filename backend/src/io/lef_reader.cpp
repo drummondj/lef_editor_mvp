@@ -90,6 +90,8 @@ namespace le
         lefrSetObstructionCbk(lefrObstructionCbkFn);
         lefrSetBusBitCharsCbk(lefrBusBitCharsCbkFn);
         lefrSetDividerCharCbk(lefrDividerCharCbkFn);
+        lefrSetViaCbk(lefrViaCbkFn);
+        lefrSetViaRuleCbk(lefrViaRuleCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -302,6 +304,177 @@ namespace le
         auto reader = static_cast<LEFReader *>(user_data);
         if (divider_char)
             reader->technology_->divider_char = divider_char;
+        return 0;
+    }
+
+    int LEFReader::lefrViaCbkFn(lefrCallbackType_e typ, lefiVia *lef_via, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        auto via_name = lef_via->name();
+
+        if (reader->root_->get_via_by_name(via_name).valid())
+        {
+            log_warning("Via {} already exists. Ignoring new definition.", via_name);
+            return 0;
+        }
+
+        ViaData via{
+            .technology = reader->technology_id_,
+            .name = via_name,
+            .is_default = static_cast<bool>(lef_via->hasDefault()),
+        };
+
+        if (lef_via->hasResistance())
+            via.resistance = lef_via->resistance();
+
+        if (lef_via->hasForeign())
+        {
+            auto foreign = Foreign{.name = lef_via->foreign()};
+
+            if (lef_via->hasForeignPnt())
+                foreign.origin = Point{
+                    .x = reader->microns_to_dbu(lef_via->foreignX()),
+                    .y = reader->microns_to_dbu(lef_via->foreignY()),
+                };
+            else
+                foreign.origin = Point{0, 0};
+
+            if (lef_via->hasForeignOrient())
+                foreign.orient = orientation_from_parser(lef_via->foreignOrient());
+            else
+                foreign.orient = Orientation::N;
+
+            via.foreign = foreign;
+        }
+
+        via.layers.reserve(static_cast<size_t>(lef_via->numLayers()));
+        for (int i = 0; i < lef_via->numLayers(); i++)
+        {
+            auto layer = ViaLayer{.layer_name = lef_via->layerName(i)};
+
+            layer.rects.reserve(static_cast<size_t>(lef_via->numRects(i)));
+            for (int j = 0; j < lef_via->numRects(i); j++)
+                layer.rects.push_back(rect_from_parser(reader, lef_via->xl(i, j), lef_via->yl(i, j), lef_via->xh(i, j), lef_via->yh(i, j)));
+
+            layer.polygons.reserve(static_cast<size_t>(lef_via->numPolygons(i)));
+            for (int j = 0; j < lef_via->numPolygons(i); j++)
+            {
+                const lefiGeomPolygon poly = lef_via->getPolygon(i, j);
+                layer.polygons.push_back(polygon_from_parser(reader, poly.numPoints, poly.x, poly.y));
+            }
+
+            via.layers.push_back(std::move(layer));
+        }
+
+        // 5.6 VIARULE-inside-VIA - a materially different, smaller thing
+        // than a VIARULE block itself (see ViaRuleReference's own doc
+        // comment) - mutually exclusive with resistance above (a real via
+        // has one or the other, matching lefwViaViarule/lefwViaResistance's
+        // own "either...or" contract on the writer side).
+        if (lef_via->hasViaRule())
+        {
+            via.via_rule = ViaRuleReference{
+                .via_rule_name = lef_via->viaRuleName(),
+                .cut_size = Point{
+                    .x = reader->microns_to_dbu(lef_via->xCutSize()),
+                    .y = reader->microns_to_dbu(lef_via->yCutSize()),
+                },
+                .bot_layer_name = lef_via->botMetalLayer(),
+                .cut_layer_name = lef_via->cutLayer(),
+                .top_layer_name = lef_via->topMetalLayer(),
+                .cut_spacing = Point{
+                    .x = reader->microns_to_dbu(lef_via->xCutSpacing()),
+                    .y = reader->microns_to_dbu(lef_via->yCutSpacing()),
+                },
+                .bot_enclosure = Point{
+                    .x = reader->microns_to_dbu(lef_via->xBotEnc()),
+                    .y = reader->microns_to_dbu(lef_via->yBotEnc()),
+                },
+                .top_enclosure = Point{
+                    .x = reader->microns_to_dbu(lef_via->xTopEnc()),
+                    .y = reader->microns_to_dbu(lef_via->yTopEnc()),
+                },
+            };
+        }
+
+        reader->root_->create_via(std::move(via));
+
+        return 0;
+    }
+
+    int LEFReader::lefrViaRuleCbkFn(lefrCallbackType_e typ, lefiViaRule *lef_via_rule, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        auto via_rule_name = lef_via_rule->name();
+
+        if (reader->root_->get_via_rule_by_name(via_rule_name).valid())
+        {
+            log_warning("ViaRule {} already exists. Ignoring new definition.", via_rule_name);
+            return 0;
+        }
+
+        ViaRuleData via_rule{
+            .technology = reader->technology_id_,
+            .name = via_rule_name,
+            .is_generate = static_cast<bool>(lef_via_rule->hasGenerate()),
+            .is_default = static_cast<bool>(lef_via_rule->hasDefault()),
+        };
+
+        // 2 layers (non-GENERATE) or 3 (GENERATE, the 3rd being the cut
+        // layer) - see lefiViaRule.hpp's own numLayers()/layer() comment.
+        via_rule.layers.reserve(static_cast<size_t>(lef_via_rule->numLayers()));
+        for (int i = 0; i < lef_via_rule->numLayers(); i++)
+        {
+            const lefiViaRuleLayer *lef_layer = lef_via_rule->layer(i);
+
+            auto layer = ViaRuleLayer{.layer_name = lef_layer->name()};
+
+            if (lef_layer->hasDirection())
+                layer.direction = lef_layer->isVertical() ? RoutingDirection::V : RoutingDirection::H;
+            else
+                layer.direction = RoutingDirection::NONE;
+
+            if (lef_layer->hasWidth())
+            {
+                layer.width_min = reader->microns_to_dbu(lef_layer->widthMin());
+                layer.width_max = reader->microns_to_dbu(lef_layer->widthMax());
+            }
+            if (lef_layer->hasOverhang())
+                layer.overhang = reader->microns_to_dbu(lef_layer->overhang());
+            if (lef_layer->hasMetalOverhang())
+                layer.metal_overhang = reader->microns_to_dbu(lef_layer->metalOverhang());
+            if (lef_layer->hasEnclosure())
+            {
+                layer.enclosure_overhang1 = reader->microns_to_dbu(lef_layer->enclosureOverhang1());
+                layer.enclosure_overhang2 = reader->microns_to_dbu(lef_layer->enclosureOverhang2());
+            }
+            if (lef_layer->hasSpacing())
+            {
+                layer.spacing_step_x = reader->microns_to_dbu(lef_layer->spacingStepX());
+                layer.spacing_step_y = reader->microns_to_dbu(lef_layer->spacingStepY());
+            }
+            if (lef_layer->hasRect())
+                layer.rect = rect_from_parser(reader, lef_layer->xl(), lef_layer->yl(), lef_layer->xh(), lef_layer->yh());
+            if (lef_layer->hasResistance())
+                layer.resistance = lef_layer->resistance();
+
+            via_rule.layers.push_back(std::move(layer));
+        }
+
+        // VIA name list is only meaningful for a non-GENERATE VIARULE (a
+        // GENERATE rule produces vias algorithmically, it doesn't list
+        // them) - lefiViaRule::numVias()/viaName() would just be empty
+        // for a GENERATE rule anyway, but skip the loop entirely to make
+        // that explicit rather than relying on it happening to be empty.
+        if (!via_rule.is_generate)
+        {
+            via_rule.via_names.reserve(static_cast<size_t>(lef_via_rule->numVias()));
+            for (int i = 0; i < lef_via_rule->numVias(); i++)
+                via_rule.via_names.push_back(lef_via_rule->viaName(i));
+        }
+
+        reader->root_->create_via_rule(std::move(via_rule));
+
         return 0;
     }
 
