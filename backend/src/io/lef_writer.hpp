@@ -23,9 +23,14 @@ namespace le
     /// VIARULE-inside-VIA reference) and VIARULE (GENERATE and
     /// non-GENERATE). Phase 3 scope: LAYER spacing/cut-rule completeness
     /// (MINIMUMCUT/MINSTEP/SPACINGTABLE/multi-SPACING), SITE, and
-    /// NONDEFAULTRULE. PROPERTY attachments, RECT/POLYGON MASK color,
-    /// ANTENNAMODEL, AC/DC CURRENTDENSITY, and ARRAY are still out of
-    /// scope (deferred to a later phase, see its own plan).
+    /// NONDEFAULTRULE. Phase 4 scope: PROPERTYDEFINITIONS and per-instance
+    /// PROPERTY (readable everywhere; writable on LAYER/VIA/non-GENERATE
+    /// VIARULE/MACRO/PIN - the vendored writer's generic property
+    /// functions don't accept NONDEFAULTRULE/SITE/GENERATE-VIARULE write
+    /// state, see write_via_rules/write_sites/write_non_default_rules's
+    /// own comments). RECT/POLYGON MASK color on VIA, ANTENNAMODEL, AC/DC
+    /// CURRENTDENSITY, and ARRAY are still out of scope (deferred to a
+    /// later phase, see its own plan).
     class LEFWriter
     {
     public:
@@ -66,6 +71,19 @@ namespace le
     private:
         static int write_technology_layers(const Root &root, TechnologyId technology_id);
         static int write_units(const Root &root, TechnologyId technology_id);
+        static int write_property_definitions(const Root &root, TechnologyId technology_id);
+        // Shared by every property-carrying construct's own writer -
+        // dispatches to lefwStringProperty/lefwRealProperty based on
+        // is_number. Caller is responsible for only calling this while the
+        // vendored writer is in a state its generic property functions
+        // actually accept (see lef_writer.hpp's own class-level comment).
+        // include_numeric defaults true; pass false for a ROUTING layer
+        // specifically - lefwRealProperty/lefwIntProperty are missing
+        // LEFW_LAYERROUTING(_START) from their own accepted-state list
+        // (confirmed in lefwWriter.cpp; lefwStringProperty has it), so
+        // numeric properties there are readable but not writable, unlike
+        // every other property-carrying construct including CUT layers.
+        static int write_properties(const std::vector<LefProperty> &properties, bool include_numeric = true);
         static int write_vias(const Root &root, TechnologyId technology_id);
         static int write_via_rules(const Root &root, TechnologyId technology_id);
         static int write_sites(const Root &root, TechnologyId technology_id);

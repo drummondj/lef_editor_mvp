@@ -63,6 +63,7 @@ namespace le
         static int lefrSiteCbkFn(lefrCallbackType_e typ, lefiSite *lef_site, void *user_data);
         static int lefrNonDefaultCbkFn(lefrCallbackType_e typ, lefiNonDefault *lef_non_default, void *user_data);
         static int lefrDensityCbkFn(lefrCallbackType_e typ, lefiDensity *lef_density, void *user_data);
+        static int lefrPropCbkFn(lefrCallbackType_e typ, lefiProp *lef_prop, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through

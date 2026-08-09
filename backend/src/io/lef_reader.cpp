@@ -95,6 +95,7 @@ namespace le
         lefrSetSiteCbk(lefrSiteCbkFn);
         lefrSetNonDefaultCbk(lefrNonDefaultCbkFn);
         lefrSetDensityCbk(lefrDensityCbkFn);
+        lefrSetPropCbk(lefrPropCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -406,6 +407,17 @@ namespace le
         if (lef_layer->hasAntennaLength())
             layer.antenna_length = reader->microns_to_dbu(lef_layer->antennaLength());
 
+        layer.properties.reserve(static_cast<size_t>(lef_layer->numProps()));
+        for (int i = 0; i < lef_layer->numProps(); i++)
+        {
+            layer.properties.push_back(LefProperty{
+                .name = lef_layer->propName(i),
+                .is_number = static_cast<bool>(lef_layer->propIsNumber(i)),
+                .string_value = lef_layer->propIsString(i) ? lef_layer->propValue(i) : "",
+                .number_value = lef_layer->propIsNumber(i) ? lef_layer->propNumber(i) : 0.0,
+            });
+        }
+
         reader->root_->create_layer(std::move(layer));
 
         return 0;
@@ -546,6 +558,20 @@ namespace le
             };
         }
 
+        // lefiVia's own accessor is numProperties(), not numProps() -
+        // otherwise identical shape to the other property-carrying
+        // vendored classes.
+        via.properties.reserve(static_cast<size_t>(lef_via->numProperties()));
+        for (int i = 0; i < lef_via->numProperties(); i++)
+        {
+            via.properties.push_back(LefProperty{
+                .name = lef_via->propName(i),
+                .is_number = static_cast<bool>(lef_via->propIsNumber(i)),
+                .string_value = lef_via->propIsString(i) ? lef_via->propValue(i) : "",
+                .number_value = lef_via->propIsNumber(i) ? lef_via->propNumber(i) : 0.0,
+            });
+        }
+
         reader->root_->create_via(std::move(via));
 
         return 0;
@@ -622,6 +648,17 @@ namespace le
                 via_rule.via_names.push_back(lef_via_rule->viaName(i));
         }
 
+        via_rule.properties.reserve(static_cast<size_t>(lef_via_rule->numProps()));
+        for (int i = 0; i < lef_via_rule->numProps(); i++)
+        {
+            via_rule.properties.push_back(LefProperty{
+                .name = lef_via_rule->propName(i),
+                .is_number = static_cast<bool>(lef_via_rule->propIsNumber(i)),
+                .string_value = lef_via_rule->propIsString(i) ? lef_via_rule->propValue(i) : "",
+                .number_value = lef_via_rule->propIsNumber(i) ? lef_via_rule->propNumber(i) : 0.0,
+            });
+        }
+
         reader->root_->create_via_rule(std::move(via_rule));
 
         return 0;
@@ -671,6 +708,24 @@ namespace le
                     .orient = orientation_from_parser(lef_site->siteOrient(i)),
                 });
             }
+        }
+
+        // lefiSite is structurally different from the other property-
+        // carrying vendored classes - it stores full lefiProp* objects
+        // (numProps()/prop(i)) rather than parallel arrays, the same
+        // lefiProp class PROPERTYDEFINITIONS itself uses (see
+        // lefrPropCbkFn) - hasNumber()/number()/hasString()/string()
+        // instead of propIsNumber(i)/propNumber(i)/propIsString(i)/propValue(i).
+        site.properties.reserve(static_cast<size_t>(lef_site->numProps()));
+        for (int i = 0; i < lef_site->numProps(); i++)
+        {
+            lefiProp *lef_prop = lef_site->prop(i);
+            site.properties.push_back(LefProperty{
+                .name = lef_prop->propName(),
+                .is_number = static_cast<bool>(lef_prop->hasNumber()),
+                .string_value = lef_prop->hasString() ? lef_prop->string() : "",
+                .number_value = lef_prop->hasNumber() ? lef_prop->number() : 0.0,
+            });
         }
 
         reader->root_->create_site(std::move(site));
@@ -773,6 +828,17 @@ namespace le
             rule.min_cuts.push_back(MinCutOverride{
                 .cut_layer_name = lef_non_default->cutLayerName(i),
                 .num_cuts = lef_non_default->numCuts(i),
+            });
+        }
+
+        rule.properties.reserve(static_cast<size_t>(lef_non_default->numProps()));
+        for (int i = 0; i < lef_non_default->numProps(); i++)
+        {
+            rule.properties.push_back(LefProperty{
+                .name = lef_non_default->propName(i),
+                .is_number = static_cast<bool>(lef_non_default->propIsNumber(i)),
+                .string_value = lef_non_default->propIsString(i) ? lef_non_default->propValue(i) : "",
+                .number_value = lef_non_default->propIsNumber(i) ? lef_non_default->propNumber(i) : 0.0,
             });
         }
 
@@ -885,6 +951,20 @@ namespace le
         if (lef_macro->isFixedMask())
             reader->abstract_data_.is_fixed_mask = true;
 
+        // lefiMacro's own accessors are numProperties()/propNum(), not
+        // numProps()/propNumber() - otherwise identical shape to the
+        // other parallel-array property-carrying vendored classes.
+        reader->abstract_data_.properties.reserve(static_cast<size_t>(lef_macro->numProperties()));
+        for (int i = 0; i < lef_macro->numProperties(); i++)
+        {
+            reader->abstract_data_.properties.push_back(LefProperty{
+                .name = lef_macro->propName(i),
+                .is_number = static_cast<bool>(lef_macro->propIsNumber(i)),
+                .string_value = lef_macro->propIsString(i) ? lef_macro->propValue(i) : "",
+                .number_value = lef_macro->propIsNumber(i) ? lef_macro->propNum(i) : 0.0,
+            });
+        }
+
         // Post process
         post_process(reader);
 
@@ -935,6 +1015,19 @@ namespace le
             terminal.net_expr = lef_pin->netExpr();
         if (lef_pin->hasLEQ())
             terminal.leq = lef_pin->LEQ();
+
+        // lefiPin's own accessors are numProperties()/propNum(), matching
+        // lefiMacro's own naming quirk (see lefrMacroCbkFn's own comment).
+        terminal.properties.reserve(static_cast<size_t>(lef_pin->numProperties()));
+        for (int i = 0; i < lef_pin->numProperties(); i++)
+        {
+            terminal.properties.push_back(LefProperty{
+                .name = lef_pin->propName(i),
+                .is_number = static_cast<bool>(lef_pin->propIsNumber(i)),
+                .string_value = lef_pin->propIsString(i) ? lef_pin->propValue(i) : "",
+                .number_value = lef_pin->propIsNumber(i) ? lef_pin->propNum(i) : 0.0,
+            });
+        }
 
         auto terminal_id = reader->root_->create_terminal(terminal);
 
@@ -990,6 +1083,26 @@ namespace le
 
             reader->abstract_data_.densities.push_back(std::move(layer));
         }
+
+        return 0;
+    }
+
+    int LEFReader::lefrPropCbkFn(lefrCallbackType_e typ, lefiProp *lef_prop, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+
+        PropertyDefinition def{
+            .owner_type = lef_prop->propType(),
+            .name = lef_prop->propName(),
+            .data_type = std::string(1, lef_prop->dataType()),
+        };
+        if (lef_prop->hasRange())
+        {
+            def.range_min = lef_prop->left();
+            def.range_max = lef_prop->right();
+        }
+
+        reader->technology_->property_definitions.push_back(std::move(def));
 
         return 0;
     }

@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.13.0",
+    version="0.14.0",
     classes=[
         Klass(
             name="Technology",
@@ -46,6 +46,12 @@ schema = Schema(
                     is_child=True,
                 ),
                 Field(
+                    name="property_definitions",
+                    description="Property type declarations (LEF PROPERTYDEFINITIONS)",
+                    type="PropertyDefinition",
+                    is_list=True,
+                ),
+                Field(
                     name="database_units_microns",
                     description="Database units in microns",
                     type="double",
@@ -63,6 +69,29 @@ schema = Schema(
                     type="str",
                     example="/",
                 ),
+            ],
+        ),
+        Klass(
+            name="LefProperty",
+            description="A single (name, value) LEF PROPERTY attachment - a generic bag rather than named fields, since the same PROPERTY mechanism attaches identically to LAYER/VIA/VIARULE/NONDEFAULTRULE/SITE/MACRO/PIN",
+            has_pool=False,
+            fields=[
+                Field(name="name", description="The property name (declared in advance by a PROPERTYDEFINITIONS entry)", type="str", example="lip"),
+                Field(name="is_number", description="Whether this instance's value is numeric (INTEGER/REAL) rather than a string", type="bool", example=False),
+                Field(name="string_value", description="The value, if is_number is false - empty string otherwise", type="str", example="top"),
+                Field(name="number_value", description="The value, if is_number is true - 0.0 otherwise. Covers both LEF INTEGER and REAL (the vendored parser's own lefiProp::number() is a double regardless of which)", type="double", example=5.0),
+            ],
+        ),
+        Klass(
+            name="PropertyDefinition",
+            description="One LEF PROPERTYDEFINITIONS entry - declares a property name's data type (and optional value range) before any PROPERTY statement is allowed to use it",
+            has_pool=False,
+            fields=[
+                Field(name="owner_type", description="Which construct this property applies to - LIBRARY, LAYER, VIA, VIARULE, NONDEFAULTRULE, MACRO, or PIN (LEF's own PROPERTYDEFINITIONS syntax, from lefiProp::propType())", type="str", example="LAYER"),
+                Field(name="name", description="The property name", type="str", example="lip"),
+                Field(name="data_type", description="The vendored parser's own single-character data type code (lefiProp::dataType()) - I(nteger), R(eal), S(tring), or Q(uoted string)", type="str", example="I"),
+                Field(name="range_min", description="RANGE lower bound, in the property's own units", type="double", example=0.0, is_optional=True),
+                Field(name="range_max", description="RANGE upper bound, in the property's own units", type="double", example=10.0, is_optional=True),
             ],
         ),
         Klass(
@@ -216,6 +245,12 @@ schema = Schema(
                     example=1000,
                     is_optional=True,
                 ),
+                Field(
+                    name="properties",
+                    description="PROPERTY attachments (LEF PROPERTY)",
+                    type="LefProperty",
+                    is_list=True,
+                ),
             ],
         ),
         Klass(
@@ -242,6 +277,7 @@ schema = Schema(
                 Field(name="size", description="The site size, in database units (LEF SIZE)", type="Point", is_optional=True),
                 Field(name="symmetry", description="Which flips/rotations this site allows (LEF SYMMETRY)", type="Symmetry"),
                 Field(name="row_pattern", description="An ordered list of other-site references this site is built from (LEF ROWPATTERN, 5.6)", type="RowPatternEntry", is_list=True),
+                Field(name="properties", description="PROPERTY attachments (LEF PROPERTY) - readable, but never written: the vendored writer's generic property functions don't accept SITE's own write-state (see write_sites's own comment)", type="LefProperty", is_list=True),
             ],
         ),
         Klass(
@@ -297,6 +333,7 @@ schema = Schema(
                 Field(name="use_via_names", description="Names of technology-level VIAs this rule uses (5.6 USEVIA) - empty for a rule with no explicit USEVIA statements", type="str", example="V1_0", is_list=True),
                 Field(name="use_via_rule_names", description="Names of technology-level VIARULEs this rule uses (5.6 USEVIARULE)", type="str", example="ViaRule1", is_list=True),
                 Field(name="min_cuts", description="Per-cut-layer via-count overrides (5.6 MINCUTS)", type="MinCutOverride", is_list=True),
+                Field(name="properties", description="PROPERTY attachments (LEF PROPERTY) - readable, but never written: the vendored writer's generic property functions don't accept NONDEFAULTRULE's own write-state (see write_non_default_rules's own comment)", type="LefProperty", is_list=True),
             ],
         ),
         Klass(
@@ -596,6 +633,12 @@ schema = Schema(
                     type="ViaRuleReference",
                     is_optional=True,
                 ),
+                Field(
+                    name="properties",
+                    description="PROPERTY attachments (LEF PROPERTY)",
+                    type="LefProperty",
+                    is_list=True,
+                ),
             ],
         ),
         Klass(
@@ -638,6 +681,12 @@ schema = Schema(
                     description="Specific via names this rule applies to (LEF VIA name - non-GENERATE only)",
                     type="str",
                     example="V1_0",
+                    is_list=True,
+                ),
+                Field(
+                    name="properties",
+                    description="PROPERTY attachments (LEF PROPERTY) - readable for both GENERATE and non-GENERATE, but only writable for non-GENERATE: the vendored writer's generic property functions accept LEFW_VIARULE/_START but not LEFW_VIARULEGEN/_START (see write_via_rules's own comment)",
+                    type="LefProperty",
                     is_list=True,
                 ),
             ],
@@ -1155,6 +1204,12 @@ schema = Schema(
                     type="MacroDensityLayer",
                     is_list=True,
                 ),
+                Field(
+                    name="properties",
+                    description="PROPERTY attachments (LEF PROPERTY)",
+                    type="LefProperty",
+                    is_list=True,
+                ),
             ],
         ),
         Klass(
@@ -1272,6 +1327,12 @@ schema = Schema(
                     description="This pin's own logically-equivalent-pin name (LEF PIN LEQ) - distinct from the macro-level Abstract.leq - empty string if unset",
                     type="str",
                     example="A2",
+                ),
+                Field(
+                    name="properties",
+                    description="PROPERTY attachments (LEF PROPERTY)",
+                    type="LefProperty",
+                    is_list=True,
                 ),
             ],
         ),

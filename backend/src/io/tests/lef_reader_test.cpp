@@ -781,6 +781,67 @@ TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnE
     EXPECT_EQ(rule->min_cuts[0].num_cuts, 2);
 }
 
+TEST_F(LEFReaderViaFixture, ReadsPropertyDefinitionsAndPerConstructPropertyAttachments)
+{
+    const TechnologyData *technology = root.get_technology(root.get_technology_ids().front());
+    ASSERT_TRUE(technology != nullptr);
+
+    ASSERT_EQ(technology->property_definitions.size(), 6u);
+    const PropertyDefinition &lip_def = technology->property_definitions[0];
+    // lefiProp::propType() (see lef.y's PROPERTYDEFINITIONS grammar) is
+    // lowercase ("layer"/"via"/...), unlike the LEF keyword itself.
+    EXPECT_EQ(lip_def.owner_type, "layer");
+    EXPECT_EQ(lip_def.name, "lip");
+    EXPECT_EQ(lip_def.data_type, "I");
+    EXPECT_FALSE(lip_def.range_min.has_value());
+
+    const PropertyDefinition &vip_def = technology->property_definitions[3];
+    EXPECT_EQ(vip_def.owner_type, "via");
+    EXPECT_EQ(vip_def.name, "vip");
+    ASSERT_TRUE(vip_def.range_min.has_value());
+    ASSERT_TRUE(vip_def.range_max.has_value());
+    EXPECT_DOUBLE_EQ(*vip_def.range_min, 0.0);
+    EXPECT_DOUBLE_EQ(*vip_def.range_max, 100.0);
+
+    const LayerData *m1 = root.get_layer(root.get_layer_by_name("M1"));
+    ASSERT_TRUE(m1 != nullptr);
+    ASSERT_EQ(m1->properties.size(), 1u);
+    EXPECT_EQ(m1->properties[0].name, "lsp");
+    EXPECT_FALSE(m1->properties[0].is_number);
+    EXPECT_EQ(m1->properties[0].string_value, "top");
+
+    const LayerData *v1 = root.get_layer(root.get_layer_by_name("V1"));
+    ASSERT_TRUE(v1 != nullptr);
+    ASSERT_EQ(v1->properties.size(), 2u);
+    EXPECT_EQ(v1->properties[0].name, "lip");
+    EXPECT_TRUE(v1->properties[0].is_number);
+    EXPECT_DOUBLE_EQ(v1->properties[0].number_value, 5.0);
+    EXPECT_EQ(v1->properties[1].name, "lrp");
+    EXPECT_DOUBLE_EQ(v1->properties[1].number_value, 2.3);
+
+    const ViaData *via1 = root.get_via(root.get_via_by_name("VIA1"));
+    ASSERT_TRUE(via1 != nullptr);
+    ASSERT_EQ(via1->properties.size(), 1u);
+    EXPECT_EQ(via1->properties[0].name, "vip");
+    EXPECT_TRUE(via1->properties[0].is_number);
+    EXPECT_DOUBLE_EQ(via1->properties[0].number_value, 42.0);
+
+    const AbstractId abstract_id = root.get_design_abstract(root.get_design_by_name("WRITERTEST"));
+    const AbstractData *abstract = root.get_abstract(abstract_id);
+    ASSERT_TRUE(abstract != nullptr);
+    ASSERT_EQ(abstract->properties.size(), 1u);
+    EXPECT_EQ(abstract->properties[0].name, "mrp");
+    EXPECT_DOUBLE_EQ(abstract->properties[0].number_value, 1.5);
+
+    ASSERT_EQ(root.get_abstract_terminals(abstract_id).size(), 1u);
+    const TerminalData *pin_a = root.get_terminal(root.get_abstract_terminals(abstract_id).front());
+    ASSERT_TRUE(pin_a != nullptr);
+    ASSERT_EQ(pin_a->properties.size(), 1u);
+    EXPECT_EQ(pin_a->properties[0].name, "psp");
+    EXPECT_FALSE(pin_a->properties[0].is_number);
+    EXPECT_EQ(pin_a->properties[0].string_value, "signal");
+}
+
 TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)
 {
     // Re-reading the whole fixture into the same Root also re-declares

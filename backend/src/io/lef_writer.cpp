@@ -3,6 +3,7 @@
 #include <fmt/format.h>
 #include <memory>
 #include <cstdio>
+#include <cctype>
 
 // The vendored library's C++ writer header (lefwWriter.hpp) wraps every
 // lefw* declaration in `namespace LefDefParser` - this codebase's own
@@ -31,6 +32,18 @@ namespace
     double to_microns_squared(int64_t dbu_squared, double dbu_per_micron)
     {
         return dbu_per_micron > 0.0 ? static_cast<double>(dbu_squared) / (dbu_per_micron * dbu_per_micron) : 0.0;
+    }
+
+    // lefiProp::propType()'s own setPropType() calls (see lef.y's
+    // PROPERTYDEFINITIONS grammar) store the owner keyword lowercase
+    // ("layer", "via", ...), but lefwIntPropDef/RealPropDef/StringPropDef
+    // validate objType against the uppercase LEF keywords ("LAYER", "VIA",
+    // ...) and reject anything else with LEFW_BAD_DATA.
+    std::string to_upper(std::string s)
+    {
+        for (char &c : s)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return s;
     }
 
     const char *routing_direction_to_string(le::RoutingDirection direction)
@@ -88,6 +101,53 @@ namespace
 
 namespace le
 {
+    int LEFWriter::write_property_definitions(const Root &root, TechnologyId technology_id)
+    {
+        const TechnologyData *technology = root.get_technology(technology_id);
+        if (!technology || technology->property_definitions.empty())
+            return 0;
+
+        int status = lefwStartPropDef();
+        if (status)
+            return status;
+
+        for (const PropertyDefinition &def : technology->property_definitions)
+        {
+            const double left = def.range_min.value_or(0.0);
+            const double right = def.range_max.value_or(0.0);
+            const std::string owner_type = to_upper(def.owner_type);
+            // 'I'nteger/'R'eal/'S'tring/'Q'uoted-string - Q is written the
+            // same way as S (lefwStringPropDef has no separate "quoted"
+            // form; the writer always quotes string values regardless -
+            // see lefwStringProperty's own "%s \"%s\"" format).
+            if (def.data_type == "I")
+                status = lefwIntPropDef(owner_type.c_str(), def.name.c_str(), left, right, 0);
+            else if (def.data_type == "R")
+                status = lefwRealPropDef(owner_type.c_str(), def.name.c_str(), left, right, 0.0);
+            else
+                status = lefwStringPropDef(owner_type.c_str(), def.name.c_str(), left, right, nullptr);
+            if (status)
+                return status;
+        }
+
+        return lefwEndPropDef();
+    }
+
+    int LEFWriter::write_properties(const std::vector<LefProperty> &properties, bool include_numeric)
+    {
+        for (const LefProperty &property : properties)
+        {
+            if (property.is_number && !include_numeric)
+                continue;
+            const int status = property.is_number
+                                    ? lefwRealProperty(property.name.c_str(), property.number_value)
+                                    : lefwStringProperty(property.name.c_str(), property.string_value.c_str());
+            if (status)
+                return status;
+        }
+        return 0;
+    }
+
     int LEFWriter::write_units(const Root &root, TechnologyId technology_id)
     {
         const TechnologyData *technology = root.get_technology(technology_id);
@@ -394,6 +454,10 @@ namespace le
                         return status;
                 }
 
+                status = write_properties(layer->properties, /*include_numeric=*/false);
+                if (status)
+                    return status;
+
                 status = lefwEndLayerRouting(layer->name.c_str());
                 if (status)
                     return status;
@@ -471,6 +535,10 @@ namespace le
                     if (status)
                         return status;
                 }
+
+                status = write_properties(layer->properties);
+                if (status)
+                    return status;
 
                 status = lefwEndLayer(layer->name.c_str());
                 if (status)
@@ -588,6 +656,10 @@ namespace le
                     return status;
             }
 
+            status = write_properties(via->properties);
+            if (status)
+                return status;
+
             status = write_via_layers(via->layers, dbu_per_micron);
             if (status)
                 return status;
@@ -692,6 +764,16 @@ namespace le
                         return status;
                 }
 
+                // GENERATE via rules never reach here (see the branch
+                // above) - the vendored writer's generic property
+                // functions accept LEFW_VIARULE/_START but not
+                // LEFW_VIARULEGEN/_START, so GENERATE VIARULE properties
+                // are readable but not writable via this API (see
+                // lef_writer.hpp's own class-level comment).
+                status = write_properties(via_rule->properties);
+                if (status)
+                    return status;
+
                 status = lefwEndViaRule(via_rule->name.c_str());
                 if (status)
                     return status;
@@ -741,6 +823,14 @@ namespace le
                     return status;
             }
 
+            // site->properties is deliberately never written: the vendored
+            // writer's lefwStringProperty/lefwRealProperty/lefwIntProperty
+            // only accept lefwState values LEFW_VIA/LAYER/VIARULE/MACRO(_START)/
+            // VIA_START/VIARULE_START/LAYER_START/BEGINEXT/VIAVIARULE/
+            // LAYERROUTING(_START) (confirmed in lefwWriter.cpp) - LEFW_SITE
+            // is not among them, so SITE properties are readable but not
+            // writable via this API. Same gap for NONDEFAULTRULE, see
+            // write_non_default_rules below.
             status = lefwEndSite(site->name.c_str());
             if (status)
                 return status;
@@ -751,6 +841,10 @@ namespace le
 
     int LEFWriter::write_non_default_rules(const Root &root, TechnologyId technology_id)
     {
+        // rule->properties is deliberately never written here either -
+        // LEFW_NONDEFAULTRULE(_START) isn't among the states the vendored
+        // writer's generic property functions accept (see write_sites's
+        // own comment for the full accepted-state list).
         const TechnologyData *technology = root.get_technology(technology_id);
         if (!technology)
             return 0;
@@ -1016,6 +1110,14 @@ namespace le
         // obsoleted for VERSION >= 5.6 with no replacement (same
         // unreachable-at-5.8 gap as the macro-level LEQ above).
 
+        // lefwStartMacroPin doesn't change lefwState (it stays LEFW_MACRO,
+        // tracked instead via the separate lefwIsMacroPin flag) - PIN
+        // properties work via the same generic functions MACRO properties
+        // use, unlike SITE/NONDEFAULTRULE/GENERATE-VIARULE.
+        status = write_properties(terminal->properties);
+        if (status)
+            return status;
+
         for (TerminalPortId port_id : root.get_terminal_ports(terminal_id))
         {
             const TerminalPortData *port = root.get_terminal_port(port_id);
@@ -1157,6 +1259,10 @@ namespace le
                 return status;
         }
 
+        status = write_properties(abstract->properties);
+        if (status)
+            return status;
+
         for (TerminalId terminal_id : root.get_abstract_terminals(abstract_id))
         {
             status = write_terminal(root, terminal_id, dbu_per_micron);
@@ -1245,6 +1351,17 @@ namespace le
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: Writing UNITS failed with status {}.", status));
+                return status;
+            }
+
+            // After UNITS, before LAYER/VIA/... - matches complete.5.8.lef's
+            // own real ordering, and LEF's own requirement that
+            // PROPERTYDEFINITIONS precede the first use of any property
+            // name it declares.
+            status = write_property_definitions(root, technology_id);
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: Writing PROPERTYDEFINITIONS failed with status {}.", status));
                 return status;
             }
 

@@ -467,6 +467,86 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsANonDefaultRuleWithAnEmbeddedViaAndU
     EXPECT_EQ(original->min_cuts[0].num_cuts, written->min_cuts[0].num_cuts);
 }
 
+TEST_F(LEFWriterRoundtripFixture, RoundTripsPropertyDefinitionsAndPerConstructPropertyAttachments)
+{
+    const TechnologyId original_tech_id = original_root.get_technology_ids().front();
+    const TechnologyId written_tech_id = written_root.get_technology_ids().front();
+    const TechnologyData *original_tech = original_root.get_technology(original_tech_id);
+    const TechnologyData *written_tech = written_root.get_technology(written_tech_id);
+    ASSERT_TRUE(original_tech != nullptr);
+    ASSERT_TRUE(written_tech != nullptr);
+
+    ASSERT_EQ(original_tech->property_definitions.size(), written_tech->property_definitions.size());
+    for (size_t i = 0; i < original_tech->property_definitions.size(); i++)
+    {
+        const PropertyDefinition &o = original_tech->property_definitions[i];
+        const PropertyDefinition &w = written_tech->property_definitions[i];
+        EXPECT_EQ(o.owner_type, w.owner_type) << "definition " << i;
+        EXPECT_EQ(o.name, w.name) << "definition " << i;
+        EXPECT_EQ(o.data_type, w.data_type) << "definition " << i;
+        EXPECT_EQ(o.range_min.has_value(), w.range_min.has_value()) << "definition " << i;
+        if (o.range_min.has_value() && w.range_min.has_value())
+            EXPECT_DOUBLE_EQ(*o.range_min, *w.range_min) << "definition " << i;
+    }
+
+    // M1 (ROUTING) only round-trips its STRING property - lefwRealProperty/
+    // lefwIntProperty are missing LEFW_LAYERROUTING(_START) from their own
+    // accepted-state list (see write_properties's own comment), so the
+    // numeric ones are readable on the original but never written.
+    const LayerData *original_m1 = original_root.get_layer(original_root.get_layer_by_name("M1"));
+    const LayerData *written_m1 = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    ASSERT_TRUE(original_m1 != nullptr);
+    ASSERT_TRUE(written_m1 != nullptr);
+    ASSERT_EQ(original_m1->properties.size(), 1u);
+    ASSERT_EQ(written_m1->properties.size(), 1u);
+    EXPECT_EQ(original_m1->properties[0].name, written_m1->properties[0].name);
+    EXPECT_EQ(original_m1->properties[0].string_value, written_m1->properties[0].string_value);
+
+    // V1 (CUT) round-trips both numeric properties fully.
+    const LayerData *original_v1 = original_root.get_layer(original_root.get_layer_by_name("V1"));
+    const LayerData *written_v1 = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    ASSERT_TRUE(original_v1 != nullptr);
+    ASSERT_TRUE(written_v1 != nullptr);
+    ASSERT_EQ(original_v1->properties.size(), written_v1->properties.size());
+    ASSERT_EQ(original_v1->properties.size(), 2u);
+    for (size_t i = 0; i < original_v1->properties.size(); i++)
+    {
+        EXPECT_EQ(original_v1->properties[i].name, written_v1->properties[i].name) << "property " << i;
+        EXPECT_DOUBLE_EQ(original_v1->properties[i].number_value, written_v1->properties[i].number_value) << "property " << i;
+    }
+
+    const ViaData *original_via1 = original_root.get_via(original_root.get_via_by_name("VIA1"));
+    const ViaData *written_via1 = written_root.get_via(written_root.get_via_by_name("VIA1"));
+    ASSERT_TRUE(original_via1 != nullptr);
+    ASSERT_TRUE(written_via1 != nullptr);
+    ASSERT_EQ(original_via1->properties.size(), written_via1->properties.size());
+    ASSERT_EQ(original_via1->properties.size(), 1u);
+    EXPECT_EQ(original_via1->properties[0].name, written_via1->properties[0].name);
+    EXPECT_DOUBLE_EQ(original_via1->properties[0].number_value, written_via1->properties[0].number_value);
+
+    const AbstractId original_abstract_id = original_root.get_design_abstract(original_root.get_design_by_name("WRITERTEST"));
+    const AbstractId written_abstract_id = written_root.get_design_abstract(written_root.get_design_by_name("WRITERTEST"));
+    const AbstractData *original_abstract = original_root.get_abstract(original_abstract_id);
+    const AbstractData *written_abstract = written_root.get_abstract(written_abstract_id);
+    ASSERT_TRUE(original_abstract != nullptr);
+    ASSERT_TRUE(written_abstract != nullptr);
+    ASSERT_EQ(original_abstract->properties.size(), written_abstract->properties.size());
+    ASSERT_EQ(original_abstract->properties.size(), 1u);
+    EXPECT_EQ(original_abstract->properties[0].name, written_abstract->properties[0].name);
+    EXPECT_DOUBLE_EQ(original_abstract->properties[0].number_value, written_abstract->properties[0].number_value);
+
+    const TerminalId original_pin_id = original_root.get_abstract_terminals(original_abstract_id).front();
+    const TerminalId written_pin_id = written_root.get_abstract_terminals(written_abstract_id).front();
+    const TerminalData *original_pin = original_root.get_terminal(original_pin_id);
+    const TerminalData *written_pin = written_root.get_terminal(written_pin_id);
+    ASSERT_TRUE(original_pin != nullptr);
+    ASSERT_TRUE(written_pin != nullptr);
+    ASSERT_EQ(original_pin->properties.size(), written_pin->properties.size());
+    ASSERT_EQ(original_pin->properties.size(), 1u);
+    EXPECT_EQ(original_pin->properties[0].name, written_pin->properties[0].name);
+    EXPECT_EQ(original_pin->properties[0].string_value, written_pin->properties[0].string_value);
+}
+
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
 {
     const DesignId original_design_id = original_root.get_design_by_name("WRITERTEST");
