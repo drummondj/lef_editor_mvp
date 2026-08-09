@@ -56,6 +56,8 @@ namespace le
         static int lefrMacroCbkFn(lefrCallbackType_e typ, lefiMacro *lef_macro, void *user_data);
         static int lefrPinCbkFn(lefrCallbackType_e typ, lefiPin *lef_pin, void *user_data);
         static int lefrObstructionCbkFn(lefrCallbackType_e typ, lefiObstruction *lef_obs, void *user_data);
+        static int lefrBusBitCharsCbkFn(lefrCallbackType_e typ, const char *bus_bit_chars, void *user_data);
+        static int lefrDividerCharCbkFn(lefrCallbackType_e typ, const char *divider_char, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through
@@ -71,6 +73,11 @@ namespace le
 
         // Helper functions
         int64_t microns_to_dbu(const double microns);
+        // Area (LEF AREA/ANTENNAAREA) scales as the *square* of the linear
+        // dbu-per-micron factor, unlike every other microns_to_dbu()
+        // consumer - a plain microns_to_dbu(area_in_microns_squared) would
+        // be wrong by a factor of database_units_microns.
+        int64_t microns_squared_to_dbu(const double microns_squared);
         static Polygon polygon_from_parser(LEFReader *reader, int count, double *x, double *y);
         static Rect rect_from_parser(LEFReader *reader, double xl, double yl, double xh, double yh);
         static std::vector<Shape> shapes_from_parser(LEFReader *reader, lefiGeometries *geometries);
@@ -85,5 +92,17 @@ namespace le
         AbstractData abstract_data_;
         AbstractId abstract_id_;
         std::vector<std::string> messages_;
+
+        // Set by microns_to_dbu/microns_squared_to_dbu the first time
+        // either is called while technology_->database_units_microns is
+        // still its unset-sentinel 0 (see lefrUnitsCbkFn's own "0 means
+        // unset" convention) - i.e. this file's geometry needed a
+        // DATABASE MICRONS declaration that was never read, from this
+        // file or an earlier one sharing the same Root/Technology.
+        // Checked once at the end of read_lef (not aborted mid-parse from
+        // inside a callback) so this doesn't depend on whether returning
+        // nonzero from a callback actually stops the vendored parser -
+        // simpler to reason about and test.
+        bool used_dbu_before_units_declared_ = false;
     };
 }

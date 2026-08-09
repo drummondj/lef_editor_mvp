@@ -71,6 +71,35 @@ TEST_F(LEFReaderCompleteFixture, CreatesAllLayersWithTypeAndDirection)
     EXPECT_EQ(root.get_layer(v1_id)->direction, RoutingDirection::NONE);
 }
 
+TEST_F(LEFReaderCompleteFixture, ReadsBasicScalarLayerProperties)
+{
+    // LAYER M1: TYPE ROUTING ; WIDTH 1 ; WIREEXTENSION 7 ; PITCH 1.8 ;
+    // DIRECTION HORIZONTAL ; RESISTANCE RPERSQ 0.103 ;
+    // CAPACITANCE CPERSQDIST 0.000156 ; - no OFFSET/AREA/SPACING/HEIGHT/
+    // THICKNESS statements, so those stay nullopt (UPDATES.md 12 Phase 1's
+    // has*()-guarded basic scalar LAYER coverage).
+    LayerId m1_id = root.get_layer_by_name("M1");
+    ASSERT_TRUE(m1_id.valid());
+    const LayerData *m1 = root.get_layer(m1_id);
+
+    ASSERT_TRUE(m1->width.has_value());
+    EXPECT_EQ(*m1->width, 20000); // 1um * 20000 dbu/um
+    ASSERT_TRUE(m1->pitch.has_value());
+    EXPECT_EQ(*m1->pitch, 36000); // 1.8um * 20000 dbu/um
+    ASSERT_TRUE(m1->wire_extension.has_value());
+    EXPECT_EQ(*m1->wire_extension, 140000); // 7um * 20000 dbu/um
+    ASSERT_TRUE(m1->resistance.has_value());
+    EXPECT_DOUBLE_EQ(*m1->resistance, 0.103);
+    ASSERT_TRUE(m1->capacitance.has_value());
+    EXPECT_DOUBLE_EQ(*m1->capacitance, 0.000156);
+
+    EXPECT_FALSE(m1->offset.has_value());
+    EXPECT_FALSE(m1->area.has_value());
+    EXPECT_FALSE(m1->spacing.has_value());
+    EXPECT_FALSE(m1->height.has_value());
+    EXPECT_FALSE(m1->thickness.has_value());
+}
+
 TEST_F(LEFReaderCompleteFixture, CreatesOneLibraryAndOneDesignPerMacro)
 {
     ASSERT_EQ(root.get_library_size(), 1u);
@@ -132,9 +161,12 @@ TEST_F(LEFReaderCompleteFixture, CreatesPinsWithPortShapes)
 
 TEST_F(LEFReaderCompleteFixture, ObstructionCollectsRectsAndPathsButIgnoresVias)
 {
-    // MACRO INV's OBS block on LAYER M1: 1 RECT, a 2x1 RECT ITERATE (2 rects),
-    // a 1x2 PATH ITERATE (2 paths), 2 more PATHs, 4 VIAs (unsupported, must be
-    // ignored - not counted as rects/paths), then a final RECT. Width 0.1um.
+    // MACRO INV's OBS block on LAYER M1: 1 RECT, a 2x1 RECT ITERATE, a 1x2
+    // PATH ITERATE, 2 more PATHs, 4 VIAs (unsupported, must be ignored - not
+    // counted as rects/paths/iterates), then a final RECT. Width 0.1um.
+    // ITERATE statements are stored raw (UPDATES.md 12 Phase 1's ITERATE
+    // rework), not pre-expanded - see rect_iterates/path_iterates below,
+    // and Pipeline::generate_shapes for where they're expanded.
     DesignId design_id = root.get_design_by_name("INV");
     AbstractId abstract_id = root.get_design_abstract(design_id);
 
@@ -144,9 +176,22 @@ TEST_F(LEFReaderCompleteFixture, ObstructionCollectsRectsAndPathsButIgnoresVias)
     ASSERT_EQ(obstruction->shapes.size(), 1u);
     const Shape &shape = obstruction->shapes.front();
     EXPECT_EQ(shape.layer_name, "M1");
-    EXPECT_EQ(shape.rects.size(), 4u);  // 1 + (2x1 iter) + 1 final, VIAs excluded
-    EXPECT_EQ(shape.paths.size(), 4u);  // (1x2 iter) + 2 singles, VIAs excluded
+    EXPECT_EQ(shape.rects.size(), 2u); // 1 + 1 final, VIAs excluded, ITERATE stored separately
+    EXPECT_EQ(shape.paths.size(), 2u); // 2 singles, VIAs excluded, ITERATE stored separately
     EXPECT_EQ(shape.polygons.size(), 0u);
+
+    ASSERT_EQ(shape.rect_iterates.size(), 1u);
+    EXPECT_EQ(shape.rect_iterates.front().num_x, 2);
+    EXPECT_EQ(shape.rect_iterates.front().num_y, 1);
+    EXPECT_EQ(shape.rect_iterates.front().space_x, 400000); // 20.0um * 20000 dbu/um
+    EXPECT_EQ(shape.rect_iterates.front().space_y, 0);
+
+    ASSERT_EQ(shape.path_iterates.size(), 1u);
+    EXPECT_EQ(shape.path_iterates.front().num_x, 1);
+    EXPECT_EQ(shape.path_iterates.front().num_y, 2);
+    EXPECT_EQ(shape.path_iterates.front().space_x, 0);
+    EXPECT_EQ(shape.path_iterates.front().space_y, 28920000); // 1446um * 20000 dbu/um
+    EXPECT_EQ(shape.path_iterates.front().path.width, 2000);  // WIDTH 0.1um * 20000 dbu/um
 
     for (const auto &path : shape.paths)
         EXPECT_EQ(path.width, 2000); // WIDTH 0.1um * 20000 dbu/um
@@ -370,6 +415,39 @@ TEST(LEFReaderErrors, SecondReadWithDifferentUnitsIsIgnored)
     ASSERT_FALSE(reader2.messages().empty());
     EXPECT_NE(reader2.messages().front().find("WARNING"), std::string::npos);
     EXPECT_TRUE(reader1.messages().empty());
+}
+
+TEST(LEFReaderErrors, GeometryBeforeDatabaseMicronsEverDeclaredIsAnError)
+{
+    // Every microns_to_dbu()/microns_squared_to_dbu() call silently
+    // multiplies by 0 (the "unset" sentinel database_units_microns
+    // defaults to) if DATABASE MICRONS was never declared - previously
+    // undetected, producing silently-wrong all-zero coordinates. Caught
+    // once at the end of read_lef (not mid-parse) via
+    // used_dbu_before_units_declared_.
+    Root root;
+    LEFReader reader;
+    const int result = reader.read_lef(fixture_path("no_units_with_geometry.lef"), root, "test_lib");
+    EXPECT_EQ(result, 3);
+
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().back().find("ERROR"), std::string::npos);
+    EXPECT_NE(reader.messages().back().find("DATABASE MICRONS"), std::string::npos);
+}
+
+TEST(LEFReaderErrors, GeometryAfterAnEarlierReadAlreadyDeclaredDatabaseMicronsIsFine)
+{
+    // The same no-UNITS macro file, but read into a Root that already has
+    // DATABASE MICRONS from an earlier read (the realistic "tech file
+    // first, macro file second" pattern) - not an error, since
+    // database_units_microns is no longer the unset sentinel by the time
+    // this file's own geometry gets converted.
+    Root root;
+    LEFReader tech_reader;
+    ASSERT_EQ(tech_reader.read_lef(fixture_path("units_1000.lef"), root, "test_lib"), 0);
+
+    LEFReader macro_reader;
+    EXPECT_EQ(macro_reader.read_lef(fixture_path("no_units_with_geometry.lef"), root, "test_lib"), 0);
 }
 
 TEST(LEFReaderErrors, DuplicateMacroNameIsRejected)

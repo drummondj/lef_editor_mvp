@@ -39,6 +39,22 @@ namespace
         AbstractId abstract_id;
         Pipeline pipeline;
     };
+
+    // Whether any polygon in `polygons` has a point at exactly (x, y) -
+    // used below instead of indexing by position, since generate_shapes
+    // always calls Geometry::merge_overlapping_fills on a Shape with more
+    // than one rect/polygon (see that function's own doc comment - it
+    // runs whenever count > 1, not only on actual overlap), which
+    // re-orders geometry via a Boost.Geometry union even when the pieces
+    // are disjoint.
+    bool any_polygon_has_point(const std::vector<Polygon> &polygons, int64_t x, int64_t y)
+    {
+        for (const Polygon &polygon : polygons)
+            for (const Point &point : polygon.points)
+                if (point.x == x && point.y == y)
+                    return true;
+        return false;
+    }
 }
 
 TEST_F(PipelineFixture, GenerateShapesCollectsPortAndObstructionShapes)
@@ -153,6 +169,106 @@ TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinAnObstructionS
     ASSERT_EQ(shapes.size(), 1u);
     EXPECT_TRUE(shapes.front().shape.rects.empty());
     ASSERT_EQ(shapes.front().shape.polygons.size(), 1u); // overlapping -> merged into one polygon
+}
+
+TEST_F(PipelineFixture, GenerateShapesExpandsRectIteratesIntoConcreteRects)
+{
+    // UPDATES.md 12 Phase 1's ITERATE rework - LEFReader stores RECT
+    // ITERATE raw; generate_shapes is where it's expanded back into
+    // concrete Rects. 2x1, spaced far enough apart (100) that the two
+    // expanded rects (each 10x10) are disjoint - still merged into
+    // `polygons` by merge_overlapping_fills (any count > 1 triggers it),
+    // but as two separate polygon entries, not unioned into one.
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .rect_iterates = {RectIterate{
+            .rect = Rect{.ll = {0, 0}, .ur = {10, 10}},
+            .num_x = 2,
+            .num_y = 1,
+            .space_x = 100,
+            .space_y = 0,
+        }},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    const Shape &shape = shapes.front().shape;
+    EXPECT_TRUE(shape.rect_iterates.empty()); // consumed by expansion
+    EXPECT_TRUE(shape.rects.empty());         // merged into polygons - see merge_overlapping_fills
+    ASSERT_EQ(shape.polygons.size(), 2u);
+    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 0, 0));
+    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 100, 0));
+}
+
+TEST_F(PipelineFixture, GenerateShapesExpandsPathIteratesIntoConcretePaths)
+{
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .path_iterates = {PathIterate{
+            .path = Path{.polygon = Polygon{.points = {{0, 0}, {10, 0}}}, .width = 2},
+            .num_x = 1,
+            .num_y = 2,
+            .space_x = 0,
+            .space_y = 50,
+        }},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    const Shape &shape = shapes.front().shape;
+    EXPECT_TRUE(shape.path_iterates.empty()); // consumed by expansion
+    ASSERT_EQ(shape.paths.size(), 2u);
+    EXPECT_EQ(shape.paths[0].polygon.points[0].y, 0);
+    EXPECT_EQ(shape.paths[1].polygon.points[0].y, 50);
+    EXPECT_EQ(shape.paths[1].width, 2u); // width carried through from the base path
+
+    // path_outlines is computed from the (post-expansion) shape.paths -
+    // one entry per expanded path, not per original ITERATE statement.
+    ASSERT_EQ(shapes.front().path_outlines->size(), 2u);
+}
+
+TEST_F(PipelineFixture, GenerateShapesExpandsPolygonIteratesIntoConcretePolygons)
+{
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .polygon_iterates = {PolygonIterate{
+            .polygon = Polygon{.points = {{0, 0}, {10, 0}, {10, 10}, {0, 10}}},
+            .num_x = 2,
+            .num_y = 1,
+            .space_x = 100,
+            .space_y = 0,
+        }},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    const Shape &shape = shapes.front().shape;
+    EXPECT_TRUE(shape.polygon_iterates.empty()); // consumed by expansion
+    ASSERT_EQ(shape.polygons.size(), 2u);
+    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 0, 0));
+    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 100, 0));
+}
+
+TEST_F(PipelineFixture, GenerateShapesSkipsAnIteratesEntryWithNonPositiveCounts)
+{
+    // Defense in depth (see generate_shapes's own comment) - a degenerate
+    // num_x/num_y (shouldn't occur via LEFReader, which already validates
+    // this at parse time, but the database itself doesn't enforce it) is
+    // silently skipped rather than looping zero-or-negative times.
+    add_obstruction_shape(Shape{
+        .layer_name = "M1",
+        .rect_iterates = {RectIterate{
+            .rect = Rect{.ll = {0, 0}, .ur = {10, 10}},
+            .num_x = 0,
+            .num_y = 1,
+            .space_x = 100,
+            .space_y = 0,
+        }},
+    });
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(shapes.size(), 1u);
+    EXPECT_TRUE(shapes.front().shape.rects.empty());
 }
 
 TEST_F(PipelineFixture, GenerateShapesDoesNotMergeRectsAcrossDifferentPortsOrObstructions)

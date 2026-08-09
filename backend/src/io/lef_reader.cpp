@@ -79,6 +79,7 @@ namespace le
         lefrInit();
         messages_.clear();
         g_pending_lef_messages.clear();
+        used_dbu_before_units_declared_ = false;
 
         // Setup callbacks
         lefrSetUnitsCbk(lefrUnitsCbkFn);
@@ -87,6 +88,8 @@ namespace le
         lefrSetMacroCbk(lefrMacroCbkFn);
         lefrSetPinCbk(lefrPinCbkFn);
         lefrSetObstructionCbk(lefrObstructionCbkFn);
+        lefrSetBusBitCharsCbk(lefrBusBitCharsCbkFn);
+        lefrSetDividerCharCbk(lefrDividerCharCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -130,6 +133,23 @@ namespace le
             return 2;
         }
         lefrPrintUnusedCallbacks(stdout);
+
+        // Checked once here, not aborted mid-parse from inside a callback
+        // (see used_dbu_before_units_declared_'s own comment) - the file
+        // parsed successfully overall, but at least one dbu conversion
+        // ran before DATABASE MICRONS was ever set (from this file or an
+        // earlier one sharing the same Root/Technology), so every
+        // coordinate it touched is silently wrong (multiplied by the 0
+        // sentinel). Pushed directly to messages_, not via log_error/
+        // g_pending_lef_messages - that staging buffer was already moved
+        // into messages_ above.
+        if (used_dbu_before_units_declared_)
+        {
+            const std::string msg = fmt::format("ERROR: {} used geometry that required DATABASE MICRONS before it was ever declared (from this file or an earlier one read into the same database).", filename);
+            spdlog::error("{}", msg);
+            messages_.push_back(msg);
+            return 3;
+        }
 
         return 0;
     }
@@ -191,16 +211,58 @@ namespace le
             return 0;
         }
 
-        // The parser reuses one scratch lefiLayer across every LAYER statement and
-        // never resets direction_ between them, so a layer that omits DIRECTION
-        // would otherwise silently inherit whichever prior layer last set it.
-        reader->root_->create_layer(
-            LayerData{
-                .technology = reader->technology_id_,
-                .name = layer_name,
-                .type = lef_layer->type(),
-                .direction = lef_layer->hasDirection() ? routing_direction_from_parser(lef_layer->direction()) : RoutingDirection::NONE,
-            });
+        // The parser reuses one scratch lefiLayer across every LAYER statement
+        // and never resets fields between them, so a layer that omits a given
+        // property would otherwise silently inherit whichever prior layer
+        // last set it - every field below is has*()-guarded for exactly that
+        // reason (UPDATES.md 12 Phase 1: basic scalar LAYER properties only -
+        // multi-value SPACING beyond the first entry, SPACINGTABLE,
+        // ENCLOSURE, ANTENNAMODEL, MINSTEP and other nested sub-rules are
+        // deferred to a later iteration, per this task's own diff-driven
+        // process).
+        LayerData layer{
+            .technology = reader->technology_id_,
+            .name = layer_name,
+            .type = lef_layer->type(),
+            .direction = lef_layer->hasDirection() ? routing_direction_from_parser(lef_layer->direction()) : RoutingDirection::NONE,
+        };
+
+        if (lef_layer->hasWidth())
+            layer.width = reader->microns_to_dbu(lef_layer->width());
+        if (lef_layer->hasPitch())
+            layer.pitch = reader->microns_to_dbu(lef_layer->pitch());
+        if (lef_layer->hasOffset())
+            layer.offset = reader->microns_to_dbu(lef_layer->offset());
+        if (lef_layer->hasArea())
+            layer.area = reader->microns_squared_to_dbu(lef_layer->area());
+        if (lef_layer->hasSpacingNumber() && lef_layer->numSpacing() > 0)
+            layer.spacing = reader->microns_to_dbu(lef_layer->spacing(0));
+        if (lef_layer->hasResistance())
+            layer.resistance = lef_layer->resistance();
+        if (lef_layer->hasCapacitance())
+            layer.capacitance = lef_layer->capacitance();
+        if (lef_layer->hasHeight())
+            layer.height = reader->microns_to_dbu(lef_layer->height());
+        if (lef_layer->hasThickness())
+            layer.thickness = reader->microns_to_dbu(lef_layer->thickness());
+        if (lef_layer->hasWireExtension())
+            layer.wire_extension = reader->microns_to_dbu(lef_layer->wireExtension());
+        if (lef_layer->hasShrinkage())
+            layer.shrinkage = reader->microns_to_dbu(lef_layer->shrinkage());
+        if (lef_layer->hasCapMultiplier())
+            layer.cap_multiplier = lef_layer->capMultiplier();
+        if (lef_layer->hasEdgeCap())
+            layer.edge_cap = lef_layer->edgeCap();
+        // hasAntennaArea()/antennaArea() are dead code in the vendored
+        // parser - confirmed by reading lefiLayer.cpp and lef.y: setAntennaArea()
+        // is defined but no grammar rule ever calls it (only
+        // ANTENNAAREARATIO/ANTENNAAREAFACTOR exist as real LEF statements,
+        // not a bare ANTENNAAREA), so this field is never populated by any
+        // real LEF file and isn't tracked here.
+        if (lef_layer->hasAntennaLength())
+            layer.antenna_length = reader->microns_to_dbu(lef_layer->antennaLength());
+
+        reader->root_->create_layer(std::move(layer));
 
         return 0;
     }
@@ -224,6 +286,22 @@ namespace le
                 }
             }
         }
+        return 0;
+    }
+
+    int LEFReader::lefrBusBitCharsCbkFn(lefrCallbackType_e typ, const char *bus_bit_chars, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        if (bus_bit_chars)
+            reader->technology_->bus_bit_chars = bus_bit_chars;
+        return 0;
+    }
+
+    int LEFReader::lefrDividerCharCbkFn(lefrCallbackType_e typ, const char *divider_char, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        if (divider_char)
+            reader->technology_->divider_char = divider_char;
         return 0;
     }
 
@@ -388,8 +466,17 @@ namespace le
         return 0;
     }
 
+    int64_t LEFReader::microns_squared_to_dbu(const double microns_squared)
+    {
+        if (technology_->database_units_microns == 0)
+            used_dbu_before_units_declared_ = true;
+        return std::llround(microns_squared * technology_->database_units_microns * technology_->database_units_microns);
+    }
+
     int64_t LEFReader::microns_to_dbu(const double microns)
     {
+        if (technology_->database_units_microns == 0)
+            used_dbu_before_units_declared_ = true;
         return std::llround(microns * technology_->database_units_microns);
     }
 
@@ -555,22 +642,24 @@ namespace le
                     break;
                 }
                 auto lef_rect_iter = geometries->getRectIter(j);
-                shape.value().rects.reserve(safe_iteration_count(lef_rect_iter->xStart, lef_rect_iter->yStart));
+                // Stored raw (UPDATES.md 12 Phase 1's ITERATE rework) rather
+                // than expanded here - see Pipeline::generate_shapes for the
+                // expansion, and LEFReader::safe_iteration_count's own
+                // comment for why xStart/yStart (LEF-file-controlled
+                // doubles, despite the misleading name they're iteration
+                // counts, not start coordinates) need bounds-checking before
+                // ever being cast to int.
+                if (safe_iteration_count(lef_rect_iter->xStart, lef_rect_iter->yStart) == 0)
+                    break;
 
-                for (int ix = 0; ix < lef_rect_iter->xStart; ix++)
-                {
-                    for (int iy = 0; iy < lef_rect_iter->yStart; iy++)
-                    {
-                        auto rect = rect_from_parser(
-                            reader,
-                            lef_rect_iter->xl + ix * lef_rect_iter->xStep,
-                            lef_rect_iter->yl + iy * lef_rect_iter->yStep,
-                            lef_rect_iter->xh + ix * lef_rect_iter->xStep,
-                            lef_rect_iter->yh + iy * lef_rect_iter->yStep);
-                        shape.value().rects.push_back(rect);
-                        geo_count++;
-                    }
-                }
+                shape.value().rect_iterates.push_back(RectIterate{
+                    .rect = rect_from_parser(reader, lef_rect_iter->xl, lef_rect_iter->yl, lef_rect_iter->xh, lef_rect_iter->yh),
+                    .num_x = static_cast<int>(lef_rect_iter->xStart),
+                    .num_y = static_cast<int>(lef_rect_iter->yStart),
+                    .space_x = reader->microns_to_dbu(lef_rect_iter->xStep),
+                    .space_y = reader->microns_to_dbu(lef_rect_iter->yStep),
+                });
+                geo_count++;
                 break;
             }
             case lefiGeomEnum::lefiGeomPathE:
@@ -595,22 +684,18 @@ namespace le
                     break;
                 }
                 auto lef_path_iter = geometries->getPathIter(j);
-                shape.value().paths.reserve(safe_iteration_count(lef_path_iter->xStart, lef_path_iter->yStart));
-                for (int ix = 0; ix < lef_path_iter->xStart; ix++)
-                {
-                    for (int iy = 0; iy < lef_path_iter->yStart; iy++)
-                    {
-                        auto polygon = polygon_from_parser(reader, lef_path_iter->numPoints, lef_path_iter->x, lef_path_iter->y);
-                        auto offset = Point{
-                            .x = reader->microns_to_dbu(ix * lef_path_iter->xStep),
-                            .y = reader->microns_to_dbu(iy * lef_path_iter->yStep),
-                        };
-                        auto transformed = Geometry::transform(polygon, offset);
-                        auto path = Path{.width = width, .polygon = transformed};
-                        shape.value().paths.push_back(path);
-                        geo_count++;
-                    }
-                }
+                if (safe_iteration_count(lef_path_iter->xStart, lef_path_iter->yStart) == 0)
+                    break;
+
+                auto polygon = polygon_from_parser(reader, lef_path_iter->numPoints, lef_path_iter->x, lef_path_iter->y);
+                shape.value().path_iterates.push_back(PathIterate{
+                    .path = Path{.width = width, .polygon = polygon},
+                    .num_x = static_cast<int>(lef_path_iter->xStart),
+                    .num_y = static_cast<int>(lef_path_iter->yStart),
+                    .space_x = reader->microns_to_dbu(lef_path_iter->xStep),
+                    .space_y = reader->microns_to_dbu(lef_path_iter->yStep),
+                });
+                geo_count++;
                 break;
             }
             case lefiGeomEnum::lefiGeomPolygonE:
@@ -634,21 +719,18 @@ namespace le
                     break;
                 }
                 auto lef_polygon_iter = geometries->getPolygonIter(j);
-                shape.value().polygons.reserve(safe_iteration_count(lef_polygon_iter->xStart, lef_polygon_iter->yStart));
-                for (int ix = 0; ix < lef_polygon_iter->xStart; ix++)
-                {
-                    for (int iy = 0; iy < lef_polygon_iter->yStart; iy++)
-                    {
-                        auto polygon = polygon_from_parser(reader, lef_polygon_iter->numPoints, lef_polygon_iter->x, lef_polygon_iter->y);
-                        auto offset = Point{
-                            .x = reader->microns_to_dbu(ix * lef_polygon_iter->xStep),
-                            .y = reader->microns_to_dbu(iy * lef_polygon_iter->yStep),
-                        };
-                        auto transformed = Geometry::transform(polygon, offset);
-                        shape.value().polygons.push_back(transformed);
-                        geo_count++;
-                    }
-                }
+                if (safe_iteration_count(lef_polygon_iter->xStart, lef_polygon_iter->yStart) == 0)
+                    break;
+
+                auto polygon = polygon_from_parser(reader, lef_polygon_iter->numPoints, lef_polygon_iter->x, lef_polygon_iter->y);
+                shape.value().polygon_iterates.push_back(PolygonIterate{
+                    .polygon = polygon,
+                    .num_x = static_cast<int>(lef_polygon_iter->xStart),
+                    .num_y = static_cast<int>(lef_polygon_iter->yStart),
+                    .space_x = reader->microns_to_dbu(lef_polygon_iter->xStep),
+                    .space_y = reader->microns_to_dbu(lef_polygon_iter->yStep),
+                });
+                geo_count++;
                 break;
             }
             }

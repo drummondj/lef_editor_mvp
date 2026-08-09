@@ -208,6 +208,70 @@ namespace le
                     return view_layers.find(root.get_layer_by_name(shape.layer_name), purpose);
                 };
 
+                // UPDATES.md 12 Phase 1's ITERATE rework - LEFReader stores
+                // RECT/PATH/POLYGON ITERATE statements raw (rect_iterates/
+                // path_iterates/polygon_iterates) rather than pre-expanding
+                // them at parse time, so LEFWriter can re-emit compact
+                // ITERATE syntax on write. This is the one place downstream
+                // Pipeline/Renderer code needs to know about that - expands
+                // each into concrete Rect/Path/Polygon entries appended to
+                // the same Shape's rects/paths/polygons, so everything below
+                // (label accumulation, merge_overlapping_fills,
+                // compute_path_outlines, RenderedShape itself) sees a
+                // conventional fully-expanded Shape exactly as before this
+                // rework. Bounds each statement's own num_x*num_y the same
+                // way LEFReader::safe_iteration_count did at parse time -
+                // defense in depth, not just trusting the database's
+                // already-validated values.
+                auto expand_iterates = [](Shape shape)
+                {
+                    constexpr int kMaxReasonableCount = 1'000'000;
+
+                    for (const RectIterate &it : shape.rect_iterates)
+                    {
+                        if (it.num_x <= 0 || it.num_y <= 0 || it.num_x > kMaxReasonableCount || it.num_y > kMaxReasonableCount)
+                            continue;
+                        shape.rects.reserve(shape.rects.size() + static_cast<size_t>(it.num_x) * static_cast<size_t>(it.num_y));
+                        for (int ix = 0; ix < it.num_x; ix++)
+                            for (int iy = 0; iy < it.num_y; iy++)
+                                shape.rects.push_back(Rect{
+                                    .ll = Point{.x = it.rect.ll.x + ix * it.space_x, .y = it.rect.ll.y + iy * it.space_y},
+                                    .ur = Point{.x = it.rect.ur.x + ix * it.space_x, .y = it.rect.ur.y + iy * it.space_y},
+                                });
+                    }
+                    shape.rect_iterates.clear();
+
+                    for (const PathIterate &it : shape.path_iterates)
+                    {
+                        if (it.num_x <= 0 || it.num_y <= 0 || it.num_x > kMaxReasonableCount || it.num_y > kMaxReasonableCount)
+                            continue;
+                        shape.paths.reserve(shape.paths.size() + static_cast<size_t>(it.num_x) * static_cast<size_t>(it.num_y));
+                        for (int ix = 0; ix < it.num_x; ix++)
+                            for (int iy = 0; iy < it.num_y; iy++)
+                            {
+                                const Point offset{.x = ix * it.space_x, .y = iy * it.space_y};
+                                shape.paths.push_back(Path{.width = it.path.width, .polygon = Geometry::transform(it.path.polygon, offset)});
+                            }
+                    }
+                    shape.path_iterates.clear();
+
+                    for (const PolygonIterate &it : shape.polygon_iterates)
+                    {
+                        if (it.num_x <= 0 || it.num_y <= 0 || it.num_x > kMaxReasonableCount || it.num_y > kMaxReasonableCount)
+                            continue;
+                        shape.polygons.reserve(shape.polygons.size() + static_cast<size_t>(it.num_x) * static_cast<size_t>(it.num_y));
+                        for (int ix = 0; ix < it.num_x; ix++)
+                            for (int iy = 0; iy < it.num_y; iy++)
+                            {
+                                const Point offset{.x = ix * it.space_x, .y = iy * it.space_y};
+                                shape.polygons.push_back(Geometry::transform(it.polygon, offset));
+                            }
+                    }
+                    shape.polygon_iterates.clear();
+
+                    return shape;
+                };
+
                 // One buffered outline per path, computed once here (see
                 // RenderedShape::path_outlines's own comment for why this
                 // is the right cache tier, and why it's shared_ptr-wrapped).
@@ -247,8 +311,9 @@ namespace le
                     for (auto port_id : root.get_terminal_ports(terminal_id))
                     {
                         const auto *port = root.get_terminal_port(port_id);
-                        for (const auto &shape : port->shapes)
+                        for (const auto &raw_shape : port->shapes)
                         {
+                            const Shape shape = expand_iterates(raw_shape);
                             auto [it, inserted] = by_layer.try_emplace(shape.layer_name);
                             if (inserted)
                                 it->second.first_shape_index = shapes.size();
@@ -292,8 +357,9 @@ namespace le
                 for (auto obstruction_id : obstructions)
                 {
                     const auto *obstruction = root.get_obstruction(obstruction_id);
-                    for (const auto &shape : obstruction->shapes)
+                    for (const auto &raw_shape : obstruction->shapes)
                     {
+                        const Shape shape = expand_iterates(raw_shape);
                         shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .path_outlines = compute_path_outlines(shape)});
                         Geometry::merge_overlapping_fills(shapes.back().shape);
                     }

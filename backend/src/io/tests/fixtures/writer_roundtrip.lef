@@ -1,0 +1,57 @@
+VERSION 5.8 ;
+BUSBITCHARS "<>" ;
+DIVIDERCHAR "/" ;
+
+UNITS
+   DATABASE MICRONS 1000 ;
+END UNITS
+
+LAYER M1
+   TYPE ROUTING ;
+   DIRECTION HORIZONTAL ;
+   WIDTH 0.2 ;
+   PITCH 0.4 ;
+   OFFSET 0.1 ;
+   SPACING 0.2 ;
+   RESISTANCE RPERSQ 0.5 ;
+   CAPACITANCE CPERSQDIST 0.01 ;
+   HEIGHT 1.0 ;
+   THICKNESS 0.05 ;
+   WIREEXTENSION 0.3 ;
+   AREA 0.5 ;
+   ANTENNALENGTHFACTOR 2.0 ;
+END M1
+
+LAYER V1
+   TYPE CUT ;
+   WIDTH 0.15 ;
+   SPACING 0.2 ;
+END V1
+
+MACRO WRITERTEST
+   CLASS CORE ;
+   ORIGIN 0 0 ;
+   SIZE 10 BY 10 ;
+   SYMMETRY X Y ;
+   SITE CORE ;
+
+   PIN A
+      DIRECTION INPUT ;
+      PORT
+         LAYER M1 ;
+            RECT 1 1 2 2 ;
+            POLYGON 3 1 4 1 4 2 3 2 ;
+            WIDTH 0.1 ;
+            PATH 5 5 6 5 ;
+      END
+   END A
+
+   OBS
+      LAYER M1 ;
+         RECT ITERATE 0 0 1 1
+            DO 2 BY 2 STEP 3 3 ;
+         WIDTH 0.1 ;
+         PATH ITERATE 7 7 8 7
+            DO 1 BY 2 STEP 0 3 ;
+   END
+END WRITERTEST

@@ -50,7 +50,14 @@ ExternalProject_Add(
     BUILD_COMMAND ${CMAKE_COMMAND} -E env --unset=MAKEFLAGS --unset=MFLAGS make -j1
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
-    BYPRODUCTS "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/lib/liblef.a"
+    # lefdiff (UPDATES.md 12 Phase 1's round-trip fidelity check) is also a
+    # side effect of this same build - the vendored top-level Makefile's
+    # own BUILD_ORDER already includes it (and lefwrite) alongside lef/
+    # clef/lefrw, so no separate build step is needed, just tracking it as
+    # a real byproduct.
+    BYPRODUCTS
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/lib/liblef.a"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/bin/lefdiff"
 )
 
 # --- Third-party dependencies ---
@@ -147,7 +154,7 @@ target_include_directories(render PUBLIC src)
 target_link_libraries(render PUBLIC database geometry scene view_style pipeline skia)
 
 # --- io: LEF/DEF file readers ---
-add_library(io STATIC src/io/lef_reader.cpp)
+add_library(io STATIC src/io/lef_reader.cpp src/io/lef_writer.cpp)
 add_dependencies(io lef_lib)
 target_include_directories(io
     PUBLIC src/io
@@ -179,14 +186,17 @@ add_executable(backend_tests
     src/render/tests/render_test.cpp
     src/io/tests/lef_reader_test.cpp
     src/io/tests/lef_reader_utils_test.cpp
+    src/io/tests/lef_writer_test.cpp
     src/api/tests/api_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io api GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io api fmt::fmt GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"
     API_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures"
+    LEFDIFF_BIN="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/bin/lefdiff"
 )
+add_dependencies(backend_tests lef_lib)
 le_enable_coverage_instrumentation(backend_tests)
 gtest_discover_tests(backend_tests)
 
@@ -210,6 +220,23 @@ le_enable_coverage_instrumentation(pipeline_benchmarks)
 add_executable(render_preview src/pipeline/benchmarks/render_preview.cpp)
 target_link_libraries(render_preview PRIVATE database geometry scene pipeline render io)
 le_enable_coverage_instrumentation(render_preview)
+
+# --- lef_roundtrip_diff: dev-only progress-tracking tool for UPDATES.md
+# item 12 (LEF syntax completion) - reads a LEF file (default:
+# complete.5.8.lef), writes every Design + the Technology's layers back out
+# via LEFWriter, and reports what the vendored lefdiff tool's own
+# normalized dump still shows as missing after the round trip. Not a
+# benchmark or a test - not run by ctest or the coverage target, not a hard
+# gate (see src/io/tests/lef_writer_test.cpp's own lefdiff-based CTest for
+# the actual gated check, scoped to what this phase supports). ---
+add_executable(lef_roundtrip_diff src/pipeline/benchmarks/lef_roundtrip_diff.cpp)
+add_dependencies(lef_roundtrip_diff lef_lib)
+target_link_libraries(lef_roundtrip_diff PRIVATE database geometry io)
+target_compile_definitions(lef_roundtrip_diff PRIVATE
+    LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
+    LEFDIFF_BIN="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/bin/lefdiff"
+)
+le_enable_coverage_instrumentation(lef_roundtrip_diff)
 
 # --- coverage: `cmake --build build --target coverage` (requires -DENABLE_COVERAGE=ON at configure time) ---
 if(ENABLE_COVERAGE)

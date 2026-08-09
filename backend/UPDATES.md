@@ -146,15 +146,37 @@ The LEF parser only supports a subset of the available syntax. I need it to supp
 
 There is an example LEF file that contains all LEF syntax that needs to be parsed: src/lefdef/lef/TEST/complete.5.8.lef
 
-There is a utility to compare to LEF files: src/lefdef/lef/lefdiff/lefdiff
-
 Here is an outline of a plan to follow (you may modify as long as the results are the same):
 
 1. Create a LEFWriter class that creates a LEF file for the specified AbstractId. The LEFWriter needs an option to choose wether to include Technology layers or not, or just write out Technology layers.
-2. Read the complete.5.8.lef and write it out, then run lefdiff
+2. Read the complete.5.8.lef and write it out, diff the results
 3. Update the LEFReader and LEFWriter to fix the differences reported by lefdiff. You will also need to update schema.py and rebuild the database. Make sure any coordinates are converted from microns to dbu.
 4. Repeat step 2 until there are no reported differences.
 
 There will be ambiguous cases where you need to ask me what to do. For example, should you store other values as integers, or us the units in the LEF file, or use SI units. Please ask me and we will discuss each individual case.
 
 Known issue: the current LEFReader splits ITERATE statements into separate shapes, we need to store the raw ITERATE as an object in the database then split during generate_shapes in the pipeline.
+
+# 13. Ruler mode
+
+The next mode to implement is Ruler mode, shortcut key r.
+
+- Rulers can be drawn on the design by clicking on the layout view.
+- Each time the user clicks a new point is added to the ruler.
+- A "ghost" ruler should follow the users snapped mouse position, until they click, then the real ruler segment is drawn.
+- Points are snapped to the grid by using the snapped mouse position.
+- The ruler displays the distance between points and the total distance.
+- Rulers are drawn orthogonally by default. The user can hold down shift to allow an non-orthogonal ruler.
+- A tooltip displays the information about the shift function.
+
+Ruler display:
+
+- A line is drawn between the point with dynamic ticks depending on the scene's scale.
+- There are major ticks with values and minor ticks without values.
+- Major ticks should be in multiple of tens, i.e. every 1, 10, 100 etc and minor values should be one order of magnitude below. i.e. ten minor ticks for every major tick.
+- The point-to-point distance should be displayed at the end of the line segment between the two points.
+- The total distance should be displayed at the last point, prefixed with "total: "
+
+# 14. Properties revisit
+
+I notice that the properties contain the bbox of shapes and not the raw values. I would like to see the raw polygon, path and rect values as properties, in addition to the bbox.
