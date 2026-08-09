@@ -481,10 +481,12 @@ namespace
         return result;
     }
 
-    // LE_KEY_1..LE_KEY_9's own body (UPDATES.md 9.4) - unlocked-style
+    // LE_KEY_0..LE_KEY_9's own body (UPDATES.md 9.4/9.7) - unlocked-style
     // helper (already inside le_key_down's held mutex, matches the other
     // *_unlocked helpers' own convention above). `routing_index` is
-    // 0-based (LE_KEY_1 -> 0). No-op if there's no Nth ROUTING layer or
+    // 0-based (e.g. LE_KEY_1 with Ctrl not held -> 0, LE_KEY_1 with Ctrl
+    // held -> 10, LE_KEY_0 -> 9 - see le_key_down's own switch for the
+    // full mapping). No-op if there's no ROUTING layer at that index or
     // no Technology has been read yet.
     void toggle_routing_layer_visibility_unlocked(LeHandle *handle, int routing_index)
     {
@@ -981,7 +983,18 @@ extern "C"
         case LE_KEY_7:
         case LE_KEY_8:
         case LE_KEY_9:
-            toggle_routing_layer_visibility_unlocked(handle, key_code - LE_KEY_1);
+        {
+            // UPDATES.md 9.7 - the same physical 1-9 keys address the
+            // 11th..19th ROUTING layer instead of the 1st..9th while Ctrl
+            // is held (LE_KEY_0, not gated on Ctrl, covers the 10th - see
+            // its own comment in api.hpp).
+            const int base_index = key_code - LE_KEY_1; // 0-8
+            const int routing_index = handle->scene.is_key_held(LE_KEY_CTRL) ? base_index + 10 : base_index;
+            toggle_routing_layer_visibility_unlocked(handle, routing_index);
+            break;
+        }
+        case LE_KEY_0:
+            toggle_routing_layer_visibility_unlocked(handle, 9); // the 10th ROUTING layer
             break;
         case LE_KEY_DESELECT_ALL:
             if (handle->scene.is_key_held(LE_KEY_CTRL))

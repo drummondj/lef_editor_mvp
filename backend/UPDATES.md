@@ -122,10 +122,11 @@ I would like to try a different Geometry::get_label_location algorithm.
 4. 1, 2, 3 ,4 etc changes layer visibility - where 1 maps to the first routing layer, 2 to the second etc. If two adjacent routing layers are made visible via the keyboard (not when the user clicks on the layer manager), then the VIA layer between then is also made visible. Same logic in reverse for making vias invisible.
 5. Ctrl-D deselect all
 6. Ctrl-F fit selected
+7. Digit key 0 maps to the 10th routing layer (M10); Ctrl-1 through Ctrl-9 map to the 11th through 19th routing layers (M11-M19). Same VIA-pairing logic as item 4 applies.
 
 # 10. Default layer visibility
 
-By default the only visible layers should be ROUTING, CUT and BOUNDARY, all other layers should not be visible when the user reads a LEF with LAYERs in.
+By default the only visible layers should be ROUTING, CUT and BOUNDARY, all other layers should not be visible when the user reads a LEF with LAYERs in to initialize a Technology.
 
 # 11. Modes switching and edit mode
 
@@ -139,3 +140,5 @@ Modes are changed by 2 mechanisms:
 The current mode can be queried via the API.
 
 Details of how objects are edited to follow.
+
+# 12.

@@ -456,7 +456,8 @@ extern "C"
         /// A pure modifier, tracked exactly like LE_KEY_SHIFT - held
         /// state only, no immediate action of its own. Read by
         /// LE_KEY_SELECT_ALL (UPDATES.md 9.1), LE_KEY_DESELECT_ALL
-        /// (UPDATES.md 9.5), and LE_KEY_FIT (UPDATES.md 9.6).
+        /// (UPDATES.md 9.5), LE_KEY_FIT (UPDATES.md 9.6), and
+        /// LE_KEY_1..LE_KEY_9 (UPDATES.md 9.7).
         LE_KEY_CTRL = 8,
         /// Select-all (UPDATES.md 9.1) - an "action" code like
         /// LE_KEY_ZOOM/LE_KEY_FIT/LE_KEY_PAN_*, but only actually does
@@ -464,13 +465,18 @@ extern "C"
         /// own doc comment) - a bare "a" press with Ctrl not held is a
         /// deliberate no-op, not "select nothing."
         LE_KEY_SELECT_ALL = 9,
-        /// Digit keys 1-9 toggle the Nth ROUTING layer's visibility
-        /// (UPDATES.md 9.4) - LE_KEY_1 is the first ROUTING layer in the
-        /// current Technology's own declaration order, LE_KEY_2 the
-        /// second, etc.; a no-op if there's no Nth ROUTING layer. See
-        /// le_key_down's own doc comment for the VIA-pairing behavior
-        /// this triggers that a direct le_set_layer_name_visible() call
-        /// deliberately does not.
+        /// Digit keys 1-9 toggle a ROUTING layer's visibility (UPDATES.md
+        /// 9.4/9.7) - which one depends on LE_KEY_CTRL's held state (the
+        /// same "backend reads modifier state" split LE_KEY_ZOOM/
+        /// LE_KEY_FIT already use): with Ctrl not held, LE_KEY_1 is the
+        /// first ROUTING layer in the current Technology's own
+        /// declaration order, LE_KEY_2 the second, etc. through
+        /// LE_KEY_9's ninth; with Ctrl held, the same keys address the
+        /// *eleventh* through *nineteenth* ROUTING layer instead (see
+        /// LE_KEY_0 for the tenth) - a no-op if there's no ROUTING layer
+        /// at the addressed position. See le_key_down's own doc comment
+        /// for the VIA-pairing behavior this triggers that a direct
+        /// le_set_layer_name_visible() call deliberately does not.
         LE_KEY_1 = 10,
         LE_KEY_2 = 11,
         LE_KEY_3 = 12,
@@ -486,6 +492,12 @@ extern "C"
         /// press with Ctrl not held is a deliberate no-op, same reasoning
         /// as LE_KEY_SELECT_ALL's own comment.
         LE_KEY_DESELECT_ALL = 19,
+        /// Toggles the tenth ROUTING layer's visibility (UPDATES.md 9.7) -
+        /// not Ctrl-gated, unlike LE_KEY_1..LE_KEY_9's own Ctrl-held
+        /// branch, since "0" has no bare-digit slot left below it to
+        /// double up on (LE_KEY_1..LE_KEY_9 already cover the first
+        /// nine). Same VIA-pairing behavior as LE_KEY_1..LE_KEY_9.
+        LE_KEY_0 = 20,
     };
 
     /// @brief Mark `key_code` (an LeKeyCode value) as currently held,
@@ -522,14 +534,19 @@ extern "C"
     ///   le_message_count()/le_message_at() queue (UPDATES.md item 3) -
     ///   there's no separate "was it capped" return value, this is the
     ///   same mechanism any other backend-originated message uses.
-    /// - LE_KEY_1..LE_KEY_9 (UPDATES.md 9.4): toggles the Nth ROUTING
-    ///   layer's visibility (a no-op if there's no Nth ROUTING layer),
-    ///   then - only via this keyboard path, never from a direct
+    /// - LE_KEY_1..LE_KEY_9 (UPDATES.md 9.4/9.7): toggles a ROUTING
+    ///   layer's visibility - the 1st..9th if LE_KEY_CTRL is not
+    ///   currently held, the 11th..19th if it is (a no-op if there's no
+    ///   ROUTING layer at that position) - then, either way, - only via
+    ///   this keyboard path, never from a direct
     ///   le_set_layer_name_visible() call - re-checks every pair of
     ///   adjacent ROUTING layers: if both are now visible, every CUT
     ///   layer between them (LEF has no distinct "VIA" layer type - vias
     ///   are TYPE CUT layers - see this header's own LeKeyCode comment)
     ///   becomes visible too; if not, those CUT layers become invisible.
+    /// - LE_KEY_0 (UPDATES.md 9.7): toggles the 10th ROUTING layer's
+    ///   visibility, unconditional on LE_KEY_CTRL - same VIA-pairing
+    ///   re-check as LE_KEY_1..LE_KEY_9 above.
     /// - LE_KEY_DESELECT_ALL (UPDATES.md 9.5): only while LE_KEY_CTRL is
     ///   currently held - clears the current selection. A no-op (not an
     ///   error) if the selection was already empty.

@@ -643,6 +643,90 @@ TEST_F(ApiFixture, DigitKeyWithNoNthRoutingLayerIsANoOp)
     EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0);
 }
 
+TEST_F(ApiFixture, DigitKey0TogglesTheTenthRoutingLayer)
+{
+    // many_routing_layers.lef: M1..M12 ROUTING, with V10 between M10/M11
+    // and V11 between M11/M12 - LE_KEY_0 addresses M10 (the 10th ROUTING
+    // layer, routing_index 9), unconditional on LE_KEY_CTRL.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("many_routing_layers.lef").c_str()), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "M10"), 0); // default-visible
+
+    le_key_down(handle, LE_KEY_0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M10"), 0);
+
+    le_key_down(handle, LE_KEY_0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M10"), 0);
+}
+
+TEST_F(ApiFixture, CtrlPlusDigitKeysToggleTheEleventhAndTwelfthRoutingLayersAndPairTheirCutLayers)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("many_routing_layers.lef").c_str()), 0);
+
+    ASSERT_NE(le_is_layer_name_visible(handle, "M10"), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "M11"), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "M12"), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "V10"), 0);
+    ASSERT_NE(le_is_layer_name_visible(handle, "V11"), 0);
+
+    // Without Ctrl held, LE_KEY_1/LE_KEY_2 address M1/M2, not M11/M12 -
+    // M10/M11/M12 stay untouched.
+    le_key_down(handle, LE_KEY_1);
+    le_key_down(handle, LE_KEY_2);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M11"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M12"), 0);
+    le_key_down(handle, LE_KEY_1); // toggle M1/M2 back off, restoring the fixture to its default state
+    le_key_down(handle, LE_KEY_2);
+
+    // Ctrl held: LE_KEY_1 -> M11 (hides it), pairing re-check drops both
+    // V10 (M10/M11 no longer both visible) and V11 (M11/M12 no longer
+    // both visible).
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_1);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M11"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V10"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V11"), 0);
+
+    // LE_KEY_1 again (Ctrl still held) -> M11 visible again; both pairs
+    // are back to both-visible, so both cut layers reappear.
+    le_key_down(handle, LE_KEY_1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M11"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V10"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V11"), 0);
+
+    // LE_KEY_2 (Ctrl held) -> M12 (hides it); only the M11/M12 pair (V11)
+    // is affected - M10/M11 (V10) is untouched.
+    le_key_down(handle, LE_KEY_2);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "M12"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V10"), 0);
+    EXPECT_EQ(le_is_layer_name_visible(handle, "V11"), 0);
+}
+
+TEST_F(ApiFixture, DigitKey0WithNoTenthRoutingLayerIsANoOp)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0); // only M1, M2 ROUTING
+
+    le_key_down(handle, LE_KEY_0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0);
+}
+
+TEST_F(ApiFixture, CtrlPlusDigitKeyWithNoLayerAtThatPositionIsANoOp)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0); // only M1, M2 ROUTING - no 11th
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "V1"), 0);
+}
+
+TEST_F(ApiFixture, DigitKey0WithNullHandleDoesNotCrash)
+{
+    le_key_down(nullptr, LE_KEY_0);
+}
+
 TEST_F(ApiFixture, DigitKeyWithNoTechnologyReadYetDoesNotCrash)
 {
     le_key_down(handle, LE_KEY_1); // no le_read_lef call at all

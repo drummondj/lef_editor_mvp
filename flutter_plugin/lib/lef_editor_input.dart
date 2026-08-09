@@ -29,6 +29,7 @@ final Map<LogicalKeyboardKey, LeKeyCode> _keyCodeMap = {
   LogicalKeyboardKey.digit7: LeKeyCode.LE_KEY_7,
   LogicalKeyboardKey.digit8: LeKeyCode.LE_KEY_8,
   LogicalKeyboardKey.digit9: LeKeyCode.LE_KEY_9,
+  LogicalKeyboardKey.digit0: LeKeyCode.LE_KEY_0,
 };
 
 /// Fixed per-scroll-event zoom step (UPDATES.md 9.2) - smaller than
