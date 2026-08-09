@@ -95,9 +95,79 @@ TEST_F(LEFReaderCompleteFixture, ReadsBasicScalarLayerProperties)
 
     EXPECT_FALSE(m1->offset.has_value());
     EXPECT_FALSE(m1->area.has_value());
-    EXPECT_FALSE(m1->spacing.has_value());
+    EXPECT_TRUE(m1->spacing_rules.empty());
     EXPECT_FALSE(m1->height.has_value());
     EXPECT_FALSE(m1->thickness.has_value());
+}
+
+TEST_F(LEFReaderCompleteFixture, ReadsSpacingModifiersUnwritableByTheVendoredWriter)
+{
+    // ENDOFLINE/PARALLELEDGE/TWOEDGES (LAYER PC) and ROUTING CENTERTOCENTER
+    // are both still fully readable, even though LEFWriter can't re-emit
+    // them (lefwLayerRoutingSpacingEndOfLine's own premature-semicolon bug,
+    // and lefwLayerSpacingCenterToCenter being obsoleted with no
+    // replacement in this vendored writer version - see write_technology_layers's
+    // own comments) - covered here via complete.5.8.lef directly rather
+    // than through a round trip.
+    const LayerData *pc = root.get_layer(root.get_layer_by_name("PC"));
+    ASSERT_TRUE(pc != nullptr);
+    ASSERT_EQ(pc->spacing_rules.size(), 4u);
+
+    // complete.5.8.lef: DATABASE MICRONS 20000.
+    const SpacingRule &eol_only = pc->spacing_rules[1];
+    ASSERT_TRUE(eol_only.end_of_line_width.has_value());
+    ASSERT_TRUE(eol_only.end_of_line_within.has_value());
+    EXPECT_EQ(*eol_only.end_of_line_width, 26000); // 1.3um
+    EXPECT_EQ(*eol_only.end_of_line_within, 12000); // 0.6um
+    EXPECT_FALSE(eol_only.parallel_edge_space.has_value());
+
+    const SpacingRule &eol_with_two_edges = pc->spacing_rules[2];
+    ASSERT_TRUE(eol_with_two_edges.parallel_edge_space.has_value());
+    ASSERT_TRUE(eol_with_two_edges.parallel_edge_within.has_value());
+    EXPECT_EQ(*eol_with_two_edges.parallel_edge_space, 22000); // 1.1um
+    EXPECT_EQ(*eol_with_two_edges.parallel_edge_within, 10000); // 0.5um
+    EXPECT_TRUE(eol_with_two_edges.two_edges);
+
+    const SpacingRule &eol_without_two_edges = pc->spacing_rules[3];
+    EXPECT_FALSE(eol_without_two_edges.two_edges);
+
+    const LayerData *via12 = root.get_layer(root.get_layer_by_name("via12"));
+    ASSERT_TRUE(via12 != nullptr);
+    ASSERT_EQ(via12->spacing_rules.size(), 1u);
+    EXPECT_TRUE(via12->spacing_rules[0].center_to_center);
+}
+
+TEST_F(LEFReaderCompleteFixture, ReadsMacroLevelDensityUnwritableByTheVendoredWriter)
+{
+    // MACRO-level DENSITY is fully readable but not writable via this
+    // vendored version (lefwStartMacroDensity emits the wrong syntax
+    // entirely - see write_macro's own comment) - covered here via
+    // complete.5.8.lef directly rather than through a round trip.
+    // complete.5.8.lef: DATABASE MICRONS 20000.
+    const DesignId design_id = root.get_design_by_name("INV");
+    ASSERT_TRUE(design_id.valid());
+    const AbstractData *abstract = root.get_abstract(root.get_design_abstract(design_id));
+    ASSERT_TRUE(abstract != nullptr);
+
+    ASSERT_EQ(abstract->densities.size(), 3u);
+
+    const MacroDensityLayer &metal1 = abstract->densities[0];
+    EXPECT_EQ(metal1.layer_name, "metal1");
+    ASSERT_EQ(metal1.rects.size(), 2u);
+    ASSERT_EQ(metal1.values.size(), 2u);
+    EXPECT_EQ(metal1.rects[0].ll.x, 0);
+    EXPECT_EQ(metal1.rects[0].ur.x, 2000000);
+    EXPECT_DOUBLE_EQ(metal1.values[0], 45.5);
+    EXPECT_DOUBLE_EQ(metal1.values[1], 42.2);
+
+    const MacroDensityLayer &metal3 = abstract->densities[2];
+    EXPECT_EQ(metal3.layer_name, "metal3");
+    ASSERT_EQ(metal3.rects.size(), 1u);
+    EXPECT_EQ(metal3.rects[0].ll.x, 200000);
+    EXPECT_EQ(metal3.rects[0].ll.y, 200000);
+    EXPECT_EQ(metal3.rects[0].ur.x, 800000);
+    EXPECT_EQ(metal3.rects[0].ur.y, 800000);
+    EXPECT_DOUBLE_EQ(metal3.values[0], 4.5);
 }
 
 TEST_F(LEFReaderCompleteFixture, CreatesOneLibraryAndOneDesignPerMacro)
@@ -638,6 +708,77 @@ TEST_F(LEFReaderViaRuleReferenceFixture, ReadsAViaReferencingAViaRuleWithCutGeom
     EXPECT_EQ(vr.bot_enclosure.y, 10);
     EXPECT_EQ(vr.top_enclosure.x, 10);
     EXPECT_EQ(vr.top_enclosure.y, 50);
+}
+
+TEST_F(LEFReaderViaFixture, ReadsSiteDefinitionsWithClassSizeSymmetryAndRowPattern)
+{
+    const SiteId core_id = root.get_site_by_name("CORE");
+    ASSERT_TRUE(core_id.valid());
+    const SiteData *core = root.get_site(core_id);
+    ASSERT_TRUE(core != nullptr);
+
+    EXPECT_EQ(core->site_class, "CORE");
+    ASSERT_TRUE(core->size.has_value());
+    EXPECT_EQ(core->size->x, 200);
+    EXPECT_EQ(core->size->y, 2000);
+    EXPECT_FALSE(core->symmetry.x);
+    EXPECT_TRUE(core->symmetry.y);
+    EXPECT_FALSE(core->symmetry.r90);
+    EXPECT_TRUE(core->row_pattern.empty());
+
+    const SiteId dblcore_id = root.get_site_by_name("DBLCORE");
+    ASSERT_TRUE(dblcore_id.valid());
+    const SiteData *dblcore = root.get_site(dblcore_id);
+    ASSERT_TRUE(dblcore != nullptr);
+
+    EXPECT_TRUE(dblcore->symmetry.x);
+    EXPECT_TRUE(dblcore->symmetry.y);
+    ASSERT_EQ(dblcore->row_pattern.size(), 2u);
+    EXPECT_EQ(dblcore->row_pattern[0].site_name, "CORE");
+    EXPECT_EQ(dblcore->row_pattern[0].orient, Orientation::N);
+    EXPECT_EQ(dblcore->row_pattern[1].site_name, "CORE");
+    EXPECT_EQ(dblcore->row_pattern[1].orient, Orientation::FS);
+}
+
+TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnEmbeddedViaAndUseStatements)
+{
+    const NonDefaultRuleId rule_id = root.get_non_default_rule_by_name("WIDE_M1");
+    ASSERT_TRUE(rule_id.valid());
+    const NonDefaultRuleData *rule = root.get_non_default_rule(rule_id);
+    ASSERT_TRUE(rule != nullptr);
+
+    EXPECT_TRUE(rule->hard_spacing);
+
+    ASSERT_EQ(rule->layers.size(), 1u);
+    const NonDefaultRuleLayer &layer = rule->layers[0];
+    EXPECT_EQ(layer.layer_name, "M1");
+    ASSERT_TRUE(layer.width.has_value());
+    EXPECT_EQ(*layer.width, 300);
+    ASSERT_TRUE(layer.spacing.has_value());
+    EXPECT_EQ(*layer.spacing, 250);
+    ASSERT_TRUE(layer.wire_extension.has_value());
+    EXPECT_EQ(*layer.wire_extension, 100);
+    // RESISTANCE/CAPACITANCE/EDGECAPACITANCE on a NONDEFAULTRULE LAYER are
+    // obsolete for VERSION >= 5.6 (lef.y's own nd_layer_stmt rule: "obsolete
+    // in version 5.6 and later... will ignore this statement") - the
+    // fixture (VERSION 5.8) deliberately doesn't set one.
+    EXPECT_FALSE(layer.resistance.has_value());
+
+    ASSERT_EQ(rule->vias.size(), 1u);
+    const NonDefaultRuleVia &via = rule->vias[0];
+    EXPECT_EQ(via.name, "ND_VIA1");
+    ASSERT_TRUE(via.resistance.has_value());
+    EXPECT_DOUBLE_EQ(*via.resistance, 0.3);
+    ASSERT_EQ(via.layers.size(), 2u);
+    EXPECT_EQ(via.layers[0].layer_name, "M1");
+    EXPECT_EQ(via.layers[1].layer_name, "V1");
+
+    ASSERT_EQ(rule->use_via_names.size(), 1u);
+    EXPECT_EQ(rule->use_via_names[0], "VIA1");
+
+    ASSERT_EQ(rule->min_cuts.size(), 1u);
+    EXPECT_EQ(rule->min_cuts[0].cut_layer_name, "V1");
+    EXPECT_EQ(rule->min_cuts[0].num_cuts, 2);
 }
 
 TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)

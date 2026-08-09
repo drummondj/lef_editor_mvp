@@ -21,10 +21,11 @@ namespace le
     /// symmetry, site, geometry including RECT/PATH/POLYGON ITERATE).
     /// Phase 2 scope: VIA (layers, resistance, foreign, the 5.6
     /// VIARULE-inside-VIA reference) and VIARULE (GENERATE and
-    /// non-GENERATE). PROPERTY attachments on either, and RECT/POLYGON
-    /// MASK color, are still out of scope (deferred to a later phase, see
-    /// its own plan) - as are SITE/NONDEFAULTRULE/PROPERTYDEFINITIONS/
-    /// SPACING/ARRAY and the electrical/misc sections.
+    /// non-GENERATE). Phase 3 scope: LAYER spacing/cut-rule completeness
+    /// (MINIMUMCUT/MINSTEP/SPACINGTABLE/multi-SPACING), SITE, and
+    /// NONDEFAULTRULE. PROPERTY attachments, RECT/POLYGON MASK color,
+    /// ANTENNAMODEL, AC/DC CURRENTDENSITY, and ARRAY are still out of
+    /// scope (deferred to a later phase, see its own plan).
     class LEFWriter
     {
     public:
@@ -67,6 +68,14 @@ namespace le
         static int write_units(const Root &root, TechnologyId technology_id);
         static int write_vias(const Root &root, TechnologyId technology_id);
         static int write_via_rules(const Root &root, TechnologyId technology_id);
+        static int write_sites(const Root &root, TechnologyId technology_id);
+        static int write_non_default_rules(const Root &root, TechnologyId technology_id);
+        // Shared by write_vias (top-level VIA) and write_non_default_rules
+        // (VIA embedded inline in a NONDEFAULTRULE) - writes just the
+        // per-layer rect/polygon geometry, matching lefwNonDefaultRuleStartVia's
+        // own doc comment that it's followed by the same lefwViaLayer*
+        // calls as a top-level VIA.
+        static int write_via_layers(const std::vector<ViaLayer> &layers, double dbu_per_micron);
         static int write_macro(const Root &root, AbstractId abstract_id, double dbu_per_micron);
         static int write_terminal(const Root &root, TerminalId terminal_id, double dbu_per_micron);
         static int write_obstruction(const Root &root, ObstructionId obstruction_id, double dbu_per_micron);

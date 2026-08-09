@@ -2,6 +2,7 @@
 #include "../lefdef/lef/include/lefwWriter.hpp"
 #include <fmt/format.h>
 #include <memory>
+#include <cstdio>
 
 // The vendored library's C++ writer header (lefwWriter.hpp) wraps every
 // lefw* declaration in `namespace LefDefParser` - this codebase's own
@@ -152,12 +153,192 @@ namespace le
                     if (status)
                         return status;
                 }
-                if (layer->spacing)
+                for (const SpacingRule &rule : layer->spacing_rules)
                 {
-                    status = lefwLayerRoutingSpacing(to_microns(*layer->spacing, dbu_per_micron));
+                    status = lefwLayerRoutingSpacing(to_microns(rule.distance, dbu_per_micron));
+                    if (status)
+                        return status;
+
+                    // rule.center_to_center is deliberately never written
+                    // here: lefwWriter.hpp's own comments list
+                    // lefwLayerSpacingCenterToCenter (the ROUTING-layer
+                    // CENTERTOCENTER writer) as "obsoleted in 5.7" with no
+                    // replacement - only lefwLayerCutSpacingCenterToCenter
+                    // (CUT layers, used below) still exists. Still fully
+                    // read (lefrLayerCbkFn), just unwritable for ROUTING
+                    // via this vendored writer version.
+
+                    // At most one of RANGE/LENGTHTHRESHOLD/SAMENET follows a
+                    // ROUTING SPACING statement (lefwWriter.hpp's own "either
+                    // this routine ... or ..." comments on each).
+                    if (rule.range_min && rule.range_max)
+                    {
+                        status = lefwLayerRoutingSpacingRange(to_microns(*rule.range_min, dbu_per_micron), to_microns(*rule.range_max, dbu_per_micron));
+                        if (status)
+                            return status;
+
+                        if (rule.range_use_length_threshold)
+                        {
+                            status = lefwLayerRoutingSpacingRangeUseLengthThreshold();
+                            if (status)
+                                return status;
+                        }
+                        else if (rule.range_influence)
+                        {
+                            status = lefwLayerRoutingSpacingRangeInfluence(to_microns(*rule.range_influence, dbu_per_micron),
+                                                                            rule.range_influence_range_min ? to_microns(*rule.range_influence_range_min, dbu_per_micron) : 0.0,
+                                                                            rule.range_influence_range_max ? to_microns(*rule.range_influence_range_max, dbu_per_micron) : 0.0);
+                            if (status)
+                                return status;
+                        }
+                        else if (rule.range_range_min && rule.range_range_max)
+                        {
+                            status = lefwLayerRoutingSpacingRangeRange(to_microns(*rule.range_range_min, dbu_per_micron), to_microns(*rule.range_range_max, dbu_per_micron));
+                            if (status)
+                                return status;
+                        }
+                    }
+                    else if (rule.length_threshold)
+                    {
+                        status = lefwLayerRoutingSpacingLengthThreshold(to_microns(*rule.length_threshold, dbu_per_micron), 0.0, 0.0);
+                        if (status)
+                            return status;
+                    }
+                    else if (rule.same_net)
+                    {
+                        status = lefwLayerRoutingSpacingSameNet(rule.same_net_pg_only ? 1 : 0);
+                        if (status)
+                            return status;
+                    }
+
+                    // KNOWN VENDORED-LIBRARY BUG: lefwLayerRoutingSpacingEndOfLine
+                    // unconditionally flushes (";\n") whatever SPACING
+                    // statement is still open *before* writing "ENDOFLINE
+                    // ...", producing an orphaned top-level "ENDOFLINE ..."
+                    // statement - but lef.y's own grammar only ever
+                    // accepts K_ENDOFLINE nested inside a SPACING
+                    // statement's own layer_spacing_cut_routing option (one
+                    // grammar occurrence, confirmed by grep), so the
+                    // written file is unparseable on re-read. Not fixed
+                    // (vendored code). ENDOFLINE/PARALLELEDGE/TWOEDGES are
+                    // still fully read (see lefrLayerCbkFn) - just never
+                    // re-written.
+                }
+
+                for (const MinimumCut &cut : layer->minimum_cuts)
+                {
+                    if (cut.within)
+                    {
+                        status = lefwLayerRoutingMinimumcutWithin(cut.cuts, to_microns(cut.width, dbu_per_micron), to_microns(*cut.within, dbu_per_micron));
+                        if (status)
+                            return status;
+                    }
+                    else
+                    {
+                        status = lefwLayerRoutingMinimumcut(cut.cuts, to_microns(cut.width, dbu_per_micron));
+                        if (status)
+                            return status;
+                    }
+
+                    if (!cut.connection.empty())
+                    {
+                        status = lefwLayerRoutingMinimumcutConnections(cut.connection.c_str());
+                        if (status)
+                            return status;
+                    }
+                    if (cut.length && cut.distance)
+                    {
+                        status = lefwLayerRoutingMinimumcutLengthWithin(to_microns(*cut.length, dbu_per_micron), to_microns(*cut.distance, dbu_per_micron));
+                        if (status)
+                            return status;
+                    }
+                }
+
+                for (const MinStep &step : layer->min_steps)
+                {
+                    if (step.max_edges)
+                    {
+                        status = lefwLayerRoutingMinstepMaxEdges(to_microns(step.distance, dbu_per_micron), *step.max_edges);
+                        if (status)
+                            return status;
+                    }
+                    else if (!step.min_step_type.empty() || step.lengthsum)
+                    {
+                        status = lefwLayerRoutingMinstepWithOptions(to_microns(step.distance, dbu_per_micron), step.min_step_type.empty() ? nullptr : step.min_step_type.c_str(), step.lengthsum ? to_microns(*step.lengthsum, dbu_per_micron) : 0.0);
+                        if (status)
+                            return status;
+                    }
+                    else
+                    {
+                        status = lefwLayerRoutingMinstep(to_microns(step.distance, dbu_per_micron));
+                        if (status)
+                            return status;
+                    }
+                }
+
+                if (layer->spacing_table_parallel_run_length)
+                {
+                    const ParallelRunLengthSpacingTable &table = *layer->spacing_table_parallel_run_length;
+                    std::vector<double> lengths_um;
+                    lengths_um.reserve(table.lengths.size());
+                    for (int64_t length : table.lengths)
+                        lengths_um.push_back(to_microns(length, dbu_per_micron));
+
+                    status = lefwLayerRoutingStartSpacingtableParallel(static_cast<int>(lengths_um.size()), lengths_um.data());
+                    if (status)
+                        return status;
+
+                    const size_t num_lengths = table.lengths.size();
+                    for (size_t w = 0; w < table.widths.size(); w++)
+                    {
+                        std::vector<double> row_um;
+                        row_um.reserve(num_lengths);
+                        for (size_t l = 0; l < num_lengths; l++)
+                            row_um.push_back(to_microns(table.spacings[w * num_lengths + l], dbu_per_micron));
+
+                        status = lefwLayerRoutingSpacingtableParallelWidth(to_microns(table.widths[w], dbu_per_micron), static_cast<int>(row_um.size()), row_um.data());
+                        if (status)
+                            return status;
+                    }
+
+                    // lefwLayerRoutineEndSpacingtable (sic - the vendored
+                    // header really does spell it "Routine", not "Routing")
+                    // is the only call that resets lefwState from
+                    // LEFW_LAYERROUTINGWIDTH (where the last
+                    // SpacingtableParallelWidth call above leaves it) back
+                    // to LEFW_LAYERROUTING - every other layer-routing
+                    // writer function, including lefwEndLayerRouting
+                    // itself, rejects LEFW_LAYERROUTINGWIDTH outright, so
+                    // skipping this call would silently break every
+                    // statement written after a SPACINGTABLE (found via
+                    // lefwWriter.cpp's own state-constant checks, then
+                    // confirmed against the vendored sample driver
+                    // src/lefdef/lef/lefwrite/lefwrite.cpp's own usage,
+                    // which is the only place this misspelled function name
+                    // turns up).
+                    status = lefwLayerRoutineEndSpacingtable();
                     if (status)
                         return status;
                 }
+
+                if (!layer->spacing_table_influence.empty())
+                {
+                    status = lefwLayerRoutingStartSpacingtableInfluence();
+                    if (status)
+                        return status;
+
+                    for (const InfluenceSpacingEntry &entry : layer->spacing_table_influence)
+                    {
+                        status = lefwLayerRoutingSpacingInfluenceWidth(to_microns(entry.width, dbu_per_micron), to_microns(entry.distance, dbu_per_micron), to_microns(entry.spacing, dbu_per_micron));
+                        if (status)
+                            return status;
+                    }
+
+                    status = lefwLayerRoutineEndSpacingtable();
+                    if (status)
+                        return status;
+                }
+
                 if (layer->wire_extension)
                 {
                     status = lefwLayerRoutingWireExtension(to_microns(*layer->wire_extension, dbu_per_micron));
@@ -229,17 +410,129 @@ namespace le
                     if (status)
                         return status;
                 }
-                if (layer->spacing)
+                for (const SpacingRule &rule : layer->spacing_rules)
                 {
-                    status = lefwLayerCutSpacing(to_microns(*layer->spacing, dbu_per_micron));
+                    status = lefwLayerCutSpacing(to_microns(rule.distance, dbu_per_micron));
                     if (status)
                         return status;
+
+                    if (rule.center_to_center)
+                    {
+                        status = lefwLayerCutSpacingCenterToCenter();
+                        if (status)
+                            return status;
+                    }
+                    if (rule.same_net)
+                    {
+                        status = lefwLayerCutSpacingSameNet();
+                        if (status)
+                            return status;
+                    }
+
+                    // At most one of LAYER/ADJACENTCUTS/PARALLELOVERLAP
+                    // follows a CUT SPACING statement (lefwWriter.hpp's own
+                    // "either this routine ... or ..." comments on each).
+                    if (!rule.second_layer_name.empty())
+                    {
+                        status = lefwLayerCutSpacingLayer(rule.second_layer_name.c_str(), rule.second_layer_stack ? 1 : 0);
+                        if (status)
+                            return status;
+                    }
+                    else if (rule.adjacent_cuts)
+                    {
+                        status = lefwLayerCutSpacingAdjacent(*rule.adjacent_cuts, rule.adjacent_within ? to_microns(*rule.adjacent_within, dbu_per_micron) : 0.0, rule.adjacent_except_same_pg_net ? 1 : 0);
+                        if (status)
+                            return status;
+                    }
+                    else if (rule.parallel_overlap)
+                    {
+                        status = lefwLayerCutSpacingParallel();
+                        if (status)
+                            return status;
+                    }
+
                     status = lefwLayerCutSpacingEnd();
                     if (status)
                         return status;
                 }
 
+                if (!layer->spacing_table_orthogonal.empty())
+                {
+                    std::vector<double> cut_withins_um;
+                    std::vector<double> ortho_spacings_um;
+                    cut_withins_um.reserve(layer->spacing_table_orthogonal.size());
+                    ortho_spacings_um.reserve(layer->spacing_table_orthogonal.size());
+                    for (const OrthogonalSpacingEntry &entry : layer->spacing_table_orthogonal)
+                    {
+                        cut_withins_um.push_back(to_microns(entry.cut_within, dbu_per_micron));
+                        ortho_spacings_um.push_back(to_microns(entry.ortho_spacing, dbu_per_micron));
+                    }
+                    status = lefwLayerCutSpacingTableOrtho(static_cast<int>(cut_withins_um.size()), cut_withins_um.data(), ortho_spacings_um.data());
+                    if (status)
+                        return status;
+                }
+
                 status = lefwEndLayer(layer->name.c_str());
+                if (status)
+                    return status;
+            }
+        }
+
+        return 0;
+    }
+
+    int LEFWriter::write_via_layers(const std::vector<ViaLayer> &layers, double dbu_per_micron)
+    {
+        auto to_um = [&](int64_t v)
+        { return to_microns(v, dbu_per_micron); };
+
+        for (const ViaLayer &layer : layers)
+        {
+            int status = lefwViaLayer(layer.layer_name.c_str());
+            if (status)
+                return status;
+
+            for (const Rect &rect : layer.rects)
+            {
+                status = lefwViaLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0);
+                if (status)
+                    return status;
+            }
+
+            // KNOWN VENDORED-LIBRARY BUG (lefwWriter.cpp's own
+            // lefwViaLayerPolygon, not our code, so not something to
+            // hand-edit per CLAUDE.md's "never edit src/lefdef/" rule):
+            // its non-encrypted branch prints the first point as
+            // "%.11g %.11g" (no trailing separator) and every later
+            // point as "%.11g %.11g " (no LEADING separator either),
+            // so point 0's y and point 1's x land back-to-back with
+            // zero characters between them - e.g. y0=-1, x1=-0.2
+            // writes as the single unparseable token "-1-0.2" (found
+            // via the lef_roundtrip_diff dev tool against
+            // complete.5.8.lef's myVia23, which has real via-layer
+            // POLYGON geometry - it made lefdiff choke partway through
+            // and silently truncate the rest of that dump). Every
+            // OTHER polygon writer in this file (lefwMacroPinPortLayerPolygon/
+            // lefwMacroObsLayerPolygon, called from write_shape_geometry)
+            // does NOT have this bug - only the VIA-specific one does.
+            // No fixture in this codebase's own test suite exercises a
+            // multi-point VIA POLYGON, so this doesn't affect CI, but a
+            // real design with polygonal via geometry would write a
+            // corrupt, unreadable LEF file - flagging for anyone
+            // touching this path next, not fixing here (out of scope:
+            // would require patching vendored source).
+            for (const Polygon &polygon : layer.polygons)
+            {
+                std::vector<double> xs;
+                std::vector<double> ys;
+                xs.reserve(polygon.points.size());
+                ys.reserve(polygon.points.size());
+                for (const Point &point : polygon.points)
+                {
+                    xs.push_back(to_um(point.x));
+                    ys.push_back(to_um(point.y));
+                }
+                status = lefwViaLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), 0);
                 if (status)
                     return status;
             }
@@ -295,57 +588,9 @@ namespace le
                     return status;
             }
 
-            for (const ViaLayer &layer : via->layers)
-            {
-                status = lefwViaLayer(layer.layer_name.c_str());
-                if (status)
-                    return status;
-
-                for (const Rect &rect : layer.rects)
-                {
-                    status = lefwViaLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0);
-                    if (status)
-                        return status;
-                }
-
-                // KNOWN VENDORED-LIBRARY BUG (lefwWriter.cpp's own
-                // lefwViaLayerPolygon, not our code, so not something to
-                // hand-edit per CLAUDE.md's "never edit src/lefdef/" rule):
-                // its non-encrypted branch prints the first point as
-                // "%.11g %.11g" (no trailing separator) and every later
-                // point as "%.11g %.11g " (no LEADING separator either),
-                // so point 0's y and point 1's x land back-to-back with
-                // zero characters between them - e.g. y0=-1, x1=-0.2
-                // writes as the single unparseable token "-1-0.2" (found
-                // via the lef_roundtrip_diff dev tool against
-                // complete.5.8.lef's myVia23, which has real via-layer
-                // POLYGON geometry - it made lefdiff choke partway through
-                // and silently truncate the rest of that dump). Every
-                // OTHER polygon writer in this file (lefwMacroPinPortLayerPolygon/
-                // lefwMacroObsLayerPolygon, called from write_shape_geometry)
-                // does NOT have this bug - only the VIA-specific one does.
-                // No fixture in this codebase's own test suite exercises a
-                // multi-point VIA POLYGON, so this doesn't affect CI, but a
-                // real design with polygonal via geometry would write a
-                // corrupt, unreadable LEF file - flagging for anyone
-                // touching this path next, not fixing here (out of scope:
-                // would require patching vendored source).
-                for (const Polygon &polygon : layer.polygons)
-                {
-                    std::vector<double> xs;
-                    std::vector<double> ys;
-                    xs.reserve(polygon.points.size());
-                    ys.reserve(polygon.points.size());
-                    for (const Point &point : polygon.points)
-                    {
-                        xs.push_back(to_um(point.x));
-                        ys.push_back(to_um(point.y));
-                    }
-                    status = lefwViaLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), 0);
-                    if (status)
-                        return status;
-                }
-            }
+            status = write_via_layers(via->layers, dbu_per_micron);
+            if (status)
+                return status;
 
             status = lefwEndVia(via->name.c_str());
             if (status)
@@ -456,6 +701,159 @@ namespace le
         return 0;
     }
 
+    int LEFWriter::write_sites(const Root &root, TechnologyId technology_id)
+    {
+        const TechnologyData *technology = root.get_technology(technology_id);
+        if (!technology)
+            return 0;
+        const double dbu_per_micron = technology->database_units_microns;
+        auto to_um = [&](int64_t v)
+        { return to_microns(v, dbu_per_micron); };
+
+        for (SiteId site_id : root.get_technology_sites(technology_id))
+        {
+            const SiteData *site = root.get_site(site_id);
+            if (!site)
+                continue;
+
+            // lefwSite takes one space-joined symmetry string, same
+            // convention as write_macro's own SYMMETRY handling.
+            std::string symmetry;
+            if (site->symmetry.x)
+                symmetry += "X ";
+            if (site->symmetry.y)
+                symmetry += "Y ";
+            if (site->symmetry.r90)
+                symmetry += "R90 ";
+            if (!symmetry.empty())
+                symmetry.pop_back(); // trailing space
+
+            int status = lefwSite(site->name.c_str(), site->site_class.empty() ? nullptr : site->site_class.c_str(),
+                                   symmetry.empty() ? nullptr : symmetry.c_str(),
+                                   site->size ? to_um(site->size->x) : 0.0, site->size ? to_um(site->size->y) : 0.0);
+            if (status)
+                return status;
+
+            for (const RowPatternEntry &entry : site->row_pattern)
+            {
+                status = lefwSiteRowPatternStr(entry.site_name.c_str(), orientation_to_string(entry.orient));
+                if (status)
+                    return status;
+            }
+
+            status = lefwEndSite(site->name.c_str());
+            if (status)
+                return status;
+        }
+
+        return 0;
+    }
+
+    int LEFWriter::write_non_default_rules(const Root &root, TechnologyId technology_id)
+    {
+        const TechnologyData *technology = root.get_technology(technology_id);
+        if (!technology)
+            return 0;
+        const double dbu_per_micron = technology->database_units_microns;
+        auto to_um = [&](int64_t v)
+        { return to_microns(v, dbu_per_micron); };
+
+        for (NonDefaultRuleId rule_id : root.get_technology_non_default_rules(technology_id))
+        {
+            const NonDefaultRuleData *rule = root.get_non_default_rule(rule_id);
+            if (!rule)
+                continue;
+
+            int status = lefwStartNonDefaultRule(rule->name.c_str());
+            if (status)
+                return status;
+
+            // HARDSPACING must come first - lef.y's own grammar has
+            // nd_hardspacing appear before nd_rules (LAYER/VIA/...) in the
+            // NONDEFAULTRULE production, not just anywhere in the block.
+            if (rule->hard_spacing)
+            {
+                status = lefwNonDefaultRuleHardspacing();
+                if (status)
+                    return status;
+            }
+
+            for (const NonDefaultRuleLayer &layer : rule->layers)
+            {
+                // diag_width has no writer parameter in this vendored
+                // version's lefwNonDefaultRuleLayer (confirmed against
+                // lefwWriter.hpp - width/minSpacing/wireExtension/
+                // resistance/capacitance/edgeCap only) - read-only, same
+                // "vendored writer gap" pattern as this phase's other
+                // documented cases.
+                status = lefwNonDefaultRuleLayer(layer.layer_name.c_str(),
+                                                  layer.width ? to_um(*layer.width) : 0.0,
+                                                  layer.spacing ? to_um(*layer.spacing) : 0.0,
+                                                  layer.wire_extension ? to_um(*layer.wire_extension) : 0.0,
+                                                  layer.resistance.value_or(0.0),
+                                                  layer.capacitance.value_or(0.0),
+                                                  layer.edge_cap.value_or(0.0));
+                if (status)
+                    return status;
+            }
+
+            for (const NonDefaultRuleVia &via : rule->vias)
+            {
+                status = lefwNonDefaultRuleStartVia(via.name.c_str(), via.is_default ? "DEFAULT" : nullptr);
+                if (status)
+                    return status;
+
+                if (via.foreign)
+                {
+                    status = lefwViaForeignStr(via.foreign->name.c_str(), to_um(via.foreign->origin.x), to_um(via.foreign->origin.y), orientation_to_string(via.foreign->orient));
+                    if (status)
+                        return status;
+                }
+                if (via.resistance)
+                {
+                    status = lefwViaResistance(*via.resistance);
+                    if (status)
+                        return status;
+                }
+
+                status = write_via_layers(via.layers, dbu_per_micron);
+                if (status)
+                    return status;
+
+                status = lefwNonDefaultRuleEndVia(via.name.c_str());
+                if (status)
+                    return status;
+            }
+
+            for (const std::string &via_name : rule->use_via_names)
+            {
+                status = lefwNonDefaultRuleUseVia(via_name.c_str());
+                if (status)
+                    return status;
+            }
+
+            for (const std::string &via_rule_name : rule->use_via_rule_names)
+            {
+                status = lefwNonDefaultRuleUseViaRule(via_rule_name.c_str());
+                if (status)
+                    return status;
+            }
+
+            for (const MinCutOverride &min_cut : rule->min_cuts)
+            {
+                status = lefwNonDefaultRuleMinCuts(min_cut.cut_layer_name.c_str(), min_cut.num_cuts);
+                if (status)
+                    return status;
+            }
+
+            status = lefwEndNonDefaultRule(rule->name.c_str());
+            if (status)
+                return status;
+        }
+
+        return 0;
+    }
+
     int LEFWriter::write_shape_geometry(const Shape &shape, double dbu_per_micron, bool is_pin_port)
     {
         auto to_um = [&](int64_t v)
@@ -473,11 +871,17 @@ namespace le
         bool has_current_width = false;
         uint64_t current_width = 0;
 
-        for (const Rect &rect : shape.rects)
+        // rect_masks/polygon_masks/path_masks are parallel arrays (see
+        // shapes_from_parser's own reading) - 0 (no mask) if a given
+        // index is out of range, e.g. for Shapes built directly rather
+        // than read from a LEF file that never set one.
+        for (size_t i = 0; i < shape.rects.size(); i++)
         {
+            const Rect &rect = shape.rects[i];
+            const int mask = i < shape.rect_masks.size() ? shape.rect_masks[i] : 0;
             status = is_pin_port
-                         ? lefwMacroPinPortLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0, 0, 0, 0, 0)
-                         : lefwMacroObsLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0, 0, 0, 0, 0);
+                         ? lefwMacroPinPortLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0, 0, 0, 0, mask)
+                         : lefwMacroObsLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0, 0, 0, 0, mask);
             if (status)
                 return status;
         }
@@ -491,7 +895,7 @@ namespace le
                 return status;
         }
 
-        auto write_path = [&](const Path &path, int num_x, int num_y, double space_x_um, double space_y_um) -> int
+        auto write_path = [&](const Path &path, int num_x, int num_y, double space_x_um, double space_y_um, int mask) -> int
         {
             if (!has_current_width || current_width != path.width)
             {
@@ -514,25 +918,26 @@ namespace le
             }
 
             return is_pin_port
-                       ? lefwMacroPinPortLayerPath(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, 0)
-                       : lefwMacroObsLayerPath(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, 0);
+                       ? lefwMacroPinPortLayerPath(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, mask)
+                       : lefwMacroObsLayerPath(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, mask);
         };
 
-        for (const Path &path : shape.paths)
+        for (size_t i = 0; i < shape.paths.size(); i++)
         {
-            status = write_path(path, 0, 0, 0, 0);
+            const int mask = i < shape.path_masks.size() ? shape.path_masks[i] : 0;
+            status = write_path(shape.paths[i], 0, 0, 0, 0, mask);
             if (status)
                 return status;
         }
 
         for (const PathIterate &it : shape.path_iterates)
         {
-            status = write_path(it.path, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y));
+            status = write_path(it.path, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), 0);
             if (status)
                 return status;
         }
 
-        auto write_polygon = [&](const Polygon &polygon, int num_x, int num_y, double space_x_um, double space_y_um) -> int
+        auto write_polygon = [&](const Polygon &polygon, int num_x, int num_y, double space_x_um, double space_y_um, int mask) -> int
         {
             std::vector<double> xs;
             std::vector<double> ys;
@@ -545,20 +950,21 @@ namespace le
             }
 
             return is_pin_port
-                       ? lefwMacroPinPortLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, 0)
-                       : lefwMacroObsLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, 0);
+                       ? lefwMacroPinPortLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, mask)
+                       : lefwMacroObsLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), num_x, num_y, space_x_um, space_y_um, mask);
         };
 
-        for (const Polygon &polygon : shape.polygons)
+        for (size_t i = 0; i < shape.polygons.size(); i++)
         {
-            status = write_polygon(polygon, 0, 0, 0, 0);
+            const int mask = i < shape.polygon_masks.size() ? shape.polygon_masks[i] : 0;
+            status = write_polygon(shape.polygons[i], 0, 0, 0, 0, mask);
             if (status)
                 return status;
         }
 
         for (const PolygonIterate &it : shape.polygon_iterates)
         {
-            status = write_polygon(it.polygon, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y));
+            status = write_polygon(it.polygon, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), 0);
             if (status)
                 return status;
         }
@@ -582,6 +988,33 @@ namespace le
             if (status)
                 return status;
         }
+        if (!terminal->use.empty())
+        {
+            status = lefwMacroPinUse(terminal->use.c_str());
+            if (status)
+                return status;
+        }
+        if (!terminal->shape.empty())
+        {
+            status = lefwMacroPinShape(terminal->shape.c_str());
+            if (status)
+                return status;
+        }
+        if (!terminal->must_join.empty())
+        {
+            status = lefwMacroPinMustjoin(terminal->must_join.c_str());
+            if (status)
+                return status;
+        }
+        if (!terminal->net_expr.empty())
+        {
+            status = lefwMacroPinNetExpr(terminal->net_expr.c_str());
+            if (status)
+                return status;
+        }
+        // terminal->leq is deliberately never written - lefwMacroPinLEQ is
+        // obsoleted for VERSION >= 5.6 with no replacement (same
+        // unreachable-at-5.8 gap as the macro-level LEQ above).
 
         for (TerminalPortId port_id : root.get_terminal_ports(terminal_id))
         {
@@ -665,6 +1098,28 @@ namespace le
                 return status;
         }
 
+        // abstract->leq/power/source are deliberately never written: for a
+        // VERSION >= 5.6 file (this writer always writes 5.8), MACRO LEQ
+        // is obsoleted with no replacement (lefwMacroLEQ's own
+        // "versionNum >= 5.6 -> LEFW_OBSOLETE" check) and POWER/SOURCE are
+        // obsolete at >= 5.4/5.6 respectively - and lef.y's own grammar
+        // drops all three silently on READ at those versions too (never
+        // populated in the first place), so this is a consistent,
+        // unreachable-at-5.8 gap on both sides, not an asymmetry to work
+        // around.
+        if (!abstract->eeq.empty())
+        {
+            status = lefwMacroEEQ(abstract->eeq.c_str());
+            if (status)
+                return status;
+        }
+        if (abstract->is_fixed_mask)
+        {
+            status = lefwMacroFixedMask();
+            if (status)
+                return status;
+        }
+
         for (const Foreign &foreign : abstract->foreigns)
         {
             status = lefwMacroForeignStr(foreign.name.c_str(), to_um(foreign.origin.x), to_um(foreign.origin.y), orientation_to_string(foreign.orient));
@@ -715,6 +1170,18 @@ namespace le
             if (status)
                 return status;
         }
+
+        // abstract->densities is deliberately never written: the vendored
+        // lefwStartMacroDensity(layerName) prints "DENSITY <layerName>\n"
+        // directly, with no "LAYER" keyword - but lef.y's own macro_density
+        // grammar rule requires "DENSITY" alone, then one "LAYER name ;"
+        // statement per layer group (density_layer) - so the written text
+        // can never be re-parsed as a DENSITY statement at all, for any
+        // layer count. lefwStartMacroDensity also flatly refuses a second
+        // call in the same macro (lefwIsMacroDensity guard), so even a
+        // syntax-correct workaround couldn't cover more than one layer.
+        // Fully readable (lefrDensityCbkFn) - not writable via this
+        // vendored version. Not fixed (vendored code).
 
         return lefwEndMacro(design->name.c_str());
     }
@@ -801,6 +1268,22 @@ namespace le
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: Writing VIARULEs failed with status {}.", status));
+                return status;
+            }
+
+            // NONDEFAULTRULE then SITE, matching complete.5.8.lef's own
+            // real ordering (after VIA/VIARULE, before MACRO).
+            status = write_non_default_rules(root, technology_id);
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: Writing NONDEFAULTRULEs failed with status {}.", status));
+                return status;
+            }
+
+            status = write_sites(root, technology_id);
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: Writing SITEs failed with status {}.", status));
                 return status;
             }
         }

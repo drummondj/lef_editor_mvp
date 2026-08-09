@@ -60,6 +60,9 @@ namespace le
         static int lefrDividerCharCbkFn(lefrCallbackType_e typ, const char *divider_char, void *user_data);
         static int lefrViaCbkFn(lefrCallbackType_e typ, lefiVia *lef_via, void *user_data);
         static int lefrViaRuleCbkFn(lefrCallbackType_e typ, lefiViaRule *lef_via_rule, void *user_data);
+        static int lefrSiteCbkFn(lefrCallbackType_e typ, lefiSite *lef_site, void *user_data);
+        static int lefrNonDefaultCbkFn(lefrCallbackType_e typ, lefiNonDefault *lef_non_default, void *user_data);
+        static int lefrDensityCbkFn(lefrCallbackType_e typ, lefiDensity *lef_density, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through
@@ -83,6 +86,10 @@ namespace le
         static Polygon polygon_from_parser(LEFReader *reader, int count, double *x, double *y);
         static Rect rect_from_parser(LEFReader *reader, double xl, double yl, double xh, double yh);
         static std::vector<Shape> shapes_from_parser(LEFReader *reader, lefiGeometries *geometries);
+        // Shared by lefrViaCbkFn (top-level VIA) and lefrNonDefaultCbkFn
+        // (VIA embedded inline in a NONDEFAULTRULE) - lefiVia's per-layer
+        // rect/polygon shape is identical in both contexts.
+        static std::vector<ViaLayer> via_layers_from_parser(LEFReader *reader, lefiVia *lef_via);
         static void post_process(LEFReader *reader);
 
         // Private variables

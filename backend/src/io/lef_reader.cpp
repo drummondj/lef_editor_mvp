@@ -92,6 +92,9 @@ namespace le
         lefrSetDividerCharCbk(lefrDividerCharCbkFn);
         lefrSetViaCbk(lefrViaCbkFn);
         lefrSetViaRuleCbk(lefrViaRuleCbkFn);
+        lefrSetSiteCbk(lefrSiteCbkFn);
+        lefrSetNonDefaultCbk(lefrNonDefaultCbkFn);
+        lefrSetDensityCbk(lefrDensityCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -237,8 +240,147 @@ namespace le
             layer.offset = reader->microns_to_dbu(lef_layer->offset());
         if (lef_layer->hasArea())
             layer.area = reader->microns_squared_to_dbu(lef_layer->area());
-        if (lef_layer->hasSpacingNumber() && lef_layer->numSpacing() > 0)
-            layer.spacing = reader->microns_to_dbu(lef_layer->spacing(0));
+        layer.spacing_rules.reserve(static_cast<size_t>(lef_layer->numSpacing()));
+        for (int i = 0; i < lef_layer->numSpacing(); i++)
+        {
+            SpacingRule rule{.distance = reader->microns_to_dbu(lef_layer->spacing(i))};
+
+            if (lef_layer->hasSpacingRange(i))
+            {
+                rule.range_min = reader->microns_to_dbu(lef_layer->spacingRangeMin(i));
+                rule.range_max = reader->microns_to_dbu(lef_layer->spacingRangeMax(i));
+            }
+            if (lef_layer->hasSpacingRangeUseLengthThreshold(i))
+                rule.range_use_length_threshold = true;
+            if (lef_layer->hasSpacingRangeInfluence(i))
+                rule.range_influence = reader->microns_to_dbu(lef_layer->spacingRangeInfluence(i));
+            if (lef_layer->hasSpacingRangeInfluenceRange(i))
+            {
+                rule.range_influence_range_min = reader->microns_to_dbu(lef_layer->spacingRangeInfluenceMin(i));
+                rule.range_influence_range_max = reader->microns_to_dbu(lef_layer->spacingRangeInfluenceMax(i));
+            }
+            if (lef_layer->hasSpacingRangeRange(i))
+            {
+                rule.range_range_min = reader->microns_to_dbu(lef_layer->spacingRangeRangeMin(i));
+                rule.range_range_max = reader->microns_to_dbu(lef_layer->spacingRangeRangeMax(i));
+            }
+            if (lef_layer->hasSpacingLengthThreshold(i))
+                rule.length_threshold = reader->microns_to_dbu(lef_layer->spacingLengthThreshold(i));
+            if (lef_layer->hasSpacingCenterToCenter(i))
+                rule.center_to_center = true;
+            if (lef_layer->hasSpacingSamenet(i))
+            {
+                rule.same_net = true;
+                if (lef_layer->hasSpacingSamenetPGonly(i))
+                    rule.same_net_pg_only = true;
+            }
+            if (lef_layer->hasSpacingParallelOverlap(i))
+                rule.parallel_overlap = true;
+            if (lef_layer->hasSpacingEndOfLine(i))
+            {
+                rule.end_of_line_width = reader->microns_to_dbu(lef_layer->spacingEolWidth(i));
+                rule.end_of_line_within = reader->microns_to_dbu(lef_layer->spacingEolWithin(i));
+                if (lef_layer->hasSpacingParellelEdge(i))
+                {
+                    rule.parallel_edge_space = reader->microns_to_dbu(lef_layer->spacingParSpace(i));
+                    rule.parallel_edge_within = reader->microns_to_dbu(lef_layer->spacingParWithin(i));
+                    if (lef_layer->hasSpacingTwoEdges(i))
+                        rule.two_edges = true;
+                }
+            }
+            if (lef_layer->hasSpacingName(i))
+                rule.second_layer_name = lef_layer->spacingName(i);
+            if (lef_layer->hasSpacingLayerStack(i))
+                rule.second_layer_stack = true;
+            if (lef_layer->hasSpacingAdjacent(i))
+            {
+                rule.adjacent_cuts = lef_layer->spacingAdjacentCuts(i);
+                rule.adjacent_within = reader->microns_to_dbu(lef_layer->spacingAdjacentWithin(i));
+                if (lef_layer->hasSpacingAdjacentExcept(i))
+                    rule.adjacent_except_same_pg_net = true;
+            }
+
+            layer.spacing_rules.push_back(std::move(rule));
+        }
+
+        layer.minimum_cuts.reserve(static_cast<size_t>(lef_layer->numMinimumcut()));
+        for (int i = 0; i < lef_layer->numMinimumcut(); i++)
+        {
+            MinimumCut cut{
+                .cuts = lef_layer->minimumcut(i),
+                .width = reader->microns_to_dbu(lef_layer->minimumcutWidth(i)),
+            };
+            if (lef_layer->hasMinimumcutWithin(i))
+                cut.within = reader->microns_to_dbu(lef_layer->minimumcutWithin(i));
+            if (lef_layer->hasMinimumcutConnection(i))
+                cut.connection = lef_layer->minimumcutConnection(i);
+            if (lef_layer->hasMinimumcutNumCuts(i))
+            {
+                cut.length = reader->microns_to_dbu(lef_layer->minimumcutLength(i));
+                cut.distance = reader->microns_to_dbu(lef_layer->minimumcutDistance(i));
+            }
+            layer.minimum_cuts.push_back(cut);
+        }
+
+        layer.min_steps.reserve(static_cast<size_t>(lef_layer->numMinstep()));
+        for (int i = 0; i < lef_layer->numMinstep(); i++)
+        {
+            MinStep step{.distance = reader->microns_to_dbu(lef_layer->minstep(i))};
+            if (lef_layer->hasMinstepType(i))
+                step.min_step_type = lef_layer->minstepType(i);
+            if (lef_layer->hasMinstepLengthsum(i))
+                step.lengthsum = reader->microns_to_dbu(lef_layer->minstepLengthsum(i));
+            if (lef_layer->hasMinstepMaxedges(i))
+                step.max_edges = lef_layer->minstepMaxedges(i);
+            layer.min_steps.push_back(step);
+        }
+
+        for (int i = 0; i < lef_layer->numSpacingTable(); i++)
+        {
+            lefiSpacingTable *table = lef_layer->spacingTable(i);
+            if (table->isParallel())
+            {
+                lefiParallel *parallel = table->parallel();
+                ParallelRunLengthSpacingTable prl;
+                prl.lengths.reserve(static_cast<size_t>(parallel->numLength()));
+                for (int l = 0; l < parallel->numLength(); l++)
+                    prl.lengths.push_back(reader->microns_to_dbu(parallel->length(l)));
+                prl.widths.reserve(static_cast<size_t>(parallel->numWidth()));
+                prl.spacings.reserve(static_cast<size_t>(parallel->numWidth()) * prl.lengths.size());
+                for (int w = 0; w < parallel->numWidth(); w++)
+                {
+                    prl.widths.push_back(reader->microns_to_dbu(parallel->width(w)));
+                    for (int l = 0; l < parallel->numLength(); l++)
+                        prl.spacings.push_back(reader->microns_to_dbu(parallel->widthSpacing(w, l)));
+                }
+                layer.spacing_table_parallel_run_length = std::move(prl);
+            }
+            else if (table->isInfluence())
+            {
+                lefiInfluence *influence = table->influence();
+                for (int e = 0; e < influence->numInfluenceEntry(); e++)
+                {
+                    layer.spacing_table_influence.push_back(InfluenceSpacingEntry{
+                        .width = reader->microns_to_dbu(influence->width(e)),
+                        .distance = reader->microns_to_dbu(influence->distance(e)),
+                        .spacing = reader->microns_to_dbu(influence->spacing(e)),
+                    });
+                }
+            }
+        }
+
+        if (lef_layer->hasSpacingTableOrtho())
+        {
+            lefiOrthogonal *orthogonal = lef_layer->orthogonal();
+            layer.spacing_table_orthogonal.reserve(static_cast<size_t>(orthogonal->numOrthogonal()));
+            for (int i = 0; i < orthogonal->numOrthogonal(); i++)
+            {
+                layer.spacing_table_orthogonal.push_back(OrthogonalSpacingEntry{
+                    .cut_within = reader->microns_to_dbu(orthogonal->cutWithin(i)),
+                    .ortho_spacing = reader->microns_to_dbu(orthogonal->orthoSpacing(i)),
+                });
+            }
+        }
         if (lef_layer->hasResistance())
             layer.resistance = lef_layer->resistance();
         if (lef_layer->hasCapacitance())
@@ -307,6 +449,30 @@ namespace le
         return 0;
     }
 
+    std::vector<ViaLayer> LEFReader::via_layers_from_parser(LEFReader *reader, lefiVia *lef_via)
+    {
+        std::vector<ViaLayer> layers;
+        layers.reserve(static_cast<size_t>(lef_via->numLayers()));
+        for (int i = 0; i < lef_via->numLayers(); i++)
+        {
+            auto layer = ViaLayer{.layer_name = lef_via->layerName(i)};
+
+            layer.rects.reserve(static_cast<size_t>(lef_via->numRects(i)));
+            for (int j = 0; j < lef_via->numRects(i); j++)
+                layer.rects.push_back(rect_from_parser(reader, lef_via->xl(i, j), lef_via->yl(i, j), lef_via->xh(i, j), lef_via->yh(i, j)));
+
+            layer.polygons.reserve(static_cast<size_t>(lef_via->numPolygons(i)));
+            for (int j = 0; j < lef_via->numPolygons(i); j++)
+            {
+                const lefiGeomPolygon poly = lef_via->getPolygon(i, j);
+                layer.polygons.push_back(polygon_from_parser(reader, poly.numPoints, poly.x, poly.y));
+            }
+
+            layers.push_back(std::move(layer));
+        }
+        return layers;
+    }
+
     int LEFReader::lefrViaCbkFn(lefrCallbackType_e typ, lefiVia *lef_via, void *user_data)
     {
         auto reader = static_cast<LEFReader *>(user_data);
@@ -347,24 +513,7 @@ namespace le
             via.foreign = foreign;
         }
 
-        via.layers.reserve(static_cast<size_t>(lef_via->numLayers()));
-        for (int i = 0; i < lef_via->numLayers(); i++)
-        {
-            auto layer = ViaLayer{.layer_name = lef_via->layerName(i)};
-
-            layer.rects.reserve(static_cast<size_t>(lef_via->numRects(i)));
-            for (int j = 0; j < lef_via->numRects(i); j++)
-                layer.rects.push_back(rect_from_parser(reader, lef_via->xl(i, j), lef_via->yl(i, j), lef_via->xh(i, j), lef_via->yh(i, j)));
-
-            layer.polygons.reserve(static_cast<size_t>(lef_via->numPolygons(i)));
-            for (int j = 0; j < lef_via->numPolygons(i); j++)
-            {
-                const lefiGeomPolygon poly = lef_via->getPolygon(i, j);
-                layer.polygons.push_back(polygon_from_parser(reader, poly.numPoints, poly.x, poly.y));
-            }
-
-            via.layers.push_back(std::move(layer));
-        }
+        via.layers = via_layers_from_parser(reader, lef_via);
 
         // 5.6 VIARULE-inside-VIA - a materially different, smaller thing
         // than a VIARULE block itself (see ViaRuleReference's own doc
@@ -478,6 +627,160 @@ namespace le
         return 0;
     }
 
+    int LEFReader::lefrSiteCbkFn(lefrCallbackType_e typ, lefiSite *lef_site, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        auto site_name = lef_site->name();
+
+        if (reader->root_->get_site_by_name(site_name).valid())
+        {
+            log_warning("Site {} already exists. Ignoring new definition.", site_name);
+            return 0;
+        }
+
+        SiteData site{
+            .technology = reader->technology_id_,
+            .name = site_name,
+        };
+
+        if (lef_site->hasClass())
+            site.site_class = lef_site->siteClass();
+
+        if (lef_site->hasSize())
+            site.size = Point{
+                .x = reader->microns_to_dbu(lef_site->sizeX()),
+                .y = reader->microns_to_dbu(lef_site->sizeY()),
+            };
+
+        // Independent, combinable bit flags (a site can be X- and
+        // Y-symmetric and 90-rotatable all at once) - matches
+        // Abstract.symmetry's own X/Y/R90 reading in lefrMacroCbkFn.
+        site.symmetry = Symmetry{
+            .r90 = static_cast<bool>(lef_site->has90Symmetry()),
+            .x = static_cast<bool>(lef_site->hasXSymmetry()),
+            .y = static_cast<bool>(lef_site->hasYSymmetry()),
+        };
+
+        if (lef_site->hasRowPattern())
+        {
+            site.row_pattern.reserve(static_cast<size_t>(lef_site->numSites()));
+            for (int i = 0; i < lef_site->numSites(); i++)
+            {
+                site.row_pattern.push_back(RowPatternEntry{
+                    .site_name = lef_site->siteName(i),
+                    .orient = orientation_from_parser(lef_site->siteOrient(i)),
+                });
+            }
+        }
+
+        reader->root_->create_site(std::move(site));
+
+        return 0;
+    }
+
+    int LEFReader::lefrNonDefaultCbkFn(lefrCallbackType_e typ, lefiNonDefault *lef_non_default, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        auto rule_name = lef_non_default->name();
+
+        if (reader->root_->get_non_default_rule_by_name(rule_name).valid())
+        {
+            log_warning("NonDefaultRule {} already exists. Ignoring new definition.", rule_name);
+            return 0;
+        }
+
+        NonDefaultRuleData rule{
+            .technology = reader->technology_id_,
+            .name = rule_name,
+            .hard_spacing = static_cast<bool>(lef_non_default->hasHardspacing()),
+        };
+
+        rule.layers.reserve(static_cast<size_t>(lef_non_default->numLayers()));
+        for (int i = 0; i < lef_non_default->numLayers(); i++)
+        {
+            auto layer = NonDefaultRuleLayer{.layer_name = lef_non_default->layerName(i)};
+
+            if (lef_non_default->hasLayerWidth(i))
+                layer.width = reader->microns_to_dbu(lef_non_default->layerWidth(i));
+            if (lef_non_default->hasLayerSpacing(i))
+                layer.spacing = reader->microns_to_dbu(lef_non_default->layerSpacing(i));
+            if (lef_non_default->hasLayerWireExtension(i))
+                layer.wire_extension = reader->microns_to_dbu(lef_non_default->layerWireExtension(i));
+            if (lef_non_default->hasLayerResistance(i))
+                layer.resistance = lef_non_default->layerResistance(i);
+            if (lef_non_default->hasLayerCapacitance(i))
+                layer.capacitance = lef_non_default->layerCapacitance(i);
+            if (lef_non_default->hasLayerEdgeCap(i))
+                layer.edge_cap = lef_non_default->layerEdgeCap(i);
+            if (lef_non_default->hasLayerDiagWidth(i))
+                layer.diag_width = reader->microns_to_dbu(lef_non_default->layerDiagWidth(i));
+
+            rule.layers.push_back(std::move(layer));
+        }
+
+        rule.vias.reserve(static_cast<size_t>(lef_non_default->numVias()));
+        for (int i = 0; i < lef_non_default->numVias(); i++)
+        {
+            lefiVia *lef_via = lef_non_default->viaRule(i);
+
+            NonDefaultRuleVia via{
+                .name = lef_via->name(),
+                .is_default = static_cast<bool>(lef_via->hasDefault()),
+            };
+            if (lef_via->hasResistance())
+                via.resistance = lef_via->resistance();
+            if (lef_via->hasForeign())
+            {
+                auto foreign = Foreign{.name = lef_via->foreign()};
+                if (lef_via->hasForeignPnt())
+                    foreign.origin = Point{
+                        .x = reader->microns_to_dbu(lef_via->foreignX()),
+                        .y = reader->microns_to_dbu(lef_via->foreignY()),
+                    };
+                else
+                    foreign.origin = Point{0, 0};
+                if (lef_via->hasForeignOrient())
+                    foreign.orient = orientation_from_parser(lef_via->foreignOrient());
+                else
+                    foreign.orient = Orientation::N;
+                via.foreign = foreign;
+            }
+            via.layers = via_layers_from_parser(reader, lef_via);
+
+            rule.vias.push_back(std::move(via));
+        }
+
+        // spacing_rule (the embedded "SPACING ... SAMENET layer1 layer2
+        // distance [STACK] ; ... END SPACING" section) is deliberately not
+        // modeled - lef.y's own start_spacing grammar rule shows this
+        // construct is not legal in a LEF >= 5.7 file at all (parsed only
+        // as a no-op warning: "A SPACING SAMENET section is defined but it
+        // is not legal in a LEF 5.7 version file... It will be ignored"),
+        // so it can never be populated by this project's VERSION 5.8
+        // fixtures/targets.
+
+        rule.use_via_names.reserve(static_cast<size_t>(lef_non_default->numUseVia()));
+        for (int i = 0; i < lef_non_default->numUseVia(); i++)
+            rule.use_via_names.push_back(lef_non_default->viaName(i));
+
+        rule.use_via_rule_names.reserve(static_cast<size_t>(lef_non_default->numUseViaRule()));
+        for (int i = 0; i < lef_non_default->numUseViaRule(); i++)
+            rule.use_via_rule_names.push_back(lef_non_default->viaRuleName(i));
+
+        rule.min_cuts.reserve(static_cast<size_t>(lef_non_default->numMinCuts()));
+        for (int i = 0; i < lef_non_default->numMinCuts(); i++)
+        {
+            rule.min_cuts.push_back(MinCutOverride{
+                .cut_layer_name = lef_non_default->cutLayerName(i),
+                .num_cuts = lef_non_default->numCuts(i),
+            });
+        }
+
+        reader->root_->create_non_default_rule(std::move(rule));
+
+        return 0;
+    }
+
     int LEFReader::lefrMacroBeginCbkFn(lefrCallbackType_e typ, const char *name, void *user_data)
     {
         spdlog::debug("processing macro {}", name);
@@ -571,6 +874,17 @@ namespace le
             reader->abstract_data_.site = lef_macro->siteName();
         }
 
+        if (lef_macro->hasEEQ())
+            reader->abstract_data_.eeq = lef_macro->EEQ();
+        if (lef_macro->hasLEQ())
+            reader->abstract_data_.leq = lef_macro->LEQ();
+        if (lef_macro->hasPower())
+            reader->abstract_data_.power = lef_macro->power();
+        if (lef_macro->hasSource())
+            reader->abstract_data_.source = lef_macro->source();
+        if (lef_macro->isFixedMask())
+            reader->abstract_data_.is_fixed_mask = true;
+
         // Post process
         post_process(reader);
 
@@ -611,6 +925,17 @@ namespace le
             .direction = lef_pin->hasDirection() ? signal_direction_from_parser(lef_pin->direction()) : SignalDirection::NONE,
         };
 
+        if (lef_pin->hasShape())
+            terminal.shape = lef_pin->shape();
+        if (lef_pin->hasUse())
+            terminal.use = lef_pin->use();
+        if (lef_pin->hasMustjoin())
+            terminal.must_join = lef_pin->mustjoin();
+        if (lef_pin->hasNetExpr())
+            terminal.net_expr = lef_pin->netExpr();
+        if (lef_pin->hasLEQ())
+            terminal.leq = lef_pin->LEQ();
+
         auto terminal_id = reader->root_->create_terminal(terminal);
 
         for (int i = 0; i < lef_pin->numPorts(); i++)
@@ -635,6 +960,36 @@ namespace le
         spdlog::debug("shapes size = {}", shapes.size());
 
         reader->root_->create_obstruction(ObstructionData{.abstract = reader->abstract_id_, .shapes = shapes});
+
+        return 0;
+    }
+
+    int LEFReader::lefrDensityCbkFn(lefrCallbackType_e typ, lefiDensity *lef_density, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+
+        // Fires between MacroBeginCbk and MacroCbk (same lifecycle as
+        // Pin/Obstruction), but unlike those two (real pool-backed child
+        // Klasses, persisted immediately via create_x) densities is a
+        // plain field on AbstractData - accumulated on abstract_data_ here
+        // and committed by lefrMacroCbkFn's own final
+        // `*stored = reader->abstract_data_` at the end of the MACRO.
+        reader->abstract_data_.densities.reserve(static_cast<size_t>(lef_density->numLayer()));
+        for (int i = 0; i < lef_density->numLayer(); i++)
+        {
+            auto layer = MacroDensityLayer{.layer_name = lef_density->layerName(i)};
+
+            layer.rects.reserve(static_cast<size_t>(lef_density->numRects(i)));
+            layer.values.reserve(static_cast<size_t>(lef_density->numRects(i)));
+            for (int j = 0; j < lef_density->numRects(i); j++)
+            {
+                const lefiGeomRect lef_rect = lef_density->getRect(i, j);
+                layer.rects.push_back(rect_from_parser(reader, lef_rect.xl, lef_rect.yl, lef_rect.xh, lef_rect.yh));
+                layer.values.push_back(lef_density->densityValue(i, j));
+            }
+
+            reader->abstract_data_.densities.push_back(std::move(layer));
+        }
 
         return 0;
     }
@@ -804,6 +1159,7 @@ namespace le
                 auto lef_rect = geometries->getRect(j);
                 auto rect = rect_from_parser(reader, lef_rect->xl, lef_rect->yl, lef_rect->xh, lef_rect->yh);
                 shape.value().rects.push_back(rect);
+                shape.value().rect_masks.push_back(lef_rect->colorMask);
                 geo_count++;
                 break;
             }
@@ -846,6 +1202,7 @@ namespace le
                 auto polygon = polygon_from_parser(reader, lef_path->numPoints, lef_path->x, lef_path->y);
                 auto path = Path{.width = width, .polygon = polygon};
                 shape.value().paths.push_back(path);
+                shape.value().path_masks.push_back(lef_path->colorMask);
                 geo_count++;
                 break;
             }
@@ -881,6 +1238,7 @@ namespace le
                 auto lef_polygon = geometries->getPolygon(j);
                 auto polygon = polygon_from_parser(reader, lef_polygon->numPoints, lef_polygon->x, lef_polygon->y);
                 shape.value().polygons.push_back(polygon);
+                shape.value().polygon_masks.push_back(lef_polygon->colorMask);
                 geo_count++;
                 break;
             }

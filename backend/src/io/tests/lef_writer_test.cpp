@@ -40,6 +40,7 @@ namespace
             EXPECT_EQ(original.rects[i].ur.x, written.rects[i].ur.x);
             EXPECT_EQ(original.rects[i].ur.y, written.rects[i].ur.y);
         }
+        EXPECT_EQ(original.rect_masks, written.rect_masks);
 
         ASSERT_EQ(original.polygons.size(), written.polygons.size());
         for (size_t i = 0; i < original.polygons.size(); i++)
@@ -51,6 +52,7 @@ namespace
                 EXPECT_EQ(original.polygons[i].points[j].y, written.polygons[i].points[j].y);
             }
         }
+        EXPECT_EQ(original.polygon_masks, written.polygon_masks);
 
         ASSERT_EQ(original.paths.size(), written.paths.size());
         for (size_t i = 0; i < original.paths.size(); i++)
@@ -63,6 +65,7 @@ namespace
                 EXPECT_EQ(original.paths[i].polygon.points[j].y, written.paths[i].polygon.points[j].y);
             }
         }
+        EXPECT_EQ(original.path_masks, written.path_masks);
 
         ASSERT_EQ(original.rect_iterates.size(), written.rect_iterates.size());
         for (size_t i = 0; i < original.rect_iterates.size(); i++)
@@ -150,9 +153,77 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsRoutingLayerProperties)
     ASSERT_TRUE(written->offset.has_value());
     EXPECT_EQ(*original->offset, *written->offset);
 
-    ASSERT_TRUE(original->spacing.has_value());
-    ASSERT_TRUE(written->spacing.has_value());
-    EXPECT_EQ(*original->spacing, *written->spacing);
+    ASSERT_EQ(original->spacing_rules.size(), 5u);
+    ASSERT_EQ(written->spacing_rules.size(), 5u);
+    for (size_t i = 0; i < original->spacing_rules.size(); i++)
+        EXPECT_EQ(original->spacing_rules[i].distance, written->spacing_rules[i].distance) << "rule " << i;
+
+    // SPACING 0.16 SAMENET PGONLY
+    EXPECT_TRUE(original->spacing_rules[1].same_net);
+    EXPECT_TRUE(written->spacing_rules[1].same_net);
+    EXPECT_TRUE(original->spacing_rules[1].same_net_pg_only);
+    EXPECT_TRUE(written->spacing_rules[1].same_net_pg_only);
+
+    // SPACING 0.17 LENGTHTHRESHOLD 0.4
+    ASSERT_TRUE(original->spacing_rules[2].length_threshold.has_value());
+    ASSERT_TRUE(written->spacing_rules[2].length_threshold.has_value());
+    EXPECT_EQ(*original->spacing_rules[2].length_threshold, *written->spacing_rules[2].length_threshold);
+
+    // SPACING 0.18 RANGE 0.1 0.3
+    ASSERT_TRUE(original->spacing_rules[3].range_min.has_value());
+    ASSERT_TRUE(written->spacing_rules[3].range_min.has_value());
+    EXPECT_EQ(*original->spacing_rules[3].range_min, *written->spacing_rules[3].range_min);
+    ASSERT_TRUE(original->spacing_rules[3].range_max.has_value());
+    ASSERT_TRUE(written->spacing_rules[3].range_max.has_value());
+    EXPECT_EQ(*original->spacing_rules[3].range_max, *written->spacing_rules[3].range_max);
+
+    // SPACING 0.19 RANGE 0.1 0.3 INFLUENCE 0.05 RANGE 0.2 0.4
+    ASSERT_TRUE(original->spacing_rules[4].range_influence.has_value());
+    ASSERT_TRUE(written->spacing_rules[4].range_influence.has_value());
+    EXPECT_EQ(*original->spacing_rules[4].range_influence, *written->spacing_rules[4].range_influence);
+    ASSERT_TRUE(original->spacing_rules[4].range_influence_range_min.has_value());
+    ASSERT_TRUE(written->spacing_rules[4].range_influence_range_min.has_value());
+    EXPECT_EQ(*original->spacing_rules[4].range_influence_range_min, *written->spacing_rules[4].range_influence_range_min);
+
+    ASSERT_EQ(original->minimum_cuts.size(), 2u);
+    ASSERT_EQ(written->minimum_cuts.size(), 2u);
+    EXPECT_EQ(original->minimum_cuts[0].cuts, written->minimum_cuts[0].cuts);
+    EXPECT_EQ(original->minimum_cuts[0].width, written->minimum_cuts[0].width);
+    ASSERT_TRUE(original->minimum_cuts[1].within.has_value());
+    ASSERT_TRUE(written->minimum_cuts[1].within.has_value());
+    EXPECT_EQ(*original->minimum_cuts[1].within, *written->minimum_cuts[1].within);
+    EXPECT_EQ(original->minimum_cuts[1].connection, written->minimum_cuts[1].connection);
+    ASSERT_TRUE(original->minimum_cuts[1].length.has_value());
+    ASSERT_TRUE(written->minimum_cuts[1].length.has_value());
+    EXPECT_EQ(*original->minimum_cuts[1].length, *written->minimum_cuts[1].length);
+
+    ASSERT_EQ(original->min_steps.size(), 3u);
+    ASSERT_EQ(written->min_steps.size(), 3u);
+    EXPECT_TRUE(original->min_steps[0].min_step_type.empty());
+    EXPECT_TRUE(written->min_steps[0].min_step_type.empty());
+    EXPECT_EQ(original->min_steps[1].min_step_type, "INSIDECORNER");
+    EXPECT_EQ(written->min_steps[1].min_step_type, "INSIDECORNER");
+    ASSERT_TRUE(original->min_steps[1].lengthsum.has_value());
+    ASSERT_TRUE(written->min_steps[1].lengthsum.has_value());
+    EXPECT_EQ(*original->min_steps[1].lengthsum, *written->min_steps[1].lengthsum);
+    ASSERT_TRUE(original->min_steps[2].max_edges.has_value());
+    ASSERT_TRUE(written->min_steps[2].max_edges.has_value());
+    EXPECT_EQ(*original->min_steps[2].max_edges, *written->min_steps[2].max_edges);
+
+    ASSERT_TRUE(original->spacing_table_parallel_run_length.has_value());
+    ASSERT_TRUE(written->spacing_table_parallel_run_length.has_value());
+    EXPECT_EQ(original->spacing_table_parallel_run_length->lengths, written->spacing_table_parallel_run_length->lengths);
+    EXPECT_EQ(original->spacing_table_parallel_run_length->widths, written->spacing_table_parallel_run_length->widths);
+    EXPECT_EQ(original->spacing_table_parallel_run_length->spacings, written->spacing_table_parallel_run_length->spacings);
+
+    ASSERT_EQ(original->spacing_table_influence.size(), 2u);
+    ASSERT_EQ(written->spacing_table_influence.size(), 2u);
+    for (size_t i = 0; i < original->spacing_table_influence.size(); i++)
+    {
+        EXPECT_EQ(original->spacing_table_influence[i].width, written->spacing_table_influence[i].width);
+        EXPECT_EQ(original->spacing_table_influence[i].distance, written->spacing_table_influence[i].distance);
+        EXPECT_EQ(original->spacing_table_influence[i].spacing, written->spacing_table_influence[i].spacing);
+    }
 
     ASSERT_TRUE(original->resistance.has_value());
     ASSERT_TRUE(written->resistance.has_value());
@@ -205,9 +276,50 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsCutLayerWidthAndSpacing)
     ASSERT_TRUE(written->width.has_value());
     EXPECT_EQ(*original->width, *written->width);
 
-    ASSERT_TRUE(original->spacing.has_value());
-    ASSERT_TRUE(written->spacing.has_value());
-    EXPECT_EQ(*original->spacing, *written->spacing);
+    ASSERT_EQ(original->spacing_rules.size(), 7u);
+    ASSERT_EQ(written->spacing_rules.size(), 7u);
+    for (size_t i = 0; i < original->spacing_rules.size(); i++)
+        EXPECT_EQ(original->spacing_rules[i].distance, written->spacing_rules[i].distance) << "rule " << i;
+
+    // SPACING 0.22 ADJACENTCUTS 3 WITHIN 0.25
+    ASSERT_TRUE(original->spacing_rules[1].adjacent_cuts.has_value());
+    ASSERT_TRUE(written->spacing_rules[1].adjacent_cuts.has_value());
+    EXPECT_EQ(*original->spacing_rules[1].adjacent_cuts, *written->spacing_rules[1].adjacent_cuts);
+    ASSERT_TRUE(original->spacing_rules[1].adjacent_within.has_value());
+    ASSERT_TRUE(written->spacing_rules[1].adjacent_within.has_value());
+    EXPECT_EQ(*original->spacing_rules[1].adjacent_within, *written->spacing_rules[1].adjacent_within);
+    EXPECT_FALSE(original->spacing_rules[1].adjacent_except_same_pg_net);
+    EXPECT_FALSE(written->spacing_rules[1].adjacent_except_same_pg_net);
+
+    // SPACING 0.23 ADJACENTCUTS 2 WITHIN 0.3 EXCEPTSAMEPGNET
+    EXPECT_TRUE(original->spacing_rules[2].adjacent_except_same_pg_net);
+    EXPECT_TRUE(written->spacing_rules[2].adjacent_except_same_pg_net);
+
+    // SPACING 0.6 LAYER M1
+    EXPECT_EQ(original->spacing_rules[3].second_layer_name, "M1");
+    EXPECT_EQ(written->spacing_rules[3].second_layer_name, "M1");
+
+    // SPACING 1.5 PARALLELOVERLAP
+    EXPECT_TRUE(original->spacing_rules[4].parallel_overlap);
+    EXPECT_TRUE(written->spacing_rules[4].parallel_overlap);
+
+    // SPACING 0.24 CENTERTOCENTER
+    EXPECT_TRUE(original->spacing_rules[5].center_to_center);
+    EXPECT_TRUE(written->spacing_rules[5].center_to_center);
+
+    // SPACING 0.25 SAMENET
+    EXPECT_TRUE(original->spacing_rules[6].same_net);
+    EXPECT_TRUE(written->spacing_rules[6].same_net);
+    EXPECT_FALSE(original->spacing_rules[6].same_net_pg_only);
+    EXPECT_FALSE(written->spacing_rules[6].same_net_pg_only);
+
+    ASSERT_EQ(original->spacing_table_orthogonal.size(), 2u);
+    ASSERT_EQ(written->spacing_table_orthogonal.size(), 2u);
+    for (size_t i = 0; i < original->spacing_table_orthogonal.size(); i++)
+    {
+        EXPECT_EQ(original->spacing_table_orthogonal[i].cut_within, written->spacing_table_orthogonal[i].cut_within);
+        EXPECT_EQ(original->spacing_table_orthogonal[i].ortho_spacing, written->spacing_table_orthogonal[i].ortho_spacing);
+    }
 
     // V1 has no PITCH/OFFSET/AREA/RESISTANCE/... - proving they stay unset
     // through a round trip too, not accidentally defaulted to 0/written as
@@ -292,6 +404,69 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsAGenerateViaRuleWithEnclosureAndACut
     EXPECT_DOUBLE_EQ(*original_cut.resistance, *written_cut.resistance);
 }
 
+TEST_F(LEFWriterRoundtripFixture, RoundTripsSiteDefinitions)
+{
+    const SiteData *original_core = original_root.get_site(original_root.get_site_by_name("CORE"));
+    const SiteData *written_core = written_root.get_site(written_root.get_site_by_name("CORE"));
+    ASSERT_TRUE(original_core != nullptr);
+    ASSERT_TRUE(written_core != nullptr);
+
+    EXPECT_EQ(original_core->site_class, written_core->site_class);
+    ASSERT_TRUE(original_core->size.has_value());
+    ASSERT_TRUE(written_core->size.has_value());
+    EXPECT_EQ(original_core->size->x, written_core->size->x);
+    EXPECT_EQ(original_core->size->y, written_core->size->y);
+    EXPECT_EQ(original_core->symmetry.x, written_core->symmetry.x);
+    EXPECT_EQ(original_core->symmetry.y, written_core->symmetry.y);
+
+    const SiteData *original_dblcore = original_root.get_site(original_root.get_site_by_name("DBLCORE"));
+    const SiteData *written_dblcore = written_root.get_site(written_root.get_site_by_name("DBLCORE"));
+    ASSERT_TRUE(original_dblcore != nullptr);
+    ASSERT_TRUE(written_dblcore != nullptr);
+
+    ASSERT_EQ(original_dblcore->row_pattern.size(), written_dblcore->row_pattern.size());
+    for (size_t i = 0; i < original_dblcore->row_pattern.size(); i++)
+    {
+        EXPECT_EQ(original_dblcore->row_pattern[i].site_name, written_dblcore->row_pattern[i].site_name);
+        EXPECT_EQ(original_dblcore->row_pattern[i].orient, written_dblcore->row_pattern[i].orient);
+    }
+}
+
+TEST_F(LEFWriterRoundtripFixture, RoundTripsANonDefaultRuleWithAnEmbeddedViaAndUseStatements)
+{
+    const NonDefaultRuleData *original = original_root.get_non_default_rule(original_root.get_non_default_rule_by_name("WIDE_M1"));
+    const NonDefaultRuleData *written = written_root.get_non_default_rule(written_root.get_non_default_rule_by_name("WIDE_M1"));
+    ASSERT_TRUE(original != nullptr);
+    ASSERT_TRUE(written != nullptr);
+
+    EXPECT_EQ(original->hard_spacing, written->hard_spacing);
+
+    ASSERT_EQ(original->layers.size(), written->layers.size());
+    ASSERT_EQ(original->layers.size(), 1u);
+    EXPECT_EQ(original->layers[0].layer_name, written->layers[0].layer_name);
+    ASSERT_TRUE(original->layers[0].width.has_value());
+    ASSERT_TRUE(written->layers[0].width.has_value());
+    EXPECT_EQ(*original->layers[0].width, *written->layers[0].width);
+    ASSERT_TRUE(original->layers[0].spacing.has_value());
+    ASSERT_TRUE(written->layers[0].spacing.has_value());
+    EXPECT_EQ(*original->layers[0].spacing, *written->layers[0].spacing);
+
+    ASSERT_EQ(original->vias.size(), written->vias.size());
+    ASSERT_EQ(original->vias.size(), 1u);
+    EXPECT_EQ(original->vias[0].name, written->vias[0].name);
+    ASSERT_TRUE(original->vias[0].resistance.has_value());
+    ASSERT_TRUE(written->vias[0].resistance.has_value());
+    EXPECT_DOUBLE_EQ(*original->vias[0].resistance, *written->vias[0].resistance);
+    ASSERT_EQ(original->vias[0].layers.size(), written->vias[0].layers.size());
+
+    EXPECT_EQ(original->use_via_names, written->use_via_names);
+
+    ASSERT_EQ(original->min_cuts.size(), written->min_cuts.size());
+    ASSERT_EQ(original->min_cuts.size(), 1u);
+    EXPECT_EQ(original->min_cuts[0].cut_layer_name, written->min_cuts[0].cut_layer_name);
+    EXPECT_EQ(original->min_cuts[0].num_cuts, written->min_cuts[0].num_cuts);
+}
+
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
 {
     const DesignId original_design_id = original_root.get_design_by_name("WRITERTEST");
@@ -313,6 +488,13 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
     EXPECT_EQ(original->symmetry.y, written->symmetry.y);
     EXPECT_EQ(original->symmetry.r90, written->symmetry.r90);
     EXPECT_EQ(original->site, written->site);
+    EXPECT_EQ(original->eeq, written->eeq);
+    EXPECT_EQ(original->is_fixed_mask, written->is_fixed_mask);
+    // leq/power/source are never populated in the first place for a
+    // VERSION 5.8 file (lef.y's own grammar drops all three silently on
+    // read at that version) - see write_macro's own comment.
+    EXPECT_TRUE(original->leq.empty());
+    EXPECT_TRUE(written->leq.empty());
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsPinDirectionAndPortGeometryIncludingAMixedRectPolygonPath)
@@ -328,7 +510,17 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsPinDirectionAndPortGeometryIncluding
     const TerminalId original_terminal_id = original_root.get_abstract_terminals(original_abstract_id).front();
     const TerminalId written_terminal_id = written_root.get_abstract_terminals(written_abstract_id).front();
 
-    EXPECT_EQ(original_root.get_terminal(original_terminal_id)->direction, written_root.get_terminal(written_terminal_id)->direction);
+    const TerminalData *original_terminal = original_root.get_terminal(original_terminal_id);
+    const TerminalData *written_terminal = written_root.get_terminal(written_terminal_id);
+    EXPECT_EQ(original_terminal->direction, written_terminal->direction);
+    EXPECT_EQ(original_terminal->use, written_terminal->use);
+    EXPECT_EQ(original_terminal->shape, written_terminal->shape);
+    EXPECT_EQ(original_terminal->must_join, written_terminal->must_join);
+    EXPECT_EQ(original_terminal->net_expr, written_terminal->net_expr);
+    // leq is never populated at VERSION 5.8 (obsolete on both read and
+    // write - see write_terminal's own comment).
+    EXPECT_TRUE(original_terminal->leq.empty());
+    EXPECT_TRUE(written_terminal->leq.empty());
 
     ASSERT_EQ(original_root.get_terminal_ports(original_terminal_id).size(), 1u);
     ASSERT_EQ(written_root.get_terminal_ports(written_terminal_id).size(), 1u);
