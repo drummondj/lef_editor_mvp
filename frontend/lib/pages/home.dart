@@ -4,6 +4,7 @@ import 'package:lef_editor/components/main_menu.dart';
 import 'package:lef_editor/components/message_console.dart';
 import 'package:lef_editor/components/right_sidebar/right_sidebar.dart';
 import 'package:lef_editor/components/right_sidebar/right_sidebar_alt.dart';
+import 'package:lef_editor/components/tcl_console.dart';
 import 'package:lef_editor/components/widget_card.dart';
 
 class Home extends StatefulWidget {
@@ -43,7 +44,12 @@ class _HomeState extends State<Home> {
                 bottom: 0,
                 left: leftWidth,
                 right: rightWidth,
-                child: WidgetCard(child: MessageConsole()),
+                child: WidgetCard(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [MessageConsole(), TclConsole()],
+                  ),
+                ),
               ),
               Positioned(top: 0, bottom: 0, right: 0, child: RightSidebarAlt()),
             ],

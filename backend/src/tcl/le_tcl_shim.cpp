@@ -8,8 +8,22 @@
 
 namespace
 {
+    // Set by set_session_handle() (see le_tcl_shim.hpp) - an externally-
+    // owned handle wins over the lazy self-create below whenever one has
+    // been injected, e.g. by a Flutter-embedded Tcl console sharing the
+    // Dart-owned LeHandle* (see TCL_EXPLORATION.md's show_gui section).
+    LeHandle *&injected_handle()
+    {
+        static LeHandle *handle = nullptr;
+        return handle;
+    }
+
     LeHandle *session()
     {
+        if (injected_handle() != nullptr)
+        {
+            return injected_handle();
+        }
         static LeHandle *handle = le_create();
         return handle;
     }
@@ -138,6 +152,11 @@ int viewport_height()
 long long design_abstract_id(int design_index)
 {
     return pack(le_library_design_at(session(), 0, design_index).abstract_id);
+}
+
+void set_session_handle(long long handle_address)
+{
+    injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
 }
 
 // --- Terminal ---

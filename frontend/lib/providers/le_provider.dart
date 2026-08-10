@@ -97,6 +97,26 @@ class LeProvider extends ChangeNotifier {
     await _texture?.markFrameAvailable();
   }
 
+  // Lazily created on first use, reused across every runTclCommand call -
+  // a fresh LeTclConsole per command would mean a fresh Tcl_Interp per
+  // command too (variables/state set by one command wouldn't survive to
+  // the next), not what a console/REPL experience wants.
+  LeTclConsole? _tclConsole;
+
+  /// Runs one Tcl command against this provider's own editor (see
+  /// TCL_EXPLORATION.md's show_gui design - LeTclConsole shares the same
+  /// LeHandle this provider's texture already renders), returning the
+  /// interpreter's result text. Refreshes everything refreshAndNotify()
+  /// already does afterward, same as any other mutating action - a Tcl
+  /// command can change anything from design content to layer names, so
+  /// there's no narrower refresh worth hand-picking here.
+  Future<String> runTclCommand(String command) async {
+    _tclConsole ??= await _editor.createTclConsole();
+    final result = await _tclConsole!.eval(command);
+    refreshAndNotify();
+    return result;
+  }
+
   Future<void> refreshSnappedMousePosition() async {
     if (_editor.snappedMousePosition != null) {
       _snappedMousePosition = Offset(

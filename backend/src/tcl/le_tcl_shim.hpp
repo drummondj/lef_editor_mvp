@@ -90,6 +90,21 @@ long long design_abstract_id(int design_index);
 /// too.
 constexpr long long kInvalidId = 0xFFFFFFFFLL;
 
+/// @brief Point every subsequent shim call at an externally-owned
+/// LeHandle* (packed the same way every other id crosses this shim -
+/// see the "IDs" comment above) instead of the shim's own lazily-self-
+/// created one - e.g. the Dart-owned handle a Flutter-embedded Tcl
+/// console shares (see TCL_EXPLORATION.md's show_gui section), so a Tcl
+/// command mutates the exact same database the GUI is already
+/// rendering, not an unrelated standalone one. The shim never destroys
+/// an injected handle - ownership (le_destroy()) stays with whoever
+/// created it, same as le_shell's own self-created handle is never
+/// explicitly destroyed either (process-lifetime). Must be called (if
+/// at all) before any other shim function that touches session() - the
+/// self-created handle is lazily latched on session()'s first call and
+/// is never revisited afterward, injected or not.
+void set_session_handle(long long handle_address);
+
 // --- Terminal CRUD + search ---
 
 /// @brief Positional form behind `create_terminal -abstract ID -name NAME

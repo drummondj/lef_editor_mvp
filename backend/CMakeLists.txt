@@ -208,6 +208,52 @@ if(SWIG_FOUND AND TCL_FOUND)
     set_property(TARGET le_tcl PROPERTY SWIG_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/src/api ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl)
     target_include_directories(le_tcl PRIVATE src/api src/tcl ${TCL_INCLUDE_PATH})
     target_link_libraries(le_tcl PRIVATE api ${TCL_LIBRARY})
+    # Hide this target's own copy of the vendored LEF parser's symbols
+    # (everything under the LefDefParser:: namespace -
+    # src/tcl/le_tcl_unexported_symbols.txt). Without this, a process
+    # that *also* separately links the same static libraries
+    # (api/io/render/liblef.a) into another Mach-O image (e.g.
+    # lef_editor_plugin.framework, for LeTclBridge's embedded Tcl
+    # console - see TCL_EXPLORATION.md's show_gui section) crashes: dyld
+    # binds a call inside this module's own copy of the vendored parser
+    # (specifically LefDefParser::lefGetKeyword's internal keyword-table
+    # std::map, a function-local static) to the *other* image's
+    # differently-initialized copy of the same symbol instead of this
+    # module's own, reading through a garbage/uninitialized pointer -
+    # reproduced headlessly and fixed here after a real crash report,
+    # see ReadLefThroughTclFirstDoesNotCrash in
+    # src/tcl/tests/session_handle_test.cpp.
+    #
+    # Deliberately a *linker*-level denylist
+    # (-unexported_symbols_list), not CXX_VISIBILITY_PRESET or a
+    # blanket -exported_symbols_list allowlist - two things learned by
+    # trial, not assumed:
+    # - CXX_VISIBILITY_PRESET only sets compile flags for this target's
+    #   own two listed sources (le_tcl_shim.cpp, the SWIG wrap file) -
+    #   api/io/render/lef_lib are separate CMake targets, already
+    #   compiled into .a archives with default (visible) symbols, and a
+    #   consuming target's own visibility preset can't retroactively
+    #   hide symbols already baked into object code linked in from
+    #   elsewhere. Confirmed by trial: with only CXX_VISIBILITY_PRESET
+    #   set, the crash reproduced identically.
+    # - A blanket -exported_symbols_list allowlist (hide everything
+    #   except two named entry points) does stop the original crash, but
+    #   breaks something worse: it also hides libc++ typeinfo symbols
+    #   that are *supposed* to stay coalescable across dylib boundaries
+    #   (weak/vague linkage), so std::system_error thrown deep in the
+    #   parser's std::vector/std::map usage stops RTTI-matching a
+    #   `catch (const std::exception&)` in the calling image - "unknown
+    #   C++ exception" instead of a clean TCL_ERROR. Confirmed by trial
+    #   (abi::__cxa_current_exception_type()->name() ==
+    #   "NSt3__112system_errorE", uncaught by a std::exception handler).
+    #   A denylist scoped to exactly the confirmed culprit
+    #   (LefDefParser::) avoids this - everything else, including any
+    #   std:: template instantiated with a LefDefParser:: type as a
+    #   parameter (e.g. exception guards for vector<lefrOBSSpacing>),
+    #   keeps its normal default visibility and stays coalescable.
+    target_link_options(le_tcl PRIVATE
+        "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_unexported_symbols.txt"
+    )
 
     # Regression check for the spike itself (src/tcl/tests/smoke_test.tcl) -
     # loads the built module under tclsh, sources le_tcl_procs.tcl, and
@@ -257,6 +303,23 @@ if(SWIG_FOUND AND TCL_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/tests/shell_test.tcl
             ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
     )
+
+    # show_gui design regression check (src/tcl/tests/session_handle_test.cpp) -
+    # a plain GTest binary, not a Tcl script: proves set_session_handle()
+    # actually redirects le_tcl_shim.cpp's session() to an externally-
+    # owned LeHandle*, the mechanism a Flutter-embedded Tcl console
+    # relies on (see TCL_EXPLORATION.md's show_gui section). Kept out of
+    # backend_tests (unconditional, built even without SWIG/TCL) since
+    # this needs both.
+    add_executable(le_tcl_session_test src/tcl/tests/session_handle_test.cpp)
+    target_include_directories(le_tcl_session_test PRIVATE src/api ${TCL_INCLUDE_PATH})
+    target_link_libraries(le_tcl_session_test PRIVATE api ${TCL_LIBRARY} GTest::gtest_main)
+    target_compile_definitions(le_tcl_session_test PRIVATE
+        API_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures"
+        LE_TCL_MODULE_PATH="$<TARGET_FILE:le_tcl>"
+    )
+    add_dependencies(le_tcl_session_test le_tcl)
+    gtest_discover_tests(le_tcl_session_test)
 else()
     message(STATUS "SWIG and/or Tcl not found - skipping le_tcl spike target (see TCL_EXPLORATION.md Phase 0)")
 endif()

@@ -798,6 +798,24 @@ class LeEditor {
     return LeTexture._(textureId);
   }
 
+  /// Creates a Tcl console sharing this handle's own database (see
+  /// [LeTclConsole] - TCL_EXPLORATION.md's show_gui design): native code
+  /// embeds a Tcl interpreter pointed at this same `LeHandle*` via
+  /// `set_session_handle`, so every CRUD/search command a caller runs
+  /// through the returned [LeTclConsole] mutates the exact database this
+  /// [LeEditor] is already rendering - call [LeTexture.markFrameAvailable]
+  /// after each command to see the result, same as any other mutation.
+  Future<LeTclConsole> createTclConsole() async {
+    _checkNotDisposed();
+    final consoleId = await _channel.invokeMethod<int>('createTclConsole', {
+      'handleAddress': nativeHandleAddress,
+    });
+    if (consoleId == null) {
+      throw StateError('createTclConsole returned null');
+    }
+    return LeTclConsole._(consoleId);
+  }
+
   /// Destroys the native handle. Safe to call more than once. Dispose every
   /// [LeTexture] created from this editor first - see [LeTexture]'s own doc.
   void dispose() {
@@ -858,6 +876,50 @@ class LeTexture {
     _disposed = true;
     await _channel.invokeMethod<void>('disposeTexture', {
       'textureId': textureId,
+    });
+  }
+}
+
+/// A live Tcl console backed by one [LeEditor]'s native handle - obtain via
+/// [LeEditor.createTclConsole]. Every [eval] call runs synchronously
+/// (from Tcl's own point of view) on the native platform thread, against
+/// an embedded `Tcl_Interp` sharing the source [LeEditor]'s own database
+/// (see TCL_EXPLORATION.md's show_gui design) - a command that mutates the
+/// database (`create_terminal`, `delete_shape`, ...) doesn't refresh the
+/// screen on its own; call [LeTexture.markFrameAvailable] afterward, same
+/// as any other mutating action.
+///
+/// **Lifetime:** the source [LeEditor] must outlive this [LeTclConsole] -
+/// same constraint as [LeTexture], and for the same reason (native code
+/// holds the raw handle address, not a reference keeping it alive).
+class LeTclConsole {
+  LeTclConsole._(this._consoleId);
+
+  final int _consoleId;
+  bool _disposed = false;
+
+  /// Evaluates one Tcl command, returning the interpreter's string result
+  /// whether the command succeeded or failed - Tcl already puts the error
+  /// message in the same place on failure, so a caller checks the text
+  /// itself rather than a separate success flag, matching how a real
+  /// interactive Tcl shell prints either case.
+  Future<String> eval(String command) async {
+    if (_disposed) {
+      throw StateError('eval called on a disposed LeTclConsole');
+    }
+    final result = await _channel.invokeMethod<String>('evalTclCommand', {
+      'consoleId': _consoleId,
+      'command': command,
+    });
+    return result ?? '';
+  }
+
+  /// Destroys the native Tcl interpreter. Safe to call more than once.
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await _channel.invokeMethod<void>('disposeTclConsole', {
+      'consoleId': _consoleId,
     });
   }
 }

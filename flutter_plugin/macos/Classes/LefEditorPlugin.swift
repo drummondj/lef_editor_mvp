@@ -16,6 +16,15 @@ public class LefEditorPlugin: NSObject, FlutterPlugin {
   private let textureRegistry: FlutterTextureRegistry
   private var textures: [Int64: LeTexture] = [:]
 
+  /// Tcl consoles (see LeTclBridge.h - the show_gui in-app console,
+  /// TCL_EXPLORATION.md) keyed by an id this plugin hands back to Dart,
+  /// same pattern as `textures` above. `nextConsoleId` mirrors how
+  /// `textureRegistry.register` hands back its own id - there's no
+  /// equivalent registry for Tcl consoles (they aren't Flutter engine
+  /// objects), so this plugin owns the id space itself.
+  private var tclConsoles: [Int64: LeTclBridge] = [:]
+  private var nextConsoleId: Int64 = 0
+
   init(textureRegistry: FlutterTextureRegistry) {
     self.textureRegistry = textureRegistry
   }
@@ -58,6 +67,37 @@ public class LefEditorPlugin: NSObject, FlutterPlugin {
       }
       textureRegistry.unregisterTexture(textureId)
       textures.removeValue(forKey: textureId)
+      result(nil)
+
+    case "createTclConsole":
+      guard let handleAddress = (args["handleAddress"] as? NSNumber)?.int64Value else {
+        result(FlutterError(code: "bad_args", message: "createTclConsole requires handleAddress", details: nil))
+        return
+      }
+      let consoleId = nextConsoleId
+      nextConsoleId += 1
+      tclConsoles[consoleId] = LeTclBridge(handleAddress: handleAddress)
+      result(consoleId)
+
+    case "evalTclCommand":
+      guard let consoleId = (args["consoleId"] as? NSNumber)?.int64Value,
+            let command = args["command"] as? String
+      else {
+        result(FlutterError(code: "bad_args", message: "evalTclCommand requires consoleId and command", details: nil))
+        return
+      }
+      guard let bridge = tclConsoles[consoleId] else {
+        result(FlutterError(code: "unknown_console", message: "no Tcl console with id \(consoleId)", details: nil))
+        return
+      }
+      result(bridge.evalTcl(command))
+
+    case "disposeTclConsole":
+      guard let consoleId = (args["consoleId"] as? NSNumber)?.int64Value else {
+        result(FlutterError(code: "bad_args", message: "disposeTclConsole requires consoleId", details: nil))
+        return
+      }
+      tclConsoles.removeValue(forKey: consoleId)
       result(nil)
 
     default:

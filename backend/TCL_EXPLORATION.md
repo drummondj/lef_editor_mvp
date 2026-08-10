@@ -757,3 +757,152 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    Verified: full build + `ctest` (502/502, including the new
    `le_tcl_shell`) pass; `build_release` unaffected (this phase only adds
    to `src/tcl/`, not anything it links).
+
+   **`show_gui` follow-up — implemented, inverted embedding direction.**
+   The embed-a-FlutterEngine-in-Tcl direction above was researched
+   concretely (not just estimated) and confirmed genuinely high-risk:
+   Flutter's macOS embedding API is Objective-C only, a bare `Tcl_Main`
+   executable has no `.app` bundle for `FlutterDartProject` to find its
+   Dart AOT snapshot/`icudtl.dat` in, and — the real blocker —
+   `Tcl_Main`'s own blocking event loop and Cocoa's `NSApplication` run
+   loop both want to own the main thread (Tk solves exactly this for
+   `wish` via a custom `Tcl_NotifierProcs`, but that technique is
+   unverified for Flutter's engine and would be multi-day, speculative
+   work to find out). The user proposed inverting the direction instead:
+   keep `le_shell` and the Flutter app as two separate binaries, and
+   embed **Tcl as a library** (`Tcl_CreateInterp`/`Tcl_Eval` per command,
+   not `Tcl_Main`) inside the Flutter app's own already-running native
+   host, exposed as an in-app console widget — no second event loop to
+   reconcile, no bundle-discovery problem, no `FlutterTexture`
+   reimplementation, since the Flutter app's process/run loop/rendering
+   pipeline are all untouched.
+
+   - `src/tcl/le_tcl_shim.{hpp,cpp}` gained one new function,
+     `set_session_handle(long long)`, backward-compatibly overriding
+     `session()`'s lazy self-create with an externally-owned handle when
+     one has been injected (`le_shell`/`le_tcl` used standalone are
+     unaffected — nothing calls it there). A dedicated GTest
+     (`src/tcl/tests/session_handle_test.cpp`, `ctest`'s
+     `SessionHandle.InjectedHandleIsSharedNotFresh`) proves this two
+     ways: a handle pre-loaded directly via `api.hpp` (no Tcl involved)
+     is visible through an injected Tcl interpreter, and — the stronger
+     check — a Terminal created *via a Tcl command* is visible through a
+     *direct* `api.hpp` call on the same raw pointer afterward, ruling
+     out "two handles that happen to agree on one read."
+   - `flutter_plugin/macos/Classes/LeTclBridge.h`/`.mm` (new): owns one
+     `Tcl_Interp*`, created lazily, `load`s the same `le_tcl.so`
+     `le_shell` already builds and tests, injects the Dart-owned
+     `LeHandle*` via `set_session_handle`, sources `le_tcl_procs.tcl`,
+     and exposes `-evalTcl:` for synchronous one-command-at-a-time
+     evaluation — mirrors `LeApiBridge`'s existing shape exactly.
+     Deliberately links backend's **Debug** tree (`build/le_tcl.so`), not
+     Release like `libapi.a`/`librender.a`/`libio.a` — interpreting a
+     handful of typed commands per keystroke doesn't need optimized
+     build performance, and it avoids adding `le_tcl` to the Release
+     tree at all. `lef_editor_plugin.podspec` links Tcl (same
+     `tcl-tk@8` keg backend's own CMake pins) and injects the
+     `le_tcl.so`/`le_tcl_procs.tcl` absolute paths via
+     `GCC_PREPROCESSOR_DEFINITIONS` — dev-machine-only, same explicitly
+     accepted scope limit as every other backend path this podspec
+     already hardcodes.
+   - `LefEditorPlugin.swift` gained `createTclConsole`/`evalTclCommand`/
+     `disposeTclConsole` method-channel cases (mirroring the existing
+     texture ones); `lib/lef_editor_plugin.dart` gained
+     `LeEditor.createTclConsole()` and an `LeTclConsole` class (mirroring
+     `LeTexture`'s shape) wrapping them.
+   - `frontend/lib/components/tcl_console.dart` (new): a collapsible
+     panel next to the existing `MessageConsole`, with its own scrollback
+     and command-line `TextField`. `LeProvider.runTclCommand()` (new)
+     lazily creates one `LeTclConsole` per provider (reused across
+     commands — a fresh interpreter per command would lose Tcl variables/
+     state between them) and calls `refreshAndNotify()` after every
+     command, same as any other mutation — the texture is pull-based,
+     not auto-refreshing, so without this a Tcl-driven edit would stay
+     invisible until an unrelated interaction happened to trigger a
+     redraw.
+
+   Verified: `le_tcl_session_test` (new) passes, full backend `ctest`
+   stays green (503/503) confirming `le_shell`/`le_tcl` standalone
+   behavior is unaffected; `flutter_plugin`/`frontend` `dart analyze`
+   clean; both the plugin's `example` app and the real `frontend` app
+   build and link successfully (`nm -gU` confirms all 97 `le_*` symbols
+   still exported); `frontend` launches with no crash and no Tcl-bridge
+   error in the log, and a screenshot confirms the new console panel
+   renders correctly, collapsed, below `MessageConsole`. **Not verified**:
+   actually typing a command into the running console and watching it
+   take effect — simulating clicks/keystrokes needs Accessibility
+   permission this environment doesn't have (Screen Recording was
+   available, which is why the screenshot worked; System Events `click`
+   returned "not allowed assistive access"). That step needs a human
+   running the app.
+
+   **Real crash found and fixed by that human running the app**: `read_lef`
+   through the console segfaulted immediately (`EXC_BAD_ACCESS` in
+   `LefDefParser::lefGetKeyword`'s internal keyword-table lookup, called
+   from `le_tcl.so`'s own copy of the vendored LEF parser). Root cause:
+   `le_tcl.so` (dynamically `load`ed by `LeTclBridge`, statically linking
+   its own copy of `api`/`io`/`liblef.a`) and `lef_editor_plugin.framework`
+   (which *also* statically links the same code, for Dart FFI) are two
+   independently-compiled Mach-O images loaded into the *same* process.
+   `lefGetKeyword`'s keyword-table `std::map` is a function-local
+   `static` — ordinary, safe within one image — but with both images
+   exporting a symbol of the same mangled name at default visibility,
+   dyld bound `le_tcl.so`'s own internal call to the *other* image's
+   (uninitialized, in this call order) copy instead of its own,
+   dereferencing a garbage pointer. Reproduced headlessly and
+   deterministically (no need for the GUI or Accessibility permission)
+   via `SessionHandle.ReadLefThroughTclFirstDoesNotCrash`
+   (`src/tcl/tests/session_handle_test.cpp`): a plain GTest binary that
+   itself links `api` directly (mirroring the framework's own static
+   link) *and* dynamically `load`s `le_tcl.so` — the same two-copies-
+   one-process shape, no Flutter needed.
+   - **Fix**: `le_tcl`'s CMake target now links with
+     `-Wl,-unexported_symbols_list,src/tcl/le_tcl_unexported_symbols.txt`,
+     hiding every symbol under the `LefDefParser::` namespace (the
+     confirmed culprit — 1575 symbols, `nm`-verified) from `le_tcl.so`'s
+     exported symbol table, so dyld can never bind another image's call
+     (or `le_tcl.so`'s own calls, from another image's perspective) to
+     the wrong copy.
+   - **Two wrong turns on the way there, both instructive**:
+     `CXX_VISIBILITY_PRESET hidden` on the `le_tcl` target alone did
+     *nothing* — it only affects compile flags for the target's own two
+     listed sources; `api`/`io`/`render`/`lef_lib` are separate CMake
+     targets already compiled into `.a` archives with default-visible
+     symbols, and no downstream target's visibility preset can
+     retroactively hide symbols already baked into linked-in object
+     code. A blanket `-exported_symbols_list` allowlist (hide
+     everything except the two SWIG entry points) *did* stop the
+     segfault, but broke something worse: it also hides libc++ typeinfo
+     that's supposed to stay coalescable across dylib boundaries, so
+     `std::system_error` thrown deep in the parser's own
+     `std::vector`/`std::map` usage stopped RTTI-matching a
+     `catch (const std::exception&)` in the calling image — "unknown
+     C++ exception" instead of a clean `TCL_ERROR`
+     (`abi::__cxa_current_exception_type()->name()` confirmed
+     `NSt3__112system_errorE`, uncaught). The denylist scoped to exactly
+     `LefDefParser::` avoids this: everything else, including `std::`
+     templates instantiated with a `LefDefParser::` type as a parameter
+     (e.g. exception guards for `vector<lefrOBSSpacing>`), keeps normal
+     default visibility and stays coalescable.
+   - **A third scenario looked broken but wasn't real**: chaining
+     `ReadLefThroughTclFirstDoesNotCrash` directly after
+     `InjectedHandleIsSharedNotFresh` in one raw binary invocation (no
+     `--gtest_filter`) reintroduced the same `std::system_error`
+     symptom — a *second*, independent `Tcl_Interp` re-loading the
+     already-resident `le_tcl.so`. Isolated with a dedicated test
+     (`DirectReadThenSingleTclInterpReadBothSucceed`, one `Tcl_Interp`
+     only) that passes cleanly, confirming this is specific to two
+     *sequential, separate* `Tcl_Interp`s each loading the same `.so` —
+     not how `LeTclBridge` (one `Tcl_Interp`, created once, reused for
+     the session) or `le_shell` (`Tcl_Main`, also exactly one
+     `Tcl_Interp` per process) actually work, and not reachable through
+     `ctest` either (`gtest_discover_tests` runs each `TEST()` as its
+     own process). Not chased further.
+   - Verified: full backend `ctest` (505/505) passes, including three
+     `SessionHandle.*` tests covering the crash's exact repro, the real
+     app's actual "GUI-imports-then-console-reads" ordering, and the
+     original injected-handle proof. Also confirmed against the exact
+     file from the crash report
+     (`test_data/stripe_15layer.lef`), not just the `testcell.lef`
+     fixture — same result, since the bug is structural (which image's
+     copy of a symbol gets used), not dependent on LEF file content.

@@ -32,6 +32,26 @@ unless File.exist?(File.join(backend_build, 'libapi.a'))
         "cmake --build #{backend_build} --target api render io -j"
 end
 
+# le_tcl.so/le_tcl_procs.tcl (LeTclBridge.mm's show_gui Tcl console -
+# see TCL_EXPLORATION.md) come from backend's *Debug* tree, not
+# build_release like everything else above: unlike api/render/io (hot
+# render-path code), le_tcl only interprets a handful of typed commands
+# per keystroke, so Debug-build overhead here is irrelevant, and this
+# avoids needing le_tcl added to the Release tree at all. Same Tcl 8.6
+# keg (TCL_TK_ROOT) backend/CMakeLists.txt's own le_tcl/le_shell targets
+# already pin, for consistency - build/le_tcl.so must have been built
+# against that same Tcl before this links.
+backend_tcl_build = File.join(backend_dir, 'build')
+tcl_root = ENV['TCL_TK_ROOT'] || '/opt/homebrew/opt/tcl-tk@8'
+le_tcl_module_path = File.join(backend_tcl_build, 'le_tcl.so')
+le_tcl_procs_path = File.join(backend_dir, 'src/tcl/le_tcl_procs.tcl')
+
+unless File.exist?(le_tcl_module_path)
+  raise "backend/build/le_tcl.so not found - build it first: " \
+        "cmake -S #{backend_dir} -B #{backend_tcl_build} -DCMAKE_BUILD_TYPE=Debug && " \
+        "cmake --build #{backend_tcl_build} --target le_tcl -j"
+end
+
 Pod::Spec.new do |s|
   s.name             = 'lef_editor_plugin'
   s.version          = '0.0.1'
@@ -62,6 +82,11 @@ Flutter plugin binding the LEF Layout Editor C API and rendering le_render_pixel
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'LIBRARY_SEARCH_PATHS' => "\"/opt/homebrew/lib\" \"/opt/homebrew/opt/icu4c/lib\"",
+    'HEADER_SEARCH_PATHS' => "\"#{File.join(tcl_root, 'include/tcl-tk')}\"",
+    'GCC_PREPROCESSOR_DEFINITIONS' => [
+      "LE_TCL_MODULE_PATH='\"#{le_tcl_module_path}\"'",
+      "LE_TCL_PROCS_PATH='\"#{le_tcl_procs_path}\"'",
+    ].join(' '),
     'OTHER_LDFLAGS' => [
       # api.cpp's le_*() functions are never referenced by this plugin's
       # own compiled sources (Dart only finds them via dlsym at runtime) -
@@ -74,6 +99,11 @@ Flutter plugin binding the LEF Layout Editor C API and rendering le_render_pixel
       File.join(skia_dir, 'out/MacStatic/libskia.a'),
       '-lharfbuzz', '-licuuc', '-licudata', '-ljpeg', '-lpng', '-lz', '-lwebp', '-lwebpdemux',
       '-lspdlog', '-lfmt',
+      # LeTclBridge.mm's embedded Tcl interpreter (show_gui console) -
+      # dynamically `load`s le_tcl.so itself at runtime (see
+      # le_tcl_module_path above), so only libtcl itself needs linking
+      # here, not le_tcl.so.
+      File.join(tcl_root, 'lib/libtcl8.6.dylib'),
       # Everything above is a C++ archive underneath (operator new/delete,
       # __cxa_*, __gxx_personality_v0 all get pulled in) - linking libc++
       # itself is handled by Classes/LeApiBridge.mm being an Objective-C++

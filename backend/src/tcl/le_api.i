@@ -88,6 +88,7 @@ int viewport_width();
 int viewport_height();
 
 long long design_abstract_id(int design_index);
+void set_session_handle(long long handle_address);
 
 // --- Terminal ---
 long long create_terminal_cmd(long long abstract_id, const char *name, int direction);
