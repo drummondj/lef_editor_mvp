@@ -13,8 +13,9 @@ class StatusBar extends StatelessWidget {
           padding: const EdgeInsets.all(8.0),
           child: Row(
             spacing: 8,
-            mainAxisSize: .min,
             children: [
+              SelectableText(provider.tooltipMessage),
+              Spacer(),
               SelectableText(
                 "X: ${provider.snappedMousePosition.dx.toStringAsFixed(3)} Y: ${provider.snappedMousePosition.dy.toStringAsFixed(3)}",
               ),

@@ -19,7 +19,12 @@ class _RightSidebarState extends State<RightSidebar> {
       length: _tabs.length,
       child: Column(
         children: [
-          TabBar(tabs: [Tab(text: "Layers"), Tab(text: "Properties")]),
+          TabBar(
+            tabs: [
+              Tab(text: "Layers"),
+              Tab(text: "Properties"),
+            ],
+          ),
           Expanded(
             child: Builder(
               builder: (context) {

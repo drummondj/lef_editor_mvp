@@ -19,8 +19,8 @@ class MyApp extends StatelessWidget {
         home: const Home(),
         debugShowCheckedModeBanner: false,
         themeMode: .dark,
-        darkTheme: .dark(),
-        theme: .light(),
+        darkTheme: ThemeData(brightness: .dark, fontFamily: 'JetBrains Mono'),
+        theme: ThemeData(brightness: .light, fontFamily: 'JetBrains Mono'),
       ),
     );
   }

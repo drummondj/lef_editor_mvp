@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:lef_editor/components/layer_manager.dart';
 import 'package:lef_editor/components/layout_editor.dart';
 import 'package:lef_editor/components/main_menu.dart';
-import 'package:lef_editor/components/right_sidebar.dart';
-import 'package:lef_editor/components/status_bar.dart';
+import 'package:lef_editor/components/message_console.dart';
+import 'package:lef_editor/components/right_sidebar/right_sidebar.dart';
+import 'package:lef_editor/components/right_sidebar/right_sidebar_alt.dart';
+import 'package:lef_editor/components/widget_card.dart';
 
-class Home extends StatelessWidget {
+class Home extends StatefulWidget {
   const Home({super.key});
+
+  @override
+  State<Home> createState() => _HomeState();
+}
+
+class _HomeState extends State<Home> {
+  final double leftWidth = 300;
+  final double rightWidth = 100;
 
   @override
   Widget build(BuildContext context) {
@@ -14,22 +23,29 @@ class Home extends StatelessWidget {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(8.0),
-          child: Row(
-            crossAxisAlignment: .start,
+          child: Stack(
             children: [
-              MainMenu(),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    children: [
-                      Expanded(flex: 5, child: LayoutEditor()),
-                      StatusBar(),
-                    ],
-                  ),
-                ),
+              Positioned(
+                top: 10,
+                left: 10,
+                right: rightWidth,
+                bottom: 50,
+                child: LayoutEditor(),
               ),
-              SizedBox(width: 400, child: RightSidebar()),
+              Positioned(
+                top: 0,
+                left: 0,
+                bottom: 0,
+                width: leftWidth,
+                child: WidgetCard(child: MainMenu()),
+              ),
+              Positioned(
+                bottom: 0,
+                left: leftWidth,
+                right: rightWidth,
+                child: WidgetCard(child: MessageConsole()),
+              ),
+              Positioned(top: 0, bottom: 0, right: 0, child: RightSidebarAlt()),
             ],
           ),
         ),

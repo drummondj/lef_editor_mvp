@@ -91,7 +91,7 @@ class SelectedObjectTable extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       mainAxisSize: .min,
-      crossAxisAlignment: .start,
+      crossAxisAlignment: .center,
       children: [
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -103,6 +103,11 @@ class SelectedObjectTable extends StatelessWidget {
           ),
         ),
         DataTable(
+          dataRowMaxHeight: 24,
+          dataRowMinHeight: 16,
+          dividerThickness: 0.0,
+          headingRowHeight: 0.0,
+          decoration: BoxDecoration(),
           columns: [
             DataColumn(label: Text("Property")),
             DataColumn(label: Text("Value")),
