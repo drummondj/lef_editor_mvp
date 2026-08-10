@@ -795,21 +795,21 @@ static void BM_SceneSelect_ManyPiecesSameOrigin(benchmark::State &state)
 }
 BENCHMARK(BM_SceneSelect_ManyPiecesSameOrigin)->Arg(1000)->Arg(5000)->Arg(20000)->Unit(benchmark::kMillisecond);
 
-// Investigates a reported "still slow selecting Obstruction pieces
-// specifically, not Terminal pieces" symptom, after every previously-found
-// Scene/Renderer-side cost was fixed. Candidate: le::to_properties(le::
-// ObstructionData) - generated/obstruction.hpp - takes its argument *by
-// value*, so every call deep-copies the whole ObstructionData, including
-// its embedded `std::vector<Shape> shapes` (a real struct field, unlike
-// Terminal's ports which are pool-referenced via Root's own index, not
-// embedded - see api.cpp's build_selected_object_properties comment on
-// that distinction). api.cpp's build_selected_object_properties calls
-// exactly this (`le::to_properties(*obstruction)`) on every
-// le_selected_object_property_count() call - i.e. on every selection
-// change involving that Obstruction, regardless of which one piece was
-// actually selected. Measures the real stress-design Obstruction (all
-// ~900K OBS shapes under one ObstructionId) directly, not a synthetic
-// reconstruction.
+// Originally investigated a "still slow selecting Obstruction pieces"
+// symptom traced to le::to_properties(le::ObstructionData) deep-copying
+// ObstructionData's embedded `std::vector<Shape> shapes` on every call
+// (see BENCHMARKS.md's 2026-08-07 entry) - fixed at the time by passing
+// by const-reference in cmg's generated to_string/to_properties/
+// operator<<. Since then, `Shape` was pooled (TCL_EXPLORATION.md Phase
+// 3, for stable-id shape CRUD) and `Obstruction.shapes` became an
+// is_child relationship, not a struct field at all - ObstructionData no
+// longer has a `shapes` field to copy regardless of by-value/by-reference,
+// so the original 900K-shapes-in-one-copy scenario this benchmark
+// targeted can no longer happen for this specific field. Kept as a
+// regression guard that to_properties(ObstructionData) stays cheap (it's
+// now trivially so - ObstructionData is just one AbstractId), and
+// shapes_count now comes from a fast Root::get_obstruction_shapes(id)
+// index lookup (api.cpp's build_obstruction_properties), not a copy.
 static void BM_ToPropertiesObstructionCopyCost(benchmark::State &state)
 {
     const auto &data = stress_data();
@@ -821,7 +821,7 @@ static void BM_ToPropertiesObstructionCopyCost(benchmark::State &state)
         if (!found) { obstruction_id = id; found = true; } });
 
     const ObstructionData *obstruction = data.root.get_obstruction(obstruction_id);
-    state.counters["shapes"] = static_cast<double>(obstruction->shapes.size());
+    state.counters["shapes"] = static_cast<double>(data.root.get_obstruction_shapes(obstruction_id).size());
 
     for (auto _ : state)
     {

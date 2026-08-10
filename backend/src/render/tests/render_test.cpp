@@ -29,16 +29,29 @@ namespace
             abstract_id = root.create_abstract(AbstractData{});
         }
 
+        TerminalPortId add_port_shape(TerminalId terminal_id, const Shape &shape)
+        {
+            TerminalPortId port_id = root.create_terminal_port(TerminalPortData{.terminal = terminal_id});
+            Shape owned_shape = shape;
+            owned_shape.terminal_port = port_id;
+            root.create_shape(std::move(owned_shape));
+            return port_id;
+        }
+
         TerminalId add_terminal_shape(const Shape &shape)
         {
             TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
-            root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {shape}});
+            add_port_shape(terminal_id, shape);
             return terminal_id;
         }
 
         ObstructionId add_obstruction_shape(const Shape &shape)
         {
-            return root.create_obstruction(ObstructionData{.abstract = abstract_id, .shapes = {shape}});
+            ObstructionId obstruction_id = root.create_obstruction(ObstructionData{.abstract = abstract_id});
+            Shape owned_shape = shape;
+            owned_shape.obstruction = obstruction_id;
+            root.create_shape(std::move(owned_shape));
+            return obstruction_id;
         }
 
         // Rasterizes `picture` into a fresh, explicitly-cleared-to-transparent
@@ -485,7 +498,7 @@ TEST_F(RenderFixture, BuildPictureFillsAShortWidePathWithAPatternNotASolidBlock)
 TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentFill)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -517,7 +530,7 @@ TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentF
 TEST_F(RenderFixture, BuildPictureDrawsACrossAtEachLabelsOwnAnchorPoint)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -571,8 +584,8 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
 {
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape first_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {first_piece}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}}}});
+    add_port_shape(terminal_id, first_piece);
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}});
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -608,7 +621,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     // every other piece-outline test above uses a rect-only piece.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape polygon_piece{.layer_name = "M1", .polygons = {Polygon{.points = {{10, 10}, {30, 10}, {30, 30}, {10, 30}}}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {polygon_piece}});
+    add_port_shape(terminal_id, polygon_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -643,7 +656,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     // rect/polygon selection instead of reading as a filled blob.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+    add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -686,7 +699,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
     // typical long/thin case above.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 20}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+    add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -1077,7 +1090,7 @@ TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseM
     // split.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+    add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -1127,7 +1140,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{40, 40}, {60, 40}}}, .width = 4}}};
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {path_piece}});
+    add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);

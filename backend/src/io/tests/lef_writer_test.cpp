@@ -868,13 +868,17 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsPinScalarFieldsDirectionEnumPortCla
     ASSERT_TRUE(original_port_a != nullptr);
     ASSERT_TRUE(written_port_a != nullptr);
     EXPECT_EQ(original_port_a->port_class, written_port_a->port_class);
-    ASSERT_EQ(original_port_a->shapes.size(), written_port_a->shapes.size());
-    ASSERT_EQ(original_port_a->shapes.size(), 1u);
-    EXPECT_EQ(original_port_a->shapes[0].spacing, written_port_a->shapes[0].spacing);
-    ASSERT_EQ(original_port_a->shapes[0].vias.size(), written_port_a->shapes[0].vias.size());
-    ASSERT_EQ(original_port_a->shapes[0].vias.size(), 1u);
-    EXPECT_EQ(original_port_a->shapes[0].vias[0].via_name, written_port_a->shapes[0].vias[0].via_name);
-    EXPECT_EQ(original_port_a->shapes[0].vias[0].origin.x, written_port_a->shapes[0].vias[0].origin.x);
+    const std::vector<ShapeId> &original_port_a_shapes = original_root.get_terminal_port_shapes(original_port_ids[0]);
+    const std::vector<ShapeId> &written_port_a_shapes = written_root.get_terminal_port_shapes(written_port_ids[0]);
+    ASSERT_EQ(original_port_a_shapes.size(), written_port_a_shapes.size());
+    ASSERT_EQ(original_port_a_shapes.size(), 1u);
+    const Shape &original_port_a_shape = *original_root.get_shape(original_port_a_shapes[0]);
+    const Shape &written_port_a_shape = *written_root.get_shape(written_port_a_shapes[0]);
+    EXPECT_EQ(original_port_a_shape.spacing, written_port_a_shape.spacing);
+    ASSERT_EQ(original_port_a_shape.vias.size(), written_port_a_shape.vias.size());
+    ASSERT_EQ(original_port_a_shape.vias.size(), 1u);
+    EXPECT_EQ(original_port_a_shape.vias[0].via_name, written_port_a_shape.vias[0].via_name);
+    EXPECT_EQ(original_port_a_shape.vias[0].origin.x, written_port_a_shape.vias[0].origin.x);
 
     const TerminalData *original_pin_b = original_root.get_terminal(original_terminal_ids[1]);
     const TerminalData *written_pin_b = written_root.get_terminal(written_terminal_ids[1]);
@@ -891,10 +895,14 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsPinScalarFieldsDirectionEnumPortCla
     const ObstructionData *written_obs = written_root.get_obstruction(written_obs_ids.front());
     ASSERT_TRUE(original_obs != nullptr);
     ASSERT_TRUE(written_obs != nullptr);
-    ASSERT_EQ(original_obs->shapes.size(), written_obs->shapes.size());
-    ASSERT_EQ(original_obs->shapes.size(), 1u);
-    EXPECT_TRUE(original_obs->shapes[0].except_pg_net);
-    EXPECT_EQ(original_obs->shapes[0].except_pg_net, written_obs->shapes[0].except_pg_net);
+    const std::vector<ShapeId> &original_obs_shapes = original_root.get_obstruction_shapes(original_obs_ids.front());
+    const std::vector<ShapeId> &written_obs_shapes = written_root.get_obstruction_shapes(written_obs_ids.front());
+    ASSERT_EQ(original_obs_shapes.size(), written_obs_shapes.size());
+    ASSERT_EQ(original_obs_shapes.size(), 1u);
+    const Shape &original_obs_shape = *original_root.get_shape(original_obs_shapes[0]);
+    const Shape &written_obs_shape = *written_root.get_shape(written_obs_shapes[0]);
+    EXPECT_TRUE(original_obs_shape.except_pg_net);
+    EXPECT_EQ(original_obs_shape.except_pg_net, written_obs_shape.except_pg_net);
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
@@ -955,12 +963,14 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsPinDirectionAndPortGeometryIncluding
     ASSERT_EQ(original_root.get_terminal_ports(original_terminal_id).size(), 1u);
     ASSERT_EQ(written_root.get_terminal_ports(written_terminal_id).size(), 1u);
 
-    const TerminalPortData *original_port = original_root.get_terminal_port(original_root.get_terminal_ports(original_terminal_id).front());
-    const TerminalPortData *written_port = written_root.get_terminal_port(written_root.get_terminal_ports(written_terminal_id).front());
+    const TerminalPortId original_port_id = original_root.get_terminal_ports(original_terminal_id).front();
+    const TerminalPortId written_port_id = written_root.get_terminal_ports(written_terminal_id).front();
+    const std::vector<ShapeId> &original_port_shapes = original_root.get_terminal_port_shapes(original_port_id);
+    const std::vector<ShapeId> &written_port_shapes = written_root.get_terminal_port_shapes(written_port_id);
 
-    ASSERT_EQ(original_port->shapes.size(), written_port->shapes.size());
-    for (size_t i = 0; i < original_port->shapes.size(); i++)
-        expect_shapes_equal(original_port->shapes[i], written_port->shapes[i]);
+    ASSERT_EQ(original_port_shapes.size(), written_port_shapes.size());
+    for (size_t i = 0; i < original_port_shapes.size(); i++)
+        expect_shapes_equal(*original_root.get_shape(original_port_shapes[i]), *written_root.get_shape(written_port_shapes[i]));
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsObstructionRectIterateAndPathIterateAsRawStatementsNotExpanded)
@@ -973,22 +983,24 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsObstructionRectIterateAndPathIterate
     ASSERT_EQ(original_root.get_abstract_obstructions(original_abstract_id).size(), 1u);
     ASSERT_EQ(written_root.get_abstract_obstructions(written_abstract_id).size(), 1u);
 
-    const ObstructionData *original = original_root.get_obstruction(original_root.get_abstract_obstructions(original_abstract_id).front());
-    const ObstructionData *written = written_root.get_obstruction(written_root.get_abstract_obstructions(written_abstract_id).front());
+    const ObstructionId original_obstruction_id = original_root.get_abstract_obstructions(original_abstract_id).front();
+    const ObstructionId written_obstruction_id = written_root.get_abstract_obstructions(written_abstract_id).front();
+    const std::vector<ShapeId> &original_shapes = original_root.get_obstruction_shapes(original_obstruction_id);
+    const std::vector<ShapeId> &written_shapes = written_root.get_obstruction_shapes(written_obstruction_id);
 
-    ASSERT_EQ(original->shapes.size(), written->shapes.size());
-    for (size_t i = 0; i < original->shapes.size(); i++)
-        expect_shapes_equal(original->shapes[i], written->shapes[i]);
+    ASSERT_EQ(original_shapes.size(), written_shapes.size());
+    for (size_t i = 0; i < original_shapes.size(); i++)
+        expect_shapes_equal(*original_root.get_shape(original_shapes[i]), *written_root.get_shape(written_shapes[i]));
 
     // Belt-and-suspenders on the specific claim in this test's name: both
     // the original read and the round-tripped re-read see the ITERATE as
     // one raw statement each (num_x*num_y == 4/2), not 4/2 separately
     // materialized rects/paths - proving LEFWriter re-emitted compact
     // ITERATE syntax rather than expanded individual RECT/PATH statements.
-    ASSERT_EQ(original->shapes.front().rect_iterates.size(), 1u);
-    ASSERT_EQ(written->shapes.front().rect_iterates.size(), 1u);
-    ASSERT_EQ(original->shapes.front().path_iterates.size(), 1u);
-    ASSERT_EQ(written->shapes.front().path_iterates.size(), 1u);
+    ASSERT_EQ(original_root.get_shape(original_shapes.front())->rect_iterates.size(), 1u);
+    ASSERT_EQ(written_root.get_shape(written_shapes.front())->rect_iterates.size(), 1u);
+    ASSERT_EQ(original_root.get_shape(original_shapes.front())->path_iterates.size(), 1u);
+    ASSERT_EQ(written_root.get_shape(written_shapes.front())->path_iterates.size(), 1u);
 }
 
 TEST_F(LEFWriterRoundtripFixture, LayerWriteModeNoneWritesNoLayers)

@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.18.0",
+    version="0.19.0",
     classes=[
         Klass(
             name="Technology",
@@ -1195,9 +1195,21 @@ schema = Schema(
         ),
         Klass(
             name="Shape",
-            description="A shape on a layer",
-            has_pool=False,
+            description="A shape on a layer, owned by exactly one of TerminalPort or Obstruction (mutually exclusive - at most one of the terminal_port/obstruction parent fields is ever set on a given Shape)",
+            has_pool=True,
             fields=[
+                Field(
+                    name="terminal_port",
+                    description="Owning TerminalPort, if this Shape belongs to one (unset/invalid otherwise)",
+                    type="TerminalPort",
+                    parent="shapes",
+                ),
+                Field(
+                    name="obstruction",
+                    description="Owning Obstruction, if this Shape belongs to one (unset/invalid otherwise)",
+                    type="Obstruction",
+                    parent="shapes",
+                ),
                 Field(
                     name="layer_name",
                     description="The name of the layer",
@@ -1745,6 +1757,7 @@ schema = Schema(
                     description="The terminal port shapes",
                     type="Shape",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(name="port_class", description="LEF PORT CLASS (NONE/CORE/BUMP) - empty string if unset", type="str", example="BUMP"),
             ],
@@ -1764,6 +1777,7 @@ schema = Schema(
                     description="The obstruction shapes",
                     type="Shape",
                     is_list=True,
+                    is_child=True,
                 ),
             ],
         ),

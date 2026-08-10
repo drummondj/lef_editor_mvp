@@ -176,9 +176,95 @@ target_include_directories(api PUBLIC src/api)
 target_link_libraries(api PRIVATE database geometry scene view_style pipeline render io)
 le_enable_coverage_instrumentation(api)
 
+# --- le_tcl: Phase 0 SWIG toolchain spike (UPDATES.md item 15 /
+# TCL_EXPLORATION.md) - SWIG-wraps src/tcl/le_tcl_shim.{hpp,cpp} (a thin
+# Tcl-ergonomics layer over api.hpp - hidden session handle, domain-verb
+# command names) into a loadable Tcl extension, proving the build/link
+# story before any CRUD/filter-search work exists to wrap for real.
+# Optional: only built if SWIG and Tcl are both found, so a machine not
+# yet provisioned for this (e.g. CI) still configures/builds everything
+# else. Pinned to Homebrew's tcl-tk@8 (Tcl 8.6), not the also-installed
+# tcl-tk 9.0 - SWIG 4.5's Tcl support is battle-tested against 8.x, and
+# Tcl 9's C ABI (released 2025) isn't yet a safe default target for this
+# spike. Override TCL_TK_ROOT for a different Tcl 8.x install. ---
+set(TCL_TK_ROOT "/opt/homebrew/opt/tcl-tk@8" CACHE PATH
+    "Path to a Tcl 8.6 install (Homebrew tcl-tk@8 keg) used for the SWIG Tcl spike")
+if(EXISTS "${TCL_TK_ROOT}/include/tcl-tk/tcl.h")
+    set(TCL_INCLUDE_PATH "${TCL_TK_ROOT}/include/tcl-tk" CACHE PATH "" FORCE)
+    set(TCL_LIBRARY "${TCL_TK_ROOT}/lib/libtcl8.6.dylib" CACHE FILEPATH "" FORCE)
+    set(TCL_TCLSH "${TCL_TK_ROOT}/bin/tclsh8.6" CACHE FILEPATH "" FORCE)
+endif()
+
+find_package(SWIG 4.0)
+find_package(TCL)
+
+if(SWIG_FOUND AND TCL_FOUND)
+    include(UseSWIG)
+    set_property(SOURCE src/tcl/le_api.i PROPERTY CPLUSPLUS ON)
+    swig_add_library(le_tcl
+        LANGUAGE tcl
+        SOURCES src/tcl/le_api.i src/tcl/le_tcl_shim.cpp
+    )
+    set_property(TARGET le_tcl PROPERTY SWIG_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/src/api ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl)
+    target_include_directories(le_tcl PRIVATE src/api src/tcl ${TCL_INCLUDE_PATH})
+    target_link_libraries(le_tcl PRIVATE api ${TCL_LIBRARY})
+
+    # Regression check for the spike itself (src/tcl/tests/smoke_test.tcl) -
+    # loads the built module under tclsh, sources le_tcl_procs.tcl, and
+    # exercises the ergonomic command surface against the same
+    # testcell.lef fixture api_test.cpp's C++ tests already use, asserting
+    # the same expected values so this doesn't silently bit-rot.
+    add_test(
+        NAME le_tcl_smoke
+        COMMAND ${TCL_TCLSH}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/tests/smoke_test.tcl
+            $<TARGET_FILE:le_tcl>
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
+    )
+
+    # Phase 5 regression check (src/tcl/tests/crud_test.tcl) - exercises
+    # the full Terminal/TerminalPort/Obstruction/Shape CRUD+search
+    # surface and the coordinate-list typemap, against the same
+    # testcell.lef fixture.
+    add_test(
+        NAME le_tcl_crud
+        COMMAND ${TCL_TCLSH}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/tests/crud_test.tcl
+            $<TARGET_FILE:le_tcl>
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
+    )
+
+    # Phase 6 batch shell (src/tcl/le_shell.cpp) - a small Tcl_Main-based
+    # binary, not linked against le_tcl (it dynamically `load`s the built
+    # shared module at startup, same as tclsh would) - only needs Tcl
+    # itself.
+    add_executable(le_shell src/tcl/le_shell.cpp)
+    target_include_directories(le_shell PRIVATE ${TCL_INCLUDE_PATH})
+    target_link_libraries(le_shell PRIVATE ${TCL_LIBRARY})
+
+    # Batch-mode regression check (src/tcl/tests/shell_test.tcl) - runs
+    # through the real compiled le_shell binary (not tclsh directly
+    # loading le_tcl, which smoke_test.tcl/crud_test.tcl already cover),
+    # verifying its own bootstrap (argv flag handling, `load`, sourcing
+    # le_tcl_procs.tcl) actually works end to end.
+    add_test(
+        NAME le_tcl_shell
+        COMMAND $<TARGET_FILE:le_shell>
+            -module $<TARGET_FILE:le_tcl>
+            -procs ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/tests/shell_test.tcl
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
+    )
+else()
+    message(STATUS "SWIG and/or Tcl not found - skipping le_tcl spike target (see TCL_EXPLORATION.md Phase 0)")
+endif()
+
 # --- tests ---
 add_executable(backend_tests
     src/database/tests/database_test.cpp
+    src/database/tests/filter_test.cpp
     src/geometry/tests/geometry_test.cpp
     src/view_style/tests/view_style_test.cpp
     src/scene/tests/scene_test.cpp

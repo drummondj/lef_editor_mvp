@@ -180,3 +180,63 @@ Ruler display:
 # 14. Properties revisit
 
 I notice that the properties contain the bbox of shapes and not the raw values. I would like to see the raw polygon, path and rect values as properties, in addition to the bbox.
+
+Also, I would like the boundary layer selectable, which selects the abstract object and creates it's properties in the API.
+
+# 15. TCL support exploration - DONE (see TCL_EXPLORATION.md; `show_gui` deliberately deferred)
+
+I would like to explore how to enable TCL commands to be executed by the user.
+
+For example:
+
+```tcl
+read_lef <filename>
+create_library -name my_library
+current_library my_library
+create_design -name top_design
+current_design top_design
+create_view -type abstract
+current_view abstract
+
+create_terminal -name IN0 -direction IN
+create_terminal_port -terminal IN0 -shapes {0.1 0.1 0.3 0.4} -layer M4
+
+set terminals [get_terminal -filter {.name =~ IN*}]
+
+set i 0
+foreach terminal $terminals {
+    create_terminal_port -terminal $terminal -shapes [list [expr $i * 10 - 10] 0 [expr $i * 10 + 10] 100]
+}
+
+set terminal_ports [get_terminal_ports -filter {.terminal.name =~ IN* && .layer_name == M4}]
+
+foreach terminal_port $terminal_ports {
+    update_terminal_port -name [get_prop $terminal_port .name]_SUFFIX
+}
+
+delete_terminal [get_terminal]
+
+... etc ...
+```
+
+The main CRUD functions are, for each type of object:
+
+- create
+- get
+- update
+- delete
+
+This is just a very rough example, not an exact specification, we would need to plan a concrete specification. Especially how to create different shapes, rect, poly, and path.
+
+Ideally, I would like to support a batch mode where the user can run a terminal command to open an interactive TCL shell interface. Then use a TCL command, e.g. show_gui, to open the Flutter GUI. Please explore if this is possible. Possible problems include:
+
+1. How to connect the GUI to the Root database already read in batch mode
+2. How to refresh the GUI when TCL commands are entered in the shell
+
+The reason I want to explore this now, is because the next step is to create API functions to create/read/update/delete terminal, obstruction and boundary objects and their shapes. I would like to develop the C API so it can be used by the Flutter GUI and a TCL shell at the same time.
+
+There is a TCL interface generator called SWIG which may be useful to wrap the C API into a TCL API.
+
+Also, Shape objects may need to be added to a pool to support this. The reason they are not in a pool right now, is that they can multiple parent types.
+
+cmg could be used to generate the C API.

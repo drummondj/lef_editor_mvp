@@ -1,10 +1,12 @@
 #include "../api.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -2225,4 +2227,588 @@ TEST_F(ApiFixture, ConcurrentRenderAndMousePositionCallsOnTheSameHandleDoNotCras
         le_set_mouse_position(handle, i % 200, (i * 7) % 200);
 
     render_thread.join();
+}
+
+// --- Terminal CRUD + filter-search (UPDATES.md item 15 / TCL_EXPLORATION.md
+// Phase 4) ---
+
+namespace
+{
+    LeAbstractId testcell_abstract_id(LeHandle *handle)
+    {
+        return le_library_design_at(handle, 0, 0).abstract_id;
+    }
+}
+
+TEST_F(ApiFixture, CreateTerminalWithNullHandleOrNameReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    EXPECT_EQ(le_create_terminal(nullptr, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal(handle, abstract_id, nullptr, LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, CreateTerminalWithUnknownAbstractIdReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId bogus{.index = UINT32_MAX, .generation = 0};
+
+    EXPECT_EQ(le_create_terminal(handle, bogus, "IN0", LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, CreateTerminalSucceedsAndIsReadableViaProperties)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    ASSERT_NE(id.index, UINT32_MAX);
+
+    const int32_t count = le_terminal_property_count(handle, id);
+    ASSERT_GT(count, 0);
+
+    bool found_name = false, found_direction = false, found_port_count = false;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        const LeProperty property = le_terminal_property_at(handle, id, i);
+        ASSERT_NE(property.name, nullptr);
+        if (std::string(property.name) == "name")
+        {
+            found_name = true;
+            EXPECT_STREQ(property.string_value, "IN0");
+        }
+        else if (std::string(property.name) == "direction")
+        {
+            found_direction = true;
+            EXPECT_STREQ(property.string_value, "INPUT");
+        }
+        else if (std::string(property.name) == "port_count")
+        {
+            found_port_count = true;
+            EXPECT_EQ(property.int_value, 0); // no ports created yet
+        }
+    }
+    EXPECT_TRUE(found_name);
+    EXPECT_TRUE(found_direction);
+    EXPECT_TRUE(found_port_count);
+}
+
+TEST_F(ApiFixture, TerminalPropertyCountAndAtForUnknownIdDegradeGracefully)
+{
+    const LeTerminalId bogus{.index = UINT32_MAX, .generation = 0};
+    EXPECT_EQ(le_terminal_property_count(handle, bogus), 0);
+
+    const LeProperty property = le_terminal_property_at(handle, bogus, 0);
+    EXPECT_EQ(property.name, nullptr);
+
+    EXPECT_EQ(le_terminal_property_count(nullptr, bogus), 0);
+}
+
+TEST_F(ApiFixture, SetTerminalNameAndDirectionUpdateTheirProperties)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    ASSERT_NE(id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_set_terminal_name(handle, id, "IN0_RENAMED"), 0);
+    EXPECT_EQ(le_set_terminal_direction(handle, id, LE_SIGNAL_DIRECTION_OUTPUT), 0);
+
+    const int32_t count = le_terminal_property_count(handle, id);
+    bool checked_name = false, checked_direction = false;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        const LeProperty property = le_terminal_property_at(handle, id, i);
+        if (std::string(property.name) == "name")
+        {
+            checked_name = true;
+            EXPECT_STREQ(property.string_value, "IN0_RENAMED");
+        }
+        else if (std::string(property.name) == "direction")
+        {
+            checked_direction = true;
+            EXPECT_STREQ(property.string_value, "OUTPUT");
+        }
+    }
+    EXPECT_TRUE(checked_name);
+    EXPECT_TRUE(checked_direction);
+}
+
+TEST_F(ApiFixture, SetTerminalNameAndDirectionWithNullHandleOrUnknownIdReturnNonzero)
+{
+    const LeTerminalId bogus{.index = UINT32_MAX, .generation = 0};
+    EXPECT_NE(le_set_terminal_name(nullptr, bogus, "X"), 0);
+    EXPECT_NE(le_set_terminal_name(handle, bogus, nullptr), 0);
+    EXPECT_NE(le_set_terminal_name(handle, bogus, "X"), 0);
+    EXPECT_NE(le_set_terminal_direction(nullptr, bogus, LE_SIGNAL_DIRECTION_OUTPUT), 0);
+    EXPECT_NE(le_set_terminal_direction(handle, bogus, LE_SIGNAL_DIRECTION_OUTPUT), 0);
+}
+
+TEST_F(ApiFixture, DeleteTerminalRemovesItAndIsIdempotentlySafeAfterwards)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    ASSERT_NE(id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_delete_terminal(handle, id), 0);
+    EXPECT_EQ(le_terminal_property_count(handle, id), 0);
+    // Already deleted, and a never-created id - neither crashes.
+    EXPECT_NE(le_delete_terminal(handle, id), 0);
+    EXPECT_NE(le_delete_terminal(handle, LeTerminalId{.index = UINT32_MAX, .generation = 0}), 0);
+    EXPECT_NE(le_delete_terminal(nullptr, id), 0);
+}
+
+TEST_F(ApiFixture, SearchTerminalFindsMatchesByFilterExpression)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId in1 = le_create_terminal(handle, abstract_id, "IN1", LE_SIGNAL_DIRECTION_INPUT);
+    le_create_terminal(handle, abstract_id, "OUT0", LE_SIGNAL_DIRECTION_OUTPUT);
+
+    const int32_t count = le_search_terminal(handle, ".name =~ IN*");
+    ASSERT_EQ(count, 2);
+
+    std::vector<uint32_t> found;
+    for (int32_t i = 0; i < count; ++i)
+        found.push_back(le_search_result_terminal_at(handle, i).index);
+    EXPECT_NE(std::find(found.begin(), found.end(), in0.index), found.end());
+    EXPECT_NE(std::find(found.begin(), found.end(), in1.index), found.end());
+
+    EXPECT_EQ(le_search_terminal(handle, ".direction == OUTPUT"), 1);
+    EXPECT_EQ(le_search_terminal(handle, ".name == DOES_NOT_EXIST"), 0);
+}
+
+TEST_F(ApiFixture, SearchTerminalWithBadFilterExpressionReturnsNegativeOneAndPushesAMessage)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const int32_t before = le_message_count(handle);
+
+    EXPECT_EQ(le_search_terminal(handle, "not a filter expression"), -1);
+    EXPECT_GT(le_message_count(handle), before);
+
+    EXPECT_EQ(le_search_terminal(nullptr, ".name == X"), 0);
+    EXPECT_EQ(le_search_terminal(handle, nullptr), 0);
+}
+
+TEST_F(ApiFixture, SearchResultTerminalAtOutOfRangeReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_search_terminal(handle, ".name == DOES_NOT_EXIST"), 0);
+
+    EXPECT_EQ(le_search_result_terminal_at(handle, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_search_result_terminal_at(handle, -1).index, UINT32_MAX);
+    EXPECT_EQ(le_search_result_terminal_at(nullptr, 0).index, UINT32_MAX);
+}
+
+// --- TerminalPort/Obstruction CRUD + filter-search, and Abstract boundary
+// update (Phase 4, continued) ---
+
+namespace
+{
+    constexpr double kRect0[] = {0.1, 0.1, 0.3, 0.4}; // matches UPDATES.md item 15's own example verbatim
+
+    // Composes le_create_terminal_port + le_create_terminal_port_shape +
+    // le_add_shape_rect - the common case most tests below want (a port
+    // with exactly one rect shape), without re-typing the three-call
+    // sequence in every test. Tests that specifically exercise one of
+    // those three calls' own validation call them directly instead.
+    LeTerminalPortId create_terminal_port_with_rect(LeHandle *handle, LeTerminalId terminal_id, const char *layer_name, const double rect_um[4])
+    {
+        const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id);
+        const LeShapeId shape_id = le_create_terminal_port_shape(handle, port_id, layer_name);
+        le_add_shape_rect(handle, shape_id, rect_um[0], rect_um[1], rect_um[2], rect_um[3]);
+        return port_id;
+    }
+
+    LeObstructionId create_obstruction_with_rect(LeHandle *handle, LeAbstractId abstract_id, const char *layer_name, const double rect_um[4])
+    {
+        const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+        const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, layer_name);
+        le_add_shape_rect(handle, shape_id, rect_um[0], rect_um[1], rect_um[2], rect_um[3]);
+        return obstruction_id;
+    }
+}
+
+TEST_F(ApiFixture, CreateTerminalPortWithNullHandleOrUnknownTerminalReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    EXPECT_EQ(le_create_terminal_port(nullptr, LeTerminalId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal_port(handle, LeTerminalId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, CreateTerminalPortSucceedsAndIsReadableViaProperties)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+
+    const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
+    ASSERT_NE(port_id.index, UINT32_MAX);
+
+    const int32_t count = le_terminal_port_property_count(handle, port_id);
+    bool found_shapes_count = false;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        const LeProperty property = le_terminal_port_property_at(handle, port_id, i);
+        if (std::string(property.name) == "shapes_count")
+        {
+            found_shapes_count = true;
+            EXPECT_EQ(property.int_value, 1);
+        }
+    }
+    EXPECT_TRUE(found_shapes_count);
+
+    // The Terminal's own port_count now reflects the new port.
+    const int32_t terminal_property_count = le_terminal_property_count(handle, terminal_id);
+    for (int32_t i = 0; i < terminal_property_count; ++i)
+    {
+        const LeProperty property = le_terminal_property_at(handle, terminal_id, i);
+        if (std::string(property.name) == "port_count")
+            EXPECT_EQ(property.int_value, 1);
+    }
+}
+
+TEST_F(ApiFixture, DeleteTerminalPortCascadesToItsShapesAndIsIdempotentlySafeAfterwards)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
+    ASSERT_NE(port_id.index, UINT32_MAX);
+    const LeShapeId shape_id = le_terminal_port_shape_at(handle, port_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_delete_terminal_port(handle, port_id), 0);
+    EXPECT_EQ(le_terminal_port_property_count(handle, port_id), 0);
+    // Cascade: the shape it owned is gone too, not left as unreachable garbage.
+    EXPECT_EQ(le_shape_layer_name(handle, shape_id), nullptr);
+    EXPECT_NE(le_delete_terminal_port(handle, port_id), 0);
+    EXPECT_NE(le_delete_terminal_port(nullptr, port_id), 0);
+}
+
+TEST_F(ApiFixture, SearchTerminalPortFindsMatchesUsingUpdatesMdItem15SExampleExpression)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId out0 = le_create_terminal(handle, abstract_id, "OUT0", LE_SIGNAL_DIRECTION_OUTPUT);
+    const LeTerminalPortId matching_port = create_terminal_port_with_rect(handle, in0, "M4", kRect0);
+    create_terminal_port_with_rect(handle, in0, "M5", kRect0);  // wrong layer
+    create_terminal_port_with_rect(handle, out0, "M4", kRect0); // wrong terminal name
+    ASSERT_NE(matching_port.index, UINT32_MAX);
+
+    const int32_t count = le_search_terminal_port(handle, ".terminal.name =~ IN* && .shapes.layer_name == M4");
+    ASSERT_EQ(count, 1);
+    EXPECT_EQ(le_search_result_terminal_port_at(handle, 0).index, matching_port.index);
+}
+
+TEST_F(ApiFixture, SearchTerminalPortWithBadFilterExpressionReturnsNegativeOne)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    EXPECT_EQ(le_search_terminal_port(handle, "not a filter expression"), -1);
+}
+
+TEST_F(ApiFixture, CreateObstructionWithNullHandleOrUnknownAbstractReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    EXPECT_EQ(le_create_obstruction(nullptr, LeAbstractId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
+    EXPECT_EQ(le_create_obstruction(handle, LeAbstractId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, CreateObstructionSucceedsAndIsReadableViaProperties)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    const LeObstructionId id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    ASSERT_NE(id.index, UINT32_MAX);
+
+    const int32_t count = le_obstruction_property_count(handle, id);
+    bool found_shapes_count = false;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        const LeProperty property = le_obstruction_property_at(handle, id, i);
+        if (std::string(property.name) == "shapes_count")
+        {
+            found_shapes_count = true;
+            EXPECT_EQ(property.int_value, 1);
+        }
+    }
+    EXPECT_TRUE(found_shapes_count);
+}
+
+TEST_F(ApiFixture, DeleteObstructionCascadesToItsShapesAndIsIdempotentlySafeAfterwards)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    ASSERT_NE(id.index, UINT32_MAX);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_delete_obstruction(handle, id), 0);
+    EXPECT_EQ(le_obstruction_property_count(handle, id), 0);
+    EXPECT_EQ(le_shape_layer_name(handle, shape_id), nullptr);
+    EXPECT_NE(le_delete_obstruction(handle, id), 0);
+    EXPECT_NE(le_delete_obstruction(nullptr, id), 0);
+}
+
+TEST_F(ApiFixture, SearchObstructionFindsMatchesByLayerName)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId matching = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    create_obstruction_with_rect(handle, abstract_id, "M5", kRect0);
+    ASSERT_NE(matching.index, UINT32_MAX);
+
+    const int32_t count = le_search_obstruction(handle, ".shapes.layer_name == M4");
+    ASSERT_EQ(count, 1);
+    EXPECT_EQ(le_search_result_obstruction_at(handle, 0).index, matching.index);
+}
+
+TEST_F(ApiFixture, UpdateAbstractBoundaryWithNullHandleOrCoordsOrTooFewOrOddPointsReturnsNonzero)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    constexpr double triangle[] = {0.0, 0.0, 1.0, 0.0, 0.5, 1.0};
+
+    EXPECT_NE(le_update_abstract_boundary(nullptr, abstract_id, triangle, 6), 0);
+    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, nullptr, 6), 0);
+    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, triangle, 4), 0);  // fewer than 3 points
+    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, triangle, 5), 0);  // odd (not x/y pairs)
+    EXPECT_NE(le_update_abstract_boundary(handle, LeAbstractId{.index = UINT32_MAX, .generation = 0}, triangle, 6), 0);
+}
+
+TEST_F(ApiFixture, UpdateAbstractBoundaryWithAValidPolygonSucceeds)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    constexpr double square[] = {0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+
+    EXPECT_EQ(le_update_abstract_boundary(handle, abstract_id, square, 8), 0);
+}
+
+// --- Shape CRUD, addressed by a stable id (Phase 4, continued). Rects,
+// polygons, and paths are all created/read/removed via their own
+// symmetric set of calls - none baked into creation, matching the design
+// decision recorded in TCL_EXPLORATION.md. ---
+
+TEST_F(ApiFixture, CreateShapeWithNullHandleOrLayerNameOrUnknownParentReturnsInvalidId)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id);
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+
+    EXPECT_EQ(le_create_terminal_port_shape(nullptr, port_id, "M4").index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal_port_shape(handle, port_id, nullptr).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal_port_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, "M4").index, UINT32_MAX);
+
+    EXPECT_EQ(le_create_obstruction_shape(nullptr, obstruction_id, "M4").index, UINT32_MAX);
+    EXPECT_EQ(le_create_obstruction_shape(handle, obstruction_id, nullptr).index, UINT32_MAX);
+    EXPECT_EQ(le_create_obstruction_shape(handle, LeObstructionId{.index = UINT32_MAX, .generation = 0}, "M4").index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, TerminalPortShapeCountAndAtEnumerateAndReadBackWhatWasCreated)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
+    ASSERT_NE(port_id.index, UINT32_MAX);
+
+    ASSERT_EQ(le_terminal_port_shape_count(handle, port_id), 1);
+    const LeShapeId shape_id = le_terminal_port_shape_at(handle, port_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M4");
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 1);
+    const LeRectUm rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.1);
+    EXPECT_DOUBLE_EQ(rect.ll_y_um, 0.1);
+    EXPECT_DOUBLE_EQ(rect.ur_x_um, 0.3);
+    EXPECT_DOUBLE_EQ(rect.ur_y_um, 0.4);
+
+    EXPECT_EQ(le_terminal_port_shape_at(handle, port_id, 1).index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, ObstructionShapeCountAndAtEnumerateAndReadBackWhatWasCreated)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M5", kRect0);
+    ASSERT_NE(obstruction_id.index, UINT32_MAX);
+
+    ASSERT_EQ(le_obstruction_shape_count(handle, obstruction_id), 1);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M5");
+}
+
+TEST_F(ApiFixture, SetShapeLayerNameRenamesWithoutTouchingGeometryOrParent)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_set_shape_layer_name(handle, shape_id, "M6"), 0);
+
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M6");
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 1); // untouched
+    const LeRectUm rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.1); // untouched
+
+    // Same shape id, same parent.
+    EXPECT_EQ(le_obstruction_shape_count(handle, obstruction_id), 1);
+    EXPECT_EQ(le_obstruction_shape_at(handle, obstruction_id, 0).index, shape_id.index);
+}
+
+TEST_F(ApiFixture, SetShapeLayerNameWithNullHandleOrLayerNameOrUnknownIdReturnsNonzero)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_NE(le_set_shape_layer_name(nullptr, shape_id, "M6"), 0);
+    EXPECT_NE(le_set_shape_layer_name(handle, shape_id, nullptr), 0);
+    EXPECT_NE(le_set_shape_layer_name(handle, LeShapeId{.index = UINT32_MAX, .generation = 0}, "M6"), 0);
+
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M4"); // untouched
+}
+
+TEST_F(ApiFixture, AddAndRemoveShapeRect)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 0);
+
+    EXPECT_NE(le_add_shape_rect(nullptr, shape_id, 0.1, 0.1, 0.3, 0.4), 0);
+    EXPECT_NE(le_add_shape_rect(handle, LeShapeId{.index = UINT32_MAX, .generation = 0}, 0.1, 0.1, 0.3, 0.4), 0);
+
+    EXPECT_EQ(le_add_shape_rect(handle, shape_id, 0.1, 0.1, 0.3, 0.4), 0);
+    EXPECT_EQ(le_add_shape_rect(handle, shape_id, 1.0, 1.0, 2.0, 2.0), 0);
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 2);
+    EXPECT_DOUBLE_EQ(le_shape_rect_at(handle, shape_id, 1).ur_x_um, 2.0);
+
+    EXPECT_NE(le_remove_shape_rect(nullptr, shape_id, 0), 0);
+    EXPECT_NE(le_remove_shape_rect(handle, shape_id, 5), 0);
+    EXPECT_EQ(le_remove_shape_rect(handle, shape_id, 0), 0);
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 1);
+    EXPECT_DOUBLE_EQ(le_shape_rect_at(handle, shape_id, 0).ur_x_um, 2.0); // the second rect shifted down to index 0
+}
+
+TEST_F(ApiFixture, AddAndRemoveShapePolygon)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    constexpr double triangle[] = {0.0, 0.0, 1.0, 0.0, 0.5, 1.0};
+    EXPECT_NE(le_add_shape_polygon(nullptr, shape_id, triangle, 6), 0);
+    EXPECT_NE(le_add_shape_polygon(handle, shape_id, nullptr, 6), 0);
+    EXPECT_NE(le_add_shape_polygon(handle, shape_id, triangle, 4), 0);  // fewer than 3 points
+    EXPECT_NE(le_add_shape_polygon(handle, shape_id, triangle, 5), 0);  // odd
+    ASSERT_EQ(le_shape_polygon_count(handle, shape_id), 0);
+
+    EXPECT_EQ(le_add_shape_polygon(handle, shape_id, triangle, 6), 0);
+    ASSERT_EQ(le_shape_polygon_count(handle, shape_id), 1);
+    ASSERT_EQ(le_shape_polygon_point_count(handle, shape_id, 0), 3);
+    const LePointUm p1 = le_shape_polygon_point_at(handle, shape_id, 0, 1);
+    EXPECT_DOUBLE_EQ(p1.x_um, 1.0);
+    EXPECT_DOUBLE_EQ(p1.y_um, 0.0);
+    EXPECT_EQ(le_shape_polygon_point_at(handle, shape_id, 0, 5).x_um, 0.0); // out of range -> zeroed
+
+    EXPECT_NE(le_remove_shape_polygon(handle, shape_id, 5), 0);
+    EXPECT_EQ(le_remove_shape_polygon(handle, shape_id, 0), 0);
+    EXPECT_EQ(le_shape_polygon_count(handle, shape_id), 0);
+}
+
+TEST_F(ApiFixture, AddAndRemoveShapePath)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    constexpr double centerline[] = {0.0, 0.0, 1.0, 0.0};
+    EXPECT_NE(le_add_shape_path(nullptr, shape_id, 0.1, centerline, 4), 0);
+    EXPECT_NE(le_add_shape_path(handle, shape_id, 0.1, nullptr, 4), 0);
+    EXPECT_NE(le_add_shape_path(handle, shape_id, 0.1, centerline, 3), 0); // odd
+    ASSERT_EQ(le_shape_path_count(handle, shape_id), 0);
+
+    EXPECT_EQ(le_add_shape_path(handle, shape_id, 0.1, centerline, 4), 0);
+    ASSERT_EQ(le_shape_path_count(handle, shape_id), 1);
+    EXPECT_DOUBLE_EQ(le_shape_path_width_um(handle, shape_id, 0), 0.1);
+    ASSERT_EQ(le_shape_path_point_count(handle, shape_id, 0), 2);
+    const LePointUm p0 = le_shape_path_point_at(handle, shape_id, 0, 0);
+    const LePointUm p1 = le_shape_path_point_at(handle, shape_id, 0, 1);
+    EXPECT_DOUBLE_EQ(p0.x_um, 0.0);
+    EXPECT_DOUBLE_EQ(p1.x_um, 1.0);
+
+    EXPECT_NE(le_remove_shape_path(handle, shape_id, 5), 0);
+    EXPECT_EQ(le_remove_shape_path(handle, shape_id, 0), 0);
+    EXPECT_EQ(le_shape_path_count(handle, shape_id), 0);
+}
+
+TEST_F(ApiFixture, DeleteShapeRemovesItAndParentCountDropsButParentSurvives)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_delete_shape(handle, shape_id), 0);
+
+    EXPECT_EQ(le_obstruction_shape_count(handle, obstruction_id), 0);
+    EXPECT_EQ(le_shape_layer_name(handle, shape_id), nullptr);
+    EXPECT_EQ(le_obstruction_property_count(handle, obstruction_id), 1); // Obstruction itself still exists (shapes_count now 0)
+    EXPECT_NE(le_delete_shape(handle, shape_id), 0);
+    EXPECT_NE(le_delete_shape(nullptr, shape_id), 0);
+}
+
+TEST_F(ApiFixture, ShapeAccessorsWithNullHandleOrUnknownIdDegradeGracefully)
+{
+    const LeShapeId bogus{.index = UINT32_MAX, .generation = 0};
+    const LeTerminalPortId bogus_port{.index = UINT32_MAX, .generation = 0};
+    const LeObstructionId bogus_obstruction{.index = UINT32_MAX, .generation = 0};
+
+    EXPECT_EQ(le_terminal_port_shape_count(handle, bogus_port), 0);
+    EXPECT_EQ(le_terminal_port_shape_at(handle, bogus_port, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_obstruction_shape_count(handle, bogus_obstruction), 0);
+    EXPECT_EQ(le_obstruction_shape_at(handle, bogus_obstruction, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_shape_layer_name(handle, bogus), nullptr);
+    EXPECT_EQ(le_shape_layer_name(nullptr, bogus), nullptr);
+
+    EXPECT_EQ(le_shape_rect_count(handle, bogus), 0);
+    const LeRectUm rect = le_shape_rect_at(handle, bogus, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.0);
+    EXPECT_DOUBLE_EQ(rect.ur_y_um, 0.0);
+
+    EXPECT_EQ(le_shape_polygon_count(handle, bogus), 0);
+    EXPECT_EQ(le_shape_polygon_point_count(handle, bogus, 0), 0);
+    const LePointUm polygon_point = le_shape_polygon_point_at(handle, bogus, 0, 0);
+    EXPECT_DOUBLE_EQ(polygon_point.x_um, 0.0);
+
+    EXPECT_EQ(le_shape_path_count(handle, bogus), 0);
+    EXPECT_DOUBLE_EQ(le_shape_path_width_um(handle, bogus, 0), 0.0);
+    EXPECT_EQ(le_shape_path_point_count(handle, bogus, 0), 0);
+    const LePointUm path_point = le_shape_path_point_at(handle, bogus, 0, 0);
+    EXPECT_DOUBLE_EQ(path_point.x_um, 0.0);
 }

@@ -760,3 +760,48 @@ boundary call this project's own code owns (not inside Skia), or
 consider `-march=native` instead (untried - more likely to show a real
 difference for tight numeric loops, at a real portability cost: ties the
 binary to the building machine's specific CPU).
+
+## 2026-08-10 — `Shape` pooled (TCL_EXPLORATION.md Phase 3): +~40% on `BM_GenerateShapes`, accepted
+
+`Shape` moved from an embedded-by-value field
+(`TerminalPortData::shapes`/`ObstructionData::shapes`, plain
+`std::vector<Shape>`) to a pooled, `Root`-addressed class with its own
+`ShapeId` and two parent-link fields (`terminal_port`, `obstruction`,
+mutually exclusive), needed so a Tcl command can update one existing
+shape (including its layer) by a stable id independent of its parent -
+impossible to address that way while shapes were anonymous vector
+elements. Flagged as a hot-path risk before starting (this project's own
+rule: benchmark a change like this, don't assume it's free) -
+`Pipeline::generate_shapes`'s two shape-collecting loops went from
+iterating an embedded `std::vector<Shape>` directly (contiguous, no
+indirection) to `Root::get_terminal_port_shapes(id)`/
+`get_obstruction_shapes(id)` (an index lookup returning `vector<ShapeId>`)
+followed by one `Root::get_shape(id)` pool lookup per shape.
+
+| Benchmark | Before (embedded `Shape`) | After (pooled `Shape`) |
+| --- | --- | --- |
+| `BM_GenerateShapes` (1M shapes) | 423 ms | 590 ms (mean of 5, cv 1.52%) |
+
+A real, reproducible ~40% regression (+167 ms) on the full 1M-shape
+stress design, not noise - confirms the concern was justified, not
+hypothetical. **Accepted for now**: this is the cost of a capability that
+was explicitly requested (stable-id shape addressing, not previously
+possible at all) and `generate_shapes`'s own result is already cached
+per-`AbstractId` (see `pipeline.hpp`'s own `CachedStage` comments) - this
+cost is paid once per structural change to a Design, not per frame/pan/
+zoom, which is where interactive responsiveness actually lives. One
+partly offsetting effect measured in the same session:
+`BM_ToPropertiesObstructionCopyCost` (a *different* hot path, `api.cpp`'s
+`build_selected_object_properties`) went from a fixed cost to reading
+`ObstructionData` (now just one `AbstractId`, no embedded shapes vector
+at all) - previously already fixed to be cheap by passing structs by
+reference (see the 2026-08-07 entry above), now structurally cannot
+regress back to that bug for this field, since there's no `shapes` field
+left to accidentally copy.
+
+Not optimized further in this pass - no profiling done yet to find
+exactly where the extra time goes (index lookup itself vs. pointer-chasing
+vs. lost cache locality from shapes no longer being contiguous in their
+parent's memory). Revisit with a profiler if `generate_shapes`'s cold cost
+becomes a real interactive-latency complaint, per this project's own
+"benchmark before optimizing" rule - not preemptively.

@@ -787,6 +787,462 @@ extern "C"
     /// gracefully for an unset AbstractId (see pipeline.hpp).
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle);
 
+    // --- CRUD + filter-search (UPDATES.md item 15 / TCL_EXPLORATION.md
+    // Phase 4) - Terminal only so far; TerminalPort/Obstruction/Abstract-
+    // boundary follow the same shape in a later pass. Layered on top of
+    // Root's Phase 1/2 primitives (create_x/delete_x/set_x_<field>,
+    // get_field()/match_hop()/search_x, backend/src/database/filter.hpp's
+    // parser+evaluator) - see TCL_EXPLORATION.md for the full design.
+    // Every id here is addressed directly, not through the current GUI
+    // selection (le_selected_object_property_at's own LeSelectionKind
+    // path stays selection-scoped, unchanged) - the natural fit for a
+    // TCL caller that isn't driving the GUI at all. ---
+
+    /// @brief Mirrors the database's TerminalId handle - see LeLibraryId's
+    /// comment for the general contract.
+    typedef struct LeTerminalId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeTerminalId;
+
+    /// @brief Mirrors the database's TerminalPortId handle - see
+    /// LeLibraryId's comment for the general contract.
+    typedef struct LeTerminalPortId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeTerminalPortId;
+
+    /// @brief Mirrors the database's ObstructionId handle - see
+    /// LeLibraryId's comment for the general contract.
+    typedef struct LeObstructionId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeObstructionId;
+
+    /// @brief Mirrors le::SignalDirection (generated/signal_direction.hpp)
+    /// field-for-field - kept as an explicit enum (not a bare int) so a
+    /// future reordering of either fails to compile instead of silently
+    /// mismatching, same reasoning as LePropertyType/LeSelectionKind.
+    typedef enum LeSignalDirection
+    {
+        LE_SIGNAL_DIRECTION_INPUT = 0,
+        LE_SIGNAL_DIRECTION_OUTPUT = 1,
+        LE_SIGNAL_DIRECTION_INOUT = 2,
+        LE_SIGNAL_DIRECTION_NONE = 3,
+        LE_SIGNAL_DIRECTION_OUTPUT_TRISTATE = 4,
+        LE_SIGNAL_DIRECTION_FEEDTHRU = 5,
+    } LeSignalDirection;
+
+    /// @brief Create a Terminal (a.k.a. pin) on the Abstract at
+    /// `abstract_id` (UPDATES.md item 15's `create_terminal -name IN0
+    /// -direction IN`). Only name/direction are settable here - every
+    /// other Terminal field (LEF's optional use/shape/antenna/etc.
+    /// fields) defaults to its zero value; extend this function's
+    /// parameter list if a real caller needs to set one at creation time
+    /// rather than via a later le_set_terminal_* call. Returns an invalid
+    /// LeTerminalId (index == UINT32_MAX) if handle or name is null, or
+    /// abstract_id doesn't name an Abstract on this handle.
+    LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction);
+
+    /// @brief Number of property rows for the Terminal at `id` - same
+    /// name/value table shape as le_selected_object_property_at
+    /// (LeProperty), but addressed directly by id rather than by current
+    /// selection index, for a TCL `get_terminal`-style caller that isn't
+    /// working off the current GUI selection. Rows: every plain Terminal
+    /// field from cmg's generated to_properties() ("name", "direction",
+    /// ...), plus "port_count" (int, from Root's own port index -
+    /// "ports" itself isn't a stored field, same as
+    /// le_selected_object_property_at's). No "bbox_um"/"layer_name" rows
+    /// (those are piece-selection-scoped concepts, meaningless for an
+    /// arbitrary id lookup). Returns 0 if handle is null or id doesn't
+    /// name a Terminal on this handle.
+    int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_terminal_property_count(id)-1) for the Terminal at `id`.
+    /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+    /// handle is null, id doesn't name a Terminal on this handle, or
+    /// index is out of range.
+    LeProperty le_terminal_property_at(LeHandle *handle, LeTerminalId id, int32_t index);
+
+    /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
+    /// `update_terminal_port -name ...` pattern, applied to Terminal
+    /// itself) - `name` isn't index=True so this is a direct field
+    /// mutation, not a generated Root::set_terminal_name (see
+    /// TCL_EXPLORATION.md's "cmg codegen design" for why only
+    /// indexed/parent fields get a generated setter). Returns 0 on
+    /// success, nonzero if handle or name is null or id doesn't name a
+    /// Terminal on this handle.
+    int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name);
+
+    /// @brief Change the Terminal at `id`'s signal direction. Returns 0
+    /// on success, nonzero if handle is null or id doesn't name a
+    /// Terminal on this handle.
+    int le_set_terminal_direction(LeHandle *handle, LeTerminalId id, int32_t direction);
+
+    /// @brief Delete the Terminal at `id`, cascading to every
+    /// TerminalPort it owns first - unlike Root::delete_terminal's own
+    /// no-cascade default (see its doc comment), a orphaned port here
+    /// would be permanently unreachable garbage (TerminalPorts are only
+    /// ever enumerated through their parent Terminal's own port list, no
+    /// top-level "every TerminalPort" API exists), not just a stale
+    /// reference that degrades gracefully elsewhere - a deliberate,
+    /// domain-specific exception at this API layer, not a generic Root
+    /// behavior. Returns 0 on success, nonzero if handle is null or id
+    /// doesn't name a Terminal on this handle.
+    int le_delete_terminal(LeHandle *handle, LeTerminalId id);
+
+    /// @brief Search every Terminal on this handle for
+    /// `filter_expression` (UPDATES.md item 15's `-filter {...}`, e.g.
+    /// ".name =~ IN*" - see backend/src/database/filter.hpp for the full
+    /// grammar). Returns the number of matches (0 if handle or
+    /// filter_expression is null, or if nothing matched), or -1 if
+    /// filter_expression fails to parse (see le_message_count/
+    /// le_message_at for the parse error, pushed the same way
+    /// le_read_lef's own errors are). Results are cached on the handle
+    /// until the next le_search_terminal call - read them via
+    /// le_search_result_terminal_at, same "valid until the next call"
+    /// convention as this API's other cached-result accessors
+    /// (le_selected_object_property_at et al).
+    int32_t le_search_terminal(LeHandle *handle, const char *filter_expression);
+
+    /// @brief The LeTerminalId at `index` (0..le_search_terminal's last
+    /// return value - 1) from the most recent le_search_terminal call on
+    /// this handle. Returns an invalid id (index == UINT32_MAX) if
+    /// handle is null or index is out of range.
+    LeTerminalId le_search_result_terminal_at(LeHandle *handle, int32_t index);
+
+    // --- TerminalPort/Obstruction CRUD + filter-search, and Abstract
+    // boundary update (Phase 4, continued) ---
+    //
+    // le_create_terminal_port/le_create_obstruction create an empty
+    // parent only - no layer, no geometry. Shape creation
+    // (le_create_terminal_port_shape/le_create_obstruction_shape) and all
+    // shape geometry (le_add_shape_rect/_polygon/_path, further below)
+    // are separate calls: rects aren't privileged over polygons/paths by
+    // being foldable into one "create" call while the others aren't -
+    // every shape member is added the same way, after the shape exists.
+
+    /// @brief Create an empty TerminalPort owned by the Terminal at
+    /// `terminal_id` - no shapes yet, see le_create_terminal_port_shape.
+    /// Returns an invalid LeTerminalPortId (index == UINT32_MAX) if
+    /// handle is null, or terminal_id doesn't name a Terminal on this
+    /// handle.
+    LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id);
+
+    /// @brief Number of property rows for the TerminalPort at `id` - same
+    /// by-id (not selection-scoped) shape as le_terminal_property_count.
+    /// Rows: "shapes_count" (int), "port_class" (string) - cmg's
+    /// generated to_properties() output for TerminalPortData, unchanged.
+    /// Returns 0 if handle is null or id doesn't name a TerminalPort on
+    /// this handle.
+    int32_t le_terminal_port_property_count(LeHandle *handle, LeTerminalPortId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_terminal_port_property_count(id)-1) for the TerminalPort at
+    /// `id`. Returns an all-null/zero row (LeProperty::name == nullptr)
+    /// if handle is null, id doesn't name a TerminalPort on this handle,
+    /// or index is out of range.
+    LeProperty le_terminal_port_property_at(LeHandle *handle, LeTerminalPortId id, int32_t index);
+
+    /// @brief Delete the TerminalPort at `id`, cascading to every Shape
+    /// it owns first - same reasoning as le_delete_terminal's own cascade
+    /// to TerminalPorts (see its doc comment): a Shape is pooled
+    /// (TCL_EXPLORATION.md Phase 3) and only ever reachable through its
+    /// parent's shape list, so leaving it behind would be permanently
+    /// unreachable garbage, not just a dangling reference. Returns 0 on
+    /// success, nonzero if handle is null or id doesn't name a
+    /// TerminalPort on this handle.
+    int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id);
+
+    /// @brief Search every TerminalPort on this handle for
+    /// `filter_expression` - see le_search_terminal's own comment for the
+    /// full contract (grammar, error/caching behavior); identical here,
+    /// just scoped to TerminalPort (e.g. ".terminal.name =~ IN*" or
+    /// ".shapes.layer_name == M4", both straight from UPDATES.md item
+    /// 15's own example). Returns the match count, or -1 on a parse
+    /// error.
+    int32_t le_search_terminal_port(LeHandle *handle, const char *filter_expression);
+
+    /// @brief The LeTerminalPortId at `index` from the most recent
+    /// le_search_terminal_port call - see le_search_result_terminal_at's
+    /// own comment for the general contract.
+    LeTerminalPortId le_search_result_terminal_port_at(LeHandle *handle, int32_t index);
+
+    /// @brief Create an empty Obstruction on the Abstract at
+    /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
+    /// Returns an invalid LeObstructionId (index == UINT32_MAX) if
+    /// handle is null, or abstract_id doesn't name an Abstract on this
+    /// handle.
+    LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id);
+
+    /// @brief Number of property rows for the Obstruction at `id` - same
+    /// by-id shape as le_terminal_property_count. Rows: "shapes_count"
+    /// (int) - cmg's generated to_properties() output for
+    /// ObstructionData, unchanged. Returns 0 if handle is null or id
+    /// doesn't name an Obstruction on this handle.
+    int32_t le_obstruction_property_count(LeHandle *handle, LeObstructionId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_obstruction_property_count(id)-1) for the Obstruction at
+    /// `id`. Returns an all-null/zero row (LeProperty::name == nullptr)
+    /// if handle is null, id doesn't name an Obstruction on this handle,
+    /// or index is out of range.
+    LeProperty le_obstruction_property_at(LeHandle *handle, LeObstructionId id, int32_t index);
+
+    /// @brief Delete the Obstruction at `id`, cascading to every Shape it
+    /// owns first - same reasoning as le_delete_terminal_port. Returns 0
+    /// on success, nonzero if handle is null or id doesn't name an
+    /// Obstruction on this handle.
+    int le_delete_obstruction(LeHandle *handle, LeObstructionId id);
+
+    /// @brief Search every Obstruction on this handle for
+    /// `filter_expression` - see le_search_terminal's own comment for the
+    /// full contract. Returns the match count, or -1 on a parse error.
+    int32_t le_search_obstruction(LeHandle *handle, const char *filter_expression);
+
+    /// @brief The LeObstructionId at `index` from the most recent
+    /// le_search_obstruction call - see le_search_result_terminal_at's
+    /// own comment for the general contract.
+    LeObstructionId le_search_result_obstruction_at(LeHandle *handle, int32_t index);
+
+    /// @brief Replace the Abstract at `id`'s boundary outline wholesale
+    /// with a single polygon built from `coords_um` (UPDATES.md item
+    /// 15's `update_abstract -boundary {x y x y ...}`) - a flat array of
+    /// microns, alternating x/y, `coord_count` must be a positive even
+    /// number (at least 3 points, i.e. coord_count >= 6, to be a real
+    /// polygon - a smaller count is rejected). No standalone Boundary
+    /// object exists (see TCL_EXPLORATION.md's round-2 decision) -
+    /// `Abstract.boundary` is a plain field, so this is a direct
+    /// mutation through le::Root::get_abstract(), not a generated
+    /// Root::set_abstract_boundary. Returns 0 on success, nonzero if
+    /// handle or coords_um is null, id doesn't name an Abstract on this
+    /// handle, coord_count is invalid, or no Technology has been read
+    /// yet (needed for the micron-to-dbu conversion).
+    int le_update_abstract_boundary(LeHandle *handle, LeAbstractId id, const double *coords_um, int32_t coord_count);
+
+    // --- Shape CRUD, addressed by a stable id (TCL_EXPLORATION.md Phase 3:
+    // `Shape` was pooled specifically so a single existing shape - attached
+    // to either a TerminalPort or an Obstruction - could be read/updated/
+    // deleted independently of its parent). A shape's own id doesn't say
+    // which kind of parent it belongs to - le_terminal_port_shape_at/
+    // le_obstruction_shape_at are how a caller discovers a LeShapeId in
+    // the first place (enumerating a specific parent's shapes) or
+    // le_create_terminal_port_shape/le_create_obstruction_shape return
+    // one directly; after that, every le_shape_*/le_add_shape_*/
+    // le_remove_shape_*/le_delete_shape call below only needs the
+    // LeShapeId itself.
+    //
+    // Rects/polygons/paths are all treated the same way: none are
+    // privileged, each has its own count/read/add/remove functions
+    // following the same shape (a plain 0-based position within that
+    // shape's own list of that member - not a further stable id; unlike
+    // a Shape itself, a rect/polygon/path never needs to be addressed
+    // independently of the Shape it's part of). Coordinates are always a
+    // flat microns array (converted to/from dbu via the same shared/
+    // global Technology::database_units_microns every other coordinate
+    // in this API uses) - a real coordinate-list typemap, so a caller
+    // doesn't have to pre-flatten into a raw double*, is Phase 5's job
+    // (see TCL_EXPLORATION.md); this is the plain-C building block it
+    // wraps. Texts aren't included - see TCL_EXPLORATION.md for why
+    // (they're a Pipeline-computed render-time label, never LEF-authored
+    // data, so there's nothing for a caller to create/read here). ---
+
+    /// @brief Mirrors the database's ShapeId handle - see LeLibraryId's
+    /// comment for the general contract.
+    typedef struct LeShapeId
+    {
+        uint32_t index;
+        uint32_t generation;
+    } LeShapeId;
+
+    /// @brief One point, in microns - `le_shape_polygon_point_at`'s and
+    /// `le_shape_path_point_at`'s return type.
+    typedef struct LePointUm
+    {
+        double x_um;
+        double y_um;
+    } LePointUm;
+
+    /// @brief One rect's corners, in microns - `le_shape_rect_at`'s
+    /// return type.
+    typedef struct LeRectUm
+    {
+        double ll_x_um;
+        double ll_y_um;
+        double ur_x_um;
+        double ur_y_um;
+    } LeRectUm;
+
+    /// @brief Create an empty Shape (just `layer_name`, no geometry yet)
+    /// owned by the TerminalPort at `port_id`. Returns an invalid
+    /// LeShapeId (index == UINT32_MAX) if handle or layer_name is null,
+    /// or port_id doesn't name a TerminalPort on this handle.
+    LeShapeId le_create_terminal_port_shape(LeHandle *handle, LeTerminalPortId port_id, const char *layer_name);
+
+    /// @brief Create an empty Shape owned by the Obstruction at
+    /// `obstruction_id` - see le_create_terminal_port_shape's own
+    /// comment for the general contract. Returns an invalid LeShapeId if
+    /// handle or layer_name is null, or obstruction_id doesn't name an
+    /// Obstruction on this handle.
+    LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name);
+
+    /// @brief Number of shapes owned by the TerminalPort at `id` -
+    /// indexes `le_terminal_port_shape_at`'s own `index` parameter,
+    /// 0..this-1. Returns 0 if handle is null or id doesn't name a
+    /// TerminalPort on this handle.
+    int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id);
+
+    /// @brief The LeShapeId at `index` (0..le_terminal_port_shape_count(id)-1)
+    /// owned by the TerminalPort at `id`. Returns an invalid LeShapeId
+    /// (index == UINT32_MAX) if handle is null, id doesn't name a
+    /// TerminalPort on this handle, or index is out of range.
+    LeShapeId le_terminal_port_shape_at(LeHandle *handle, LeTerminalPortId id, int32_t index);
+
+    /// @brief Number of shapes owned by the Obstruction at `id` - see
+    /// le_terminal_port_shape_count's own comment for the general
+    /// contract. Returns 0 if handle is null or id doesn't name an
+    /// Obstruction on this handle.
+    int32_t le_obstruction_shape_count(LeHandle *handle, LeObstructionId id);
+
+    /// @brief The LeShapeId at `index` owned by the Obstruction at `id` -
+    /// see le_terminal_port_shape_at's own comment for the general
+    /// contract. Returns an invalid LeShapeId if handle is null, id
+    /// doesn't name an Obstruction on this handle, or index is out of
+    /// range.
+    LeShapeId le_obstruction_shape_at(LeHandle *handle, LeObstructionId id, int32_t index);
+
+    /// @brief The layer name of the Shape at `id`. Owned by the handle's
+    /// Root - valid until the handle is destroyed, this shape is
+    /// deleted, or le_set_shape_layer_name changes it, never owned by
+    /// the caller. Returns null if handle is null or id doesn't name a
+    /// Shape on this handle.
+    const char *le_shape_layer_name(LeHandle *handle, LeShapeId id);
+
+    /// @brief Rename the Shape at `id`'s layer. Returns 0 on success,
+    /// nonzero if handle or layer_name is null, or id doesn't name a
+    /// Shape on this handle.
+    int le_set_shape_layer_name(LeHandle *handle, LeShapeId id, const char *layer_name);
+
+    /// @brief Delete the Shape at `id`. Its parent (TerminalPort or
+    /// Obstruction) is untouched - le_terminal_port_shape_count/
+    /// le_obstruction_shape_count on it simply reports one fewer
+    /// afterward. Returns 0 on success, nonzero if handle is null or id
+    /// doesn't name a Shape on this handle.
+    int le_delete_shape(LeHandle *handle, LeShapeId id);
+
+    /// @brief Number of rects on the Shape at `id` - indexes
+    /// `le_shape_rect_at`'s own `index` parameter, 0..this-1. Returns 0
+    /// if handle is null or id doesn't name a Shape on this handle.
+    int32_t le_shape_rect_count(LeHandle *handle, LeShapeId id);
+
+    /// @brief The rect at `index` (0..le_shape_rect_count(id)-1) on the
+    /// Shape at `id`, in microns. Returns an all-zero LeRectUm if handle
+    /// is null, id doesn't name a Shape on this handle, index is out of
+    /// range, or no Technology has been read yet (needed for the
+    /// dbu-to-micron conversion) - the same "can't distinguish a real
+    /// zero-sized rect from a degrade-gracefully zero" tradeoff
+    /// le_snapped_mouse_position's own comment already accepts for this
+    /// API, not a new one.
+    LeRectUm le_shape_rect_at(LeHandle *handle, LeShapeId id, int32_t index);
+
+    /// @brief Append one rect to the Shape at `id`. Returns 0 on
+    /// success, nonzero if handle is null, id doesn't name a Shape on
+    /// this handle, or no Technology has been read yet.
+    int le_add_shape_rect(LeHandle *handle, LeShapeId id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
+
+    /// @brief Remove the rect at `index` (0..le_shape_rect_count(id)-1)
+    /// from the Shape at `id`, shifting every later rect's index down by
+    /// one (matching le_shape_rect_at's own 0-based-position addressing
+    /// - not a stable id, see this section's own comment for why that's
+    /// fine here). Returns 0 on success, nonzero if handle is null, id
+    /// doesn't name a Shape on this handle, or index is out of range.
+    int le_remove_shape_rect(LeHandle *handle, LeShapeId id, int32_t index);
+
+    /// @brief Number of polygons on the Shape at `id` - indexes
+    /// `le_shape_polygon_point_count`/`le_shape_polygon_point_at`'s own
+    /// `polygon_index` parameter, 0..this-1. Returns 0 if handle is null
+    /// or id doesn't name a Shape on this handle.
+    int32_t le_shape_polygon_count(LeHandle *handle, LeShapeId id);
+
+    /// @brief Number of points in the polygon at `polygon_index`
+    /// (0..le_shape_polygon_count(id)-1) on the Shape at `id` - indexes
+    /// `le_shape_polygon_point_at`'s own `point_index` parameter,
+    /// 0..this-1. Returns 0 if handle is null, id doesn't name a Shape
+    /// on this handle, or polygon_index is out of range.
+    int32_t le_shape_polygon_point_count(LeHandle *handle, LeShapeId id, int32_t polygon_index);
+
+    /// @brief The point at `point_index` in the polygon at
+    /// `polygon_index` on the Shape at `id`, in microns. Returns an
+    /// all-zero LePointUm if handle is null, id doesn't name a Shape on
+    /// this handle, either index is out of range, or no Technology has
+    /// been read yet.
+    LePointUm le_shape_polygon_point_at(LeHandle *handle, LeShapeId id, int32_t polygon_index, int32_t point_index);
+
+    /// @brief Append one polygon to the Shape at `id`, built from
+    /// `points_um` (a flat array of microns, alternating x/y -
+    /// `point_coord_count` must be a positive even number, at least 6 -
+    /// i.e. at least 3 points - to be a real polygon). Returns 0 on
+    /// success, nonzero if handle or points_um is null; id doesn't name
+    /// a Shape on this handle; point_coord_count is invalid; or no
+    /// Technology has been read yet.
+    int le_add_shape_polygon(LeHandle *handle, LeShapeId id, const double *points_um, int32_t point_coord_count);
+
+    /// @brief Remove the polygon at `polygon_index`
+    /// (0..le_shape_polygon_count(id)-1) from the Shape at `id` - same
+    /// position-shifts-down semantics as le_remove_shape_rect. Returns 0
+    /// on success, nonzero if handle is null, id doesn't name a Shape on
+    /// this handle, or polygon_index is out of range.
+    int le_remove_shape_polygon(LeHandle *handle, LeShapeId id, int32_t polygon_index);
+
+    /// @brief Number of paths on the Shape at `id` - indexes
+    /// `le_shape_path_width_um`/`le_shape_path_point_count`/
+    /// `le_shape_path_point_at`'s own `path_index` parameter, 0..this-1.
+    /// Returns 0 if handle is null or id doesn't name a Shape on this
+    /// handle.
+    int32_t le_shape_path_count(LeHandle *handle, LeShapeId id);
+
+    /// @brief The width, in microns, of the path at `path_index`
+    /// (0..le_shape_path_count(id)-1) on the Shape at `id`. Returns 0 if
+    /// handle is null, id doesn't name a Shape on this handle,
+    /// path_index is out of range, or no Technology has been read yet.
+    double le_shape_path_width_um(LeHandle *handle, LeShapeId id, int32_t path_index);
+
+    /// @brief Number of points in the centerline of the path at
+    /// `path_index` on the Shape at `id` - indexes
+    /// `le_shape_path_point_at`'s own `point_index` parameter,
+    /// 0..this-1. Returns 0 if handle is null, id doesn't name a Shape
+    /// on this handle, or path_index is out of range.
+    int32_t le_shape_path_point_count(LeHandle *handle, LeShapeId id, int32_t path_index);
+
+    /// @brief The point at `point_index` on the centerline of the path
+    /// at `path_index` on the Shape at `id`, in microns. Returns an
+    /// all-zero LePointUm if handle is null, id doesn't name a Shape on
+    /// this handle, either index is out of range, or no Technology has
+    /// been read yet.
+    LePointUm le_shape_path_point_at(LeHandle *handle, LeShapeId id, int32_t path_index, int32_t point_index);
+
+    /// @brief Append one path to the Shape at `id`: `width_um` (the
+    /// path's stroke width) and `points_um`/`point_coord_count` (its
+    /// centerline, same flat-microns-array convention as
+    /// le_add_shape_polygon, but only at least 2 points - i.e.
+    /// point_coord_count >= 4 - are required, since a path's centerline
+    /// doesn't need to close into a loop). Returns 0 on success, nonzero
+    /// if handle or points_um is null; id doesn't name a Shape on this
+    /// handle; point_coord_count is invalid; or no Technology has been
+    /// read yet.
+    int le_add_shape_path(LeHandle *handle, LeShapeId id, double width_um, const double *points_um, int32_t point_coord_count);
+
+    /// @brief Remove the path at `path_index`
+    /// (0..le_shape_path_count(id)-1) from the Shape at `id` - same
+    /// position-shifts-down semantics as le_remove_shape_rect. Returns 0
+    /// on success, nonzero if handle is null, id doesn't name a Shape on
+    /// this handle, or path_index is out of range.
+    int le_remove_shape_path(LeHandle *handle, LeShapeId id, int32_t path_index);
+
 #ifdef __cplusplus
 }
 #endif

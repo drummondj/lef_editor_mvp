@@ -220,10 +220,10 @@ TEST_F(LEFReaderCompleteFixture, CreatesPinsWithPortShapes)
 
     auto pin_a_ports = root.get_terminal_ports(pin_a_id);
     ASSERT_EQ(pin_a_ports.size(), 1u);
-    const TerminalPortData *port = root.get_terminal_port(pin_a_ports.front());
+    const std::vector<ShapeId> &pin_a_shapes = root.get_terminal_port_shapes(pin_a_ports.front());
 
-    ASSERT_EQ(port->shapes.size(), 1u);
-    const Shape &shape = port->shapes.front();
+    ASSERT_EQ(pin_a_shapes.size(), 1u);
+    const Shape &shape = *root.get_shape(pin_a_shapes.front());
     EXPECT_EQ(shape.layer_name, "M1");
     ASSERT_EQ(shape.paths.size(), 1u);
     EXPECT_EQ(shape.paths.front().width, 0u); // no WIDTH statement precedes this PATH
@@ -241,10 +241,10 @@ TEST_F(LEFReaderCompleteFixture, ObstructionCollectsRectsAndPathsButIgnoresVias)
     AbstractId abstract_id = root.get_design_abstract(design_id);
 
     ASSERT_EQ(root.get_abstract_obstructions(abstract_id).size(), 1u);
-    const ObstructionData *obstruction = root.get_obstruction(root.get_abstract_obstructions(abstract_id).front());
+    const std::vector<ShapeId> &obstruction_shapes = root.get_obstruction_shapes(root.get_abstract_obstructions(abstract_id).front());
 
-    ASSERT_EQ(obstruction->shapes.size(), 1u);
-    const Shape &shape = obstruction->shapes.front();
+    ASSERT_EQ(obstruction_shapes.size(), 1u);
+    const Shape &shape = *root.get_shape(obstruction_shapes.front());
     EXPECT_EQ(shape.layer_name, "M1");
     EXPECT_EQ(shape.rects.size(), 2u); // 1 + 1 final, VIAs excluded, ITERATE stored separately
     EXPECT_EQ(shape.paths.size(), 2u); // 2 singles, VIAs excluded, ITERATE stored separately
@@ -1099,8 +1099,9 @@ TEST_F(LEFAntennaFixture, ReadsPinScalarFieldsDirectionEnumPortClassViaAndSiteAr
     const TerminalPortData *port_a = root.get_terminal_port(pin_a_port_ids[0]);
     ASSERT_TRUE(port_a != nullptr);
     EXPECT_EQ(port_a->port_class, "CORE");
-    ASSERT_EQ(port_a->shapes.size(), 1u);
-    const Shape &shape_a = port_a->shapes[0];
+    const std::vector<ShapeId> &port_a_shapes = root.get_terminal_port_shapes(pin_a_port_ids[0]);
+    ASSERT_EQ(port_a_shapes.size(), 1u);
+    const Shape &shape_a = *root.get_shape(port_a_shapes[0]);
     EXPECT_EQ(shape_a.layer_name, "M1");
     EXPECT_EQ(shape_a.spacing, 50);
     ASSERT_EQ(shape_a.vias.size(), 1u);
@@ -1114,11 +1115,14 @@ TEST_F(LEFAntennaFixture, ReadsPinScalarFieldsDirectionEnumPortClassViaAndSiteAr
     EXPECT_EQ(pin_b->direction, SignalDirection::FEEDTHRU);
 
     ASSERT_EQ(root.get_abstract_obstructions(abstract_id).size(), 1u);
-    const ObstructionData *obs = root.get_obstruction(root.get_abstract_obstructions(abstract_id).front());
+    const ObstructionId obs_id = root.get_abstract_obstructions(abstract_id).front();
+    const ObstructionData *obs = root.get_obstruction(obs_id);
     ASSERT_TRUE(obs != nullptr);
-    ASSERT_EQ(obs->shapes.size(), 1u);
-    EXPECT_EQ(obs->shapes[0].layer_name, "V1");
-    EXPECT_TRUE(obs->shapes[0].except_pg_net);
+    const std::vector<ShapeId> &obs_shapes = root.get_obstruction_shapes(obs_id);
+    ASSERT_EQ(obs_shapes.size(), 1u);
+    const Shape &obs_shape = *root.get_shape(obs_shapes[0]);
+    EXPECT_EQ(obs_shape.layer_name, "V1");
+    EXPECT_TRUE(obs_shape.except_pg_net);
 }
 
 TEST_F(LEFReaderViaFixture, DuplicateViaAndViaRuleNamesAreIgnoredWithAWarning)

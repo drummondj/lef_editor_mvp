@@ -310,10 +310,12 @@ namespace le
 
                     for (auto port_id : root.get_terminal_ports(terminal_id))
                     {
-                        const auto *port = root.get_terminal_port(port_id);
-                        for (const auto &raw_shape : port->shapes)
+                        for (const auto &shape_id : root.get_terminal_port_shapes(port_id))
                         {
-                            const Shape shape = expand_iterates(raw_shape);
+                            const auto *raw_shape = root.get_shape(shape_id);
+                            if (!raw_shape)
+                                continue;
+                            const Shape shape = expand_iterates(*raw_shape);
                             auto [it, inserted] = by_layer.try_emplace(shape.layer_name);
                             if (inserted)
                                 it->second.first_shape_index = shapes.size();
@@ -356,10 +358,12 @@ namespace le
 
                 for (auto obstruction_id : obstructions)
                 {
-                    const auto *obstruction = root.get_obstruction(obstruction_id);
-                    for (const auto &raw_shape : obstruction->shapes)
+                    for (const auto &shape_id : root.get_obstruction_shapes(obstruction_id))
                     {
-                        const Shape shape = expand_iterates(raw_shape);
+                        const auto *raw_shape = root.get_shape(shape_id);
+                        if (!raw_shape)
+                            continue;
+                        const Shape shape = expand_iterates(*raw_shape);
                         shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .path_outlines = compute_path_outlines(shape)});
                         Geometry::merge_overlapping_fills(shapes.back().shape);
                     }

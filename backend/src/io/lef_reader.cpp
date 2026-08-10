@@ -168,12 +168,12 @@ namespace le
 
         for (auto const &obstruction_id : reader->root_->get_abstract_obstructions(reader->abstract_id_))
         {
-            auto const obstruction = reader->root_->get_obstruction(obstruction_id);
-            for (auto const &shape : obstruction->shapes)
+            for (auto const &shape_id : reader->root_->get_obstruction_shapes(obstruction_id))
             {
-                if (shape.layer_name == "OVERLAP")
+                auto const *shape = reader->root_->get_shape(shape_id);
+                if (shape && shape->layer_name == "OVERLAP")
                 {
-                    overlap_shapes.push_back(&shape);
+                    overlap_shapes.push_back(shape);
                 }
             }
         }
@@ -1396,9 +1396,6 @@ namespace le
             auto lef_port = lef_pin->port(i);
             auto shapes = shapes_from_parser(reader, lef_port);
             auto port = TerminalPortData{.terminal = terminal_id};
-            port.shapes.insert(port.shapes.end(),
-                               shapes.begin(),
-                               shapes.end());
 
             // lefiGeomClassE doesn't belong to any one Shape (see
             // shapes_from_parser's own comment) - scan for it separately.
@@ -1411,7 +1408,12 @@ namespace le
                 }
             }
 
-            reader->root_->create_terminal_port(port);
+            auto port_id = reader->root_->create_terminal_port(port);
+            for (auto &shape : shapes)
+            {
+                shape.terminal_port = port_id;
+                reader->root_->create_shape(std::move(shape));
+            }
         }
 
         return 0;
@@ -1424,7 +1426,12 @@ namespace le
         auto shapes = shapes_from_parser(reader, lef_obs->geometries());
         spdlog::debug("shapes size = {}", shapes.size());
 
-        reader->root_->create_obstruction(ObstructionData{.abstract = reader->abstract_id_, .shapes = shapes});
+        auto obstruction_id = reader->root_->create_obstruction(ObstructionData{.abstract = reader->abstract_id_});
+        for (auto &shape : shapes)
+        {
+            shape.obstruction = obstruction_id;
+            reader->root_->create_shape(std::move(shape));
+        }
 
         return 0;
     }

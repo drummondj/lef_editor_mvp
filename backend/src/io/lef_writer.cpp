@@ -1756,9 +1756,12 @@ namespace le
             if (status)
                 return status;
 
-            for (const Shape &shape : port->shapes)
+            for (ShapeId shape_id : root.get_terminal_port_shapes(port_id))
             {
-                status = write_shape_geometry(shape, dbu_per_micron, true);
+                const Shape *shape = root.get_shape(shape_id);
+                if (!shape)
+                    continue;
+                status = write_shape_geometry(*shape, dbu_per_micron, true);
                 if (status)
                     return status;
             }
@@ -1781,9 +1784,12 @@ namespace le
         if (status)
             return status;
 
-        for (const Shape &shape : obstruction->shapes)
+        for (ShapeId shape_id : root.get_obstruction_shapes(obstruction_id))
         {
-            status = write_shape_geometry(shape, dbu_per_micron, false);
+            const Shape *shape = root.get_shape(shape_id);
+            if (!shape)
+                continue;
+            status = write_shape_geometry(*shape, dbu_per_micron, false);
             if (status)
                 return status;
         }

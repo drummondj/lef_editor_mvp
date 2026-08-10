@@ -1,5 +1,6 @@
 #include "api.hpp"
 #include "../database/database.hpp"
+#include "../database/filter.hpp"
 #include "../geometry/geometry.hpp"
 #include "../io/lef_reader.hpp"
 #include "../pipeline/pipeline.hpp"
@@ -48,6 +49,30 @@ struct LeHandle
     int32_t cached_property_selection_index = -1;
     std::vector<le::PropertyValue> cached_properties;
 
+    // Same single-slot-cache pattern as cached_properties above, but for
+    // le_terminal_property_count/_at (Phase 4's by-id CRUD surface,
+    // TCL_EXPLORATION.md) - keyed by TerminalId instead of a selection
+    // index, since there's no "current selection" involved here.
+    le::TerminalId cached_terminal_property_id{};
+    std::vector<le::PropertyValue> cached_terminal_properties;
+
+    // Backs le_search_terminal/le_search_result_terminal_at - the ids a
+    // filter-expression search matched, cached until the next
+    // le_search_terminal call overwrites it, same "valid until the next
+    // call" convention as cached_properties above.
+    std::vector<le::TerminalId> terminal_search_results;
+
+    // Same two patterns as cached_terminal_property_id/_properties and
+    // terminal_search_results above, repeated for TerminalPort and
+    // Obstruction (Phase 4, continued).
+    le::TerminalPortId cached_terminal_port_property_id{};
+    std::vector<le::PropertyValue> cached_terminal_port_properties;
+    std::vector<le::TerminalPortId> terminal_port_search_results;
+
+    le::ObstructionId cached_obstruction_property_id{};
+    std::vector<le::PropertyValue> cached_obstruction_properties;
+    std::vector<le::ObstructionId> obstruction_search_results;
+
     // Backs le_message_count/le_message_at (UPDATES.md item 3) - every
     // error/warning/info message produced by this handle's backend
     // operations so far (currently just le_read_lef), in order, never
@@ -69,8 +94,17 @@ namespace
     LeLibraryId to_c(le::LibraryId id) { return LeLibraryId{.index = id.index, .generation = id.generation}; }
     LeDesignId to_c(le::DesignId id) { return LeDesignId{.index = id.index, .generation = id.generation}; }
     LeAbstractId to_c(le::AbstractId id) { return LeAbstractId{.index = id.index, .generation = id.generation}; }
+    LeTerminalId to_c(le::TerminalId id) { return LeTerminalId{.index = id.index, .generation = id.generation}; }
+    LeTerminalPortId to_c(le::TerminalPortId id) { return LeTerminalPortId{.index = id.index, .generation = id.generation}; }
+    LeObstructionId to_c(le::ObstructionId id) { return LeObstructionId{.index = id.index, .generation = id.generation}; }
+    LeShapeId to_c(le::ShapeId id) { return LeShapeId{.index = id.index, .generation = id.generation}; }
 
     le::DesignId from_c(LeDesignId id) { return le::DesignId{.index = id.index, .generation = id.generation}; }
+    le::AbstractId from_c(LeAbstractId id) { return le::AbstractId{.index = id.index, .generation = id.generation}; }
+    le::TerminalId from_c(LeTerminalId id) { return le::TerminalId{.index = id.index, .generation = id.generation}; }
+    le::TerminalPortId from_c(LeTerminalPortId id) { return le::TerminalPortId{.index = id.index, .generation = id.generation}; }
+    le::ObstructionId from_c(LeObstructionId id) { return le::ObstructionId{.index = id.index, .generation = id.generation}; }
+    le::ShapeId from_c(LeShapeId id) { return le::ShapeId{.index = id.index, .generation = id.generation}; }
 
     // Below this many pixels of down-to-up movement, le_mouse_up treats a
     // gesture as a click rather than a drag-select - small enough that an
@@ -118,6 +152,21 @@ namespace
             return LE_PROPERTY_TYPE_DOUBLE;
         }
         return LE_PROPERTY_TYPE_STRING;
+    }
+
+    // LeProperty conversion, factored out of le_selected_object_property_at
+    // (below) so Phase 4's by-id property accessors (le_terminal_property_at
+    // et al) can build the same row shape from a le::PropertyValue without
+    // duplicating the field-by-field mapping.
+    LeProperty to_c(const le::PropertyValue &property)
+    {
+        return LeProperty{
+            .name = property.name.c_str(),
+            .type = to_c_property_type(property.type),
+            .string_value = property.string_value.c_str(),
+            .int_value = property.int_value,
+            .double_value = property.double_value,
+        };
     }
 
     // Single shared/global Technology, same assumption
@@ -232,14 +281,12 @@ namespace
             }
             else
             {
-                std::vector<le::Shape> shapes;
+                std::vector<const le::Shape *> shapes;
                 shapes.reserve(port_ids.size()); // a lower bound (each port usually has one Shape) but avoids most reallocations
                 for (const le::TerminalPortId port_id : port_ids)
-                {
-                    const le::TerminalPortData *port = root.get_terminal_port(port_id);
-                    if (port)
-                        shapes.insert(shapes.end(), port->shapes.begin(), port->shapes.end());
-                }
+                    for (const le::ShapeId shape_id : root.get_terminal_port_shapes(port_id))
+                        if (const le::Shape *shape = root.get_shape(shape_id))
+                            shapes.push_back(shape);
                 push_bbox_property(properties, le::Geometry::bbox(shapes), dbu_per_um);
             }
         }
@@ -249,7 +296,9 @@ namespace
             if (!obstruction)
                 return properties;
 
-            properties = le::to_properties(*obstruction); // shapes_count
+            properties = le::to_properties(*obstruction);
+            const std::vector<le::ShapeId> &shape_ids = root.get_obstruction_shapes(*obstruction_id);
+            properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(shape_ids.size())));
 
             if (selected.piece)
             {
@@ -258,11 +307,94 @@ namespace
             }
             else
             {
-                push_bbox_property(properties, le::Geometry::bbox(obstruction->shapes), dbu_per_um);
+                std::vector<const le::Shape *> shapes;
+                shapes.reserve(shape_ids.size());
+                for (const le::ShapeId shape_id : shape_ids)
+                    if (const le::Shape *shape = root.get_shape(shape_id))
+                        shapes.push_back(shape);
+                push_bbox_property(properties, le::Geometry::bbox(shapes), dbu_per_um);
             }
         }
 
         return properties;
+    }
+
+    // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface) -
+    // unlike build_selected_object_properties above, not piece-scoped
+    // (there's no click-selection concept for an arbitrary id lookup), so
+    // no bbox_um/layer_name rows - just cmg's generated to_properties()
+    // plus the same "port_count" derived row build_selected_object_
+    // properties adds for LE_SELECTION_KIND_TERMINAL. Returns an empty
+    // vector if id doesn't name a Terminal on this handle.
+    std::vector<le::PropertyValue> build_terminal_properties(const le::Root &root, le::TerminalId id)
+    {
+        const le::TerminalData *terminal = root.get_terminal(id);
+        if (!terminal)
+            return {};
+
+        std::vector<le::PropertyValue> properties = le::to_properties(*terminal);
+        properties.push_back(le::PropertyValue::make_int("port_count", static_cast<int64_t>(root.get_terminal_ports(id).size())));
+        return properties;
+    }
+
+    // Same pattern as build_terminal_properties, for TerminalPort/
+    // Obstruction. "shapes_count" is a derived row (Root::get_x_shapes()'s
+    // own size), not part of cmg's generated to_properties() - `shapes` is
+    // an is_child field (Shape is pooled, TCL_EXPLORATION.md Phase 3), so
+    // it isn't a struct field at all, same reasoning as Terminal's own
+    // "port_count" row in build_terminal_properties above.
+    std::vector<le::PropertyValue> build_terminal_port_properties(const le::Root &root, le::TerminalPortId id)
+    {
+        const le::TerminalPortData *port = root.get_terminal_port(id);
+        if (!port)
+            return {};
+        std::vector<le::PropertyValue> properties = le::to_properties(*port);
+        properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_terminal_port_shapes(id).size())));
+        return properties;
+    }
+
+    std::vector<le::PropertyValue> build_obstruction_properties(const le::Root &root, le::ObstructionId id)
+    {
+        const le::ObstructionData *obstruction = root.get_obstruction(id);
+        if (!obstruction)
+            return {};
+        std::vector<le::PropertyValue> properties = le::to_properties(*obstruction);
+        properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_obstruction_shapes(id).size())));
+        return properties;
+    }
+
+    // Rounds to the nearest dbu rather than truncating - a caller passing
+    // e.g. 0.1um at 1000 dbu/um should get exactly 100 dbu, not silently
+    // lose precision to a fractional-dbu rounding direction they didn't
+    // choose.
+    int64_t to_dbu(double value_um, double dbu_per_um)
+    {
+        return static_cast<int64_t>(std::llround(value_um * dbu_per_um));
+    }
+
+    double to_um(int64_t value_dbu, double dbu_per_um)
+    {
+        return static_cast<double>(value_dbu) / dbu_per_um;
+    }
+
+    // Shared by le_add_shape_polygon/le_add_shape_path - builds a Polygon
+    // from a flat microns array (alternating x/y). nullopt on any invalid
+    // input (null points_um, point_coord_count not a positive even number
+    // of at least `min_points` points, or no Technology read yet to
+    // convert microns to dbu with) - the caller turns that into a nonzero
+    // return, same as every other creation failure in this API.
+    std::optional<le::Polygon> build_polygon_from_flat_points(const le::Root &root, const double *points_um, int32_t point_coord_count, int32_t min_points)
+    {
+        if (!points_um || point_coord_count <= 0 || point_coord_count % 2 != 0 || point_coord_count < min_points * 2)
+            return std::nullopt;
+        const std::optional<double> dbu_per_um = database_units_microns(root);
+        if (!dbu_per_um)
+            return std::nullopt;
+
+        le::Polygon polygon;
+        for (int32_t i = 0; i < point_coord_count; i += 2)
+            polygon.points.push_back(le::Point{.x = to_dbu(points_um[i], *dbu_per_um), .y = to_dbu(points_um[i + 1], *dbu_per_um)});
+        return polygon;
     }
 
     // Lock-free bodies of le_zoom/le_pan/le_fit_scene - factored out so
@@ -344,13 +476,13 @@ namespace
     // to the current selection's own combined bbox instead of the whole
     // design's. Collects a pointer per selection entry into the same
     // owning storage build_selected_object_properties's bbox_um property
-    // reads from (TerminalPortData::shapes/ObstructionData::shapes in
-    // `root`, or the SelectedObject's own `piece` in `scene` - both
-    // outlive this call, no copy needed), then a single Geometry::bbox
-    // call unions them - mirrors fit_scene_unlocked's own shape_ptrs
-    // pattern above. A no-op (view unchanged) if nothing is selected,
-    // unlike fit_scene_unlocked, which always has the whole design to
-    // fall back to.
+    // reads from (Root::get_terminal_port_shapes()/get_obstruction_shapes()
+    // resolved through Root::get_shape(), or the SelectedObject's own
+    // `piece` in `scene` - both outlive this call, no copy needed), then
+    // a single Geometry::bbox call unions them - mirrors
+    // fit_scene_unlocked's own shape_ptrs pattern above. A no-op (view
+    // unchanged) if nothing is selected, unlike fit_scene_unlocked, which
+    // always has the whole design to fall back to.
     void fit_selected_unlocked(LeHandle *handle, int32_t padding_px)
     {
         std::vector<const le::Shape *> shape_ptrs;
@@ -366,21 +498,15 @@ namespace
             if (const le::TerminalId *terminal_id = std::get_if<le::TerminalId>(&selected.origin))
             {
                 for (const le::TerminalPortId port_id : handle->root.get_terminal_ports(*terminal_id))
-                {
-                    const le::TerminalPortData *port = handle->root.get_terminal_port(port_id);
-                    if (!port)
-                        continue;
-                    for (const le::Shape &shape : port->shapes)
-                        shape_ptrs.push_back(&shape);
-                }
+                    for (const le::ShapeId shape_id : handle->root.get_terminal_port_shapes(port_id))
+                        if (const le::Shape *shape = handle->root.get_shape(shape_id))
+                            shape_ptrs.push_back(shape);
             }
             else if (const le::ObstructionId *obstruction_id = std::get_if<le::ObstructionId>(&selected.origin))
             {
-                const le::ObstructionData *obstruction = handle->root.get_obstruction(*obstruction_id);
-                if (!obstruction)
-                    continue;
-                for (const le::Shape &shape : obstruction->shapes)
-                    shape_ptrs.push_back(&shape);
+                for (const le::ShapeId shape_id : handle->root.get_obstruction_shapes(*obstruction_id))
+                    if (const le::Shape *shape = handle->root.get_shape(shape_id))
+                        shape_ptrs.push_back(shape);
             }
         }
 
@@ -1221,6 +1347,685 @@ extern "C"
             .int_value = property.int_value,
             .double_value = property.double_value,
         };
+    }
+
+    LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction)
+    {
+        const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::AbstractId abstract = from_c(abstract_id);
+        if (!handle->root.get_abstract(abstract))
+            return invalid;
+
+        return to_c(handle->root.create_terminal(le::TerminalData{
+            .abstract = abstract,
+            .name = name,
+            .direction = static_cast<le::SignalDirection>(direction),
+        }));
+    }
+
+    int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalId terminal_id = from_c(id);
+        handle->cached_terminal_properties = build_terminal_properties(handle->root, terminal_id);
+        handle->cached_terminal_property_id = terminal_id;
+        return static_cast<int32_t>(handle->cached_terminal_properties.size());
+    }
+
+    LeProperty le_terminal_property_at(LeHandle *handle, LeTerminalId id, int32_t index)
+    {
+        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalId terminal_id = from_c(id);
+        if (handle->cached_terminal_property_id != terminal_id)
+        {
+            handle->cached_terminal_properties = build_terminal_properties(handle->root, terminal_id);
+            handle->cached_terminal_property_id = terminal_id;
+        }
+
+        if (static_cast<size_t>(index) >= handle->cached_terminal_properties.size())
+            return invalid;
+        return to_c(handle->cached_terminal_properties[static_cast<size_t>(index)]);
+    }
+
+    int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name)
+    {
+        if (!handle || !name)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::TerminalData *terminal = handle->root.get_terminal(from_c(id));
+        if (!terminal)
+            return 1;
+        terminal->name = name;
+        return 0;
+    }
+
+    int le_set_terminal_direction(LeHandle *handle, LeTerminalId id, int32_t direction)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::TerminalData *terminal = handle->root.get_terminal(from_c(id));
+        if (!terminal)
+            return 1;
+        terminal->direction = static_cast<le::SignalDirection>(direction);
+        return 0;
+    }
+
+    int le_delete_terminal(LeHandle *handle, LeTerminalId id)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalId terminal_id = from_c(id);
+        if (!handle->root.get_terminal(terminal_id))
+            return 1;
+
+        // Cascade first (see le_delete_terminal's own doc comment for why
+        // this API layer does this rather than leaving it to
+        // Root::delete_terminal's generic no-cascade default) - copy the
+        // port id list first since deleting a port mutates the same
+        // index Root::get_terminal_ports() reads from.
+        const std::vector<le::TerminalPortId> port_ids = handle->root.get_terminal_ports(terminal_id);
+        for (const le::TerminalPortId port_id : port_ids)
+            handle->root.delete_terminal_port(port_id);
+
+        return handle->root.delete_terminal(terminal_id) ? 0 : 1;
+    }
+
+    int32_t le_search_terminal(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_search_terminal: {}", expr.error()));
+            return -1;
+        }
+
+        handle->terminal_search_results = handle->root.search_terminal(
+            [&expr](const le::Root &root, le::TerminalId id, const le::TerminalData &data)
+            { return le::evaluate_filter(*expr, root, id, data); });
+        return static_cast<int32_t>(handle->terminal_search_results.size());
+    }
+
+    LeTerminalId le_search_result_terminal_at(LeHandle *handle, int32_t index)
+    {
+        const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->terminal_search_results.size())
+            return invalid;
+        return to_c(handle->terminal_search_results[static_cast<size_t>(index)]);
+    }
+
+    LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id)
+    {
+        const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalId terminal = from_c(terminal_id);
+        if (!handle->root.get_terminal(terminal))
+            return invalid;
+
+        return to_c(handle->root.create_terminal_port(le::TerminalPortData{.terminal = terminal}));
+    }
+
+    int32_t le_terminal_port_property_count(LeHandle *handle, LeTerminalPortId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalPortId port_id = from_c(id);
+        handle->cached_terminal_port_properties = build_terminal_port_properties(handle->root, port_id);
+        handle->cached_terminal_port_property_id = port_id;
+        return static_cast<int32_t>(handle->cached_terminal_port_properties.size());
+    }
+
+    LeProperty le_terminal_port_property_at(LeHandle *handle, LeTerminalPortId id, int32_t index)
+    {
+        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalPortId port_id = from_c(id);
+        if (handle->cached_terminal_port_property_id != port_id)
+        {
+            handle->cached_terminal_port_properties = build_terminal_port_properties(handle->root, port_id);
+            handle->cached_terminal_port_property_id = port_id;
+        }
+
+        if (static_cast<size_t>(index) >= handle->cached_terminal_port_properties.size())
+            return invalid;
+        return to_c(handle->cached_terminal_port_properties[static_cast<size_t>(index)]);
+    }
+
+    int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalPortId port_id = from_c(id);
+        if (!handle->root.get_terminal_port(port_id))
+            return 1;
+
+        // Cascade first (see le_delete_terminal_port's own doc comment) -
+        // copy the shape id list first since deleting a shape mutates the
+        // same index Root::get_terminal_port_shapes() reads from.
+        const std::vector<le::ShapeId> shape_ids = handle->root.get_terminal_port_shapes(port_id);
+        for (const le::ShapeId shape_id : shape_ids)
+            handle->root.delete_shape(shape_id);
+
+        return handle->root.delete_terminal_port(port_id) ? 0 : 1;
+    }
+
+    int32_t le_search_terminal_port(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_search_terminal_port: {}", expr.error()));
+            return -1;
+        }
+
+        handle->terminal_port_search_results = handle->root.search_terminal_port(
+            [&expr](const le::Root &root, le::TerminalPortId id, const le::TerminalPortData &data)
+            { return le::evaluate_filter(*expr, root, id, data); });
+        return static_cast<int32_t>(handle->terminal_port_search_results.size());
+    }
+
+    LeTerminalPortId le_search_result_terminal_port_at(LeHandle *handle, int32_t index)
+    {
+        const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->terminal_port_search_results.size())
+            return invalid;
+        return to_c(handle->terminal_port_search_results[static_cast<size_t>(index)]);
+    }
+
+    LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id)
+    {
+        const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::AbstractId abstract = from_c(abstract_id);
+        if (!handle->root.get_abstract(abstract))
+            return invalid;
+
+        return to_c(handle->root.create_obstruction(le::ObstructionData{.abstract = abstract}));
+    }
+
+    int32_t le_obstruction_property_count(LeHandle *handle, LeObstructionId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ObstructionId obstruction_id = from_c(id);
+        handle->cached_obstruction_properties = build_obstruction_properties(handle->root, obstruction_id);
+        handle->cached_obstruction_property_id = obstruction_id;
+        return static_cast<int32_t>(handle->cached_obstruction_properties.size());
+    }
+
+    LeProperty le_obstruction_property_at(LeHandle *handle, LeObstructionId id, int32_t index)
+    {
+        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ObstructionId obstruction_id = from_c(id);
+        if (handle->cached_obstruction_property_id != obstruction_id)
+        {
+            handle->cached_obstruction_properties = build_obstruction_properties(handle->root, obstruction_id);
+            handle->cached_obstruction_property_id = obstruction_id;
+        }
+
+        if (static_cast<size_t>(index) >= handle->cached_obstruction_properties.size())
+            return invalid;
+        return to_c(handle->cached_obstruction_properties[static_cast<size_t>(index)]);
+    }
+
+    int le_delete_obstruction(LeHandle *handle, LeObstructionId id)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ObstructionId obstruction_id = from_c(id);
+        if (!handle->root.get_obstruction(obstruction_id))
+            return 1;
+
+        // Cascade first (see le_delete_obstruction's own doc comment).
+        const std::vector<le::ShapeId> shape_ids = handle->root.get_obstruction_shapes(obstruction_id);
+        for (const le::ShapeId shape_id : shape_ids)
+            handle->root.delete_shape(shape_id);
+
+        return handle->root.delete_obstruction(obstruction_id) ? 0 : 1;
+    }
+
+    int32_t le_search_obstruction(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_search_obstruction: {}", expr.error()));
+            return -1;
+        }
+
+        handle->obstruction_search_results = handle->root.search_obstruction(
+            [&expr](const le::Root &root, le::ObstructionId id, const le::ObstructionData &data)
+            { return le::evaluate_filter(*expr, root, id, data); });
+        return static_cast<int32_t>(handle->obstruction_search_results.size());
+    }
+
+    LeObstructionId le_search_result_obstruction_at(LeHandle *handle, int32_t index)
+    {
+        const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->obstruction_search_results.size())
+            return invalid;
+        return to_c(handle->obstruction_search_results[static_cast<size_t>(index)]);
+    }
+
+    int le_update_abstract_boundary(LeHandle *handle, LeAbstractId id, const double *coords_um, int32_t coord_count)
+    {
+        if (!handle || !coords_um || coord_count < 6 || coord_count % 2 != 0)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::AbstractData *abstract = handle->root.get_abstract(from_c(id));
+        if (!abstract)
+            return 1;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return 1;
+
+        le::Polygon polygon;
+        for (int32_t i = 0; i < coord_count; i += 2)
+            polygon.points.push_back(le::Point{.x = to_dbu(coords_um[i], *dbu_per_um), .y = to_dbu(coords_um[i + 1], *dbu_per_um)});
+
+        abstract->boundary = {std::move(polygon)};
+        return 0;
+    }
+
+    LeShapeId le_create_terminal_port_shape(LeHandle *handle, LeTerminalPortId port_id, const char *layer_name)
+    {
+        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !layer_name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalPortId port = from_c(port_id);
+        if (!handle->root.get_terminal_port(port))
+            return invalid;
+
+        return to_c(handle->root.create_shape(le::ShapeData{.terminal_port = port, .layer_name = layer_name}));
+    }
+
+    LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name)
+    {
+        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !layer_name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ObstructionId obstruction = from_c(obstruction_id);
+        if (!handle->root.get_obstruction(obstruction))
+            return invalid;
+
+        return to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
+    }
+
+    int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return static_cast<int32_t>(handle->root.get_terminal_port_shapes(from_c(id)).size());
+    }
+
+    LeShapeId le_terminal_port_shape_at(LeHandle *handle, LeTerminalPortId id, int32_t index)
+    {
+        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const std::vector<le::ShapeId> &shapes = handle->root.get_terminal_port_shapes(from_c(id));
+        if (static_cast<size_t>(index) >= shapes.size())
+            return invalid;
+        return to_c(shapes[static_cast<size_t>(index)]);
+    }
+
+    int32_t le_obstruction_shape_count(LeHandle *handle, LeObstructionId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return static_cast<int32_t>(handle->root.get_obstruction_shapes(from_c(id)).size());
+    }
+
+    LeShapeId le_obstruction_shape_at(LeHandle *handle, LeObstructionId id, int32_t index)
+    {
+        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const std::vector<le::ShapeId> &shapes = handle->root.get_obstruction_shapes(from_c(id));
+        if (static_cast<size_t>(index) >= shapes.size())
+            return invalid;
+        return to_c(shapes[static_cast<size_t>(index)]);
+    }
+
+    const char *le_shape_layer_name(LeHandle *handle, LeShapeId id)
+    {
+        if (!handle)
+            return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        return shape ? shape->layer_name.c_str() : nullptr;
+    }
+
+    int le_set_shape_layer_name(LeHandle *handle, LeShapeId id, const char *layer_name)
+    {
+        if (!handle || !layer_name)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape)
+            return 1;
+        shape->layer_name = layer_name;
+        return 0;
+    }
+
+    int le_delete_shape(LeHandle *handle, LeShapeId id)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return handle->root.delete_shape(from_c(id)) ? 0 : 1;
+    }
+
+    int32_t le_shape_rect_count(LeHandle *handle, LeShapeId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        return shape ? static_cast<int32_t>(shape->rects.size()) : 0;
+    }
+
+    LeRectUm le_shape_rect_at(LeHandle *handle, LeShapeId id, int32_t index)
+    {
+        const LeRectUm invalid{.ll_x_um = 0, .ll_y_um = 0, .ur_x_um = 0, .ur_y_um = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(index) >= shape->rects.size())
+            return invalid;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return invalid;
+
+        const le::Rect &rect = shape->rects[static_cast<size_t>(index)];
+        return LeRectUm{
+            .ll_x_um = to_um(rect.ll.x, *dbu_per_um),
+            .ll_y_um = to_um(rect.ll.y, *dbu_per_um),
+            .ur_x_um = to_um(rect.ur.x, *dbu_per_um),
+            .ur_y_um = to_um(rect.ur.y, *dbu_per_um),
+        };
+    }
+
+    int le_add_shape_rect(LeHandle *handle, LeShapeId id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape)
+            return 1;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return 1;
+
+        shape->rects.push_back(le::Rect{
+            .ll = le::Point{.x = to_dbu(ll_x_um, *dbu_per_um), .y = to_dbu(ll_y_um, *dbu_per_um)},
+            .ur = le::Point{.x = to_dbu(ur_x_um, *dbu_per_um), .y = to_dbu(ur_y_um, *dbu_per_um)},
+        });
+        return 0;
+    }
+
+    int le_remove_shape_rect(LeHandle *handle, LeShapeId id, int32_t index)
+    {
+        if (!handle || index < 0)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(index) >= shape->rects.size())
+            return 1;
+        shape->rects.erase(shape->rects.begin() + index);
+        return 0;
+    }
+
+    int32_t le_shape_polygon_count(LeHandle *handle, LeShapeId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        return shape ? static_cast<int32_t>(shape->polygons.size()) : 0;
+    }
+
+    int32_t le_shape_polygon_point_count(LeHandle *handle, LeShapeId id, int32_t polygon_index)
+    {
+        if (!handle || polygon_index < 0)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(polygon_index) >= shape->polygons.size())
+            return 0;
+        return static_cast<int32_t>(shape->polygons[static_cast<size_t>(polygon_index)].points.size());
+    }
+
+    LePointUm le_shape_polygon_point_at(LeHandle *handle, LeShapeId id, int32_t polygon_index, int32_t point_index)
+    {
+        const LePointUm invalid{.x_um = 0, .y_um = 0};
+        if (!handle || polygon_index < 0 || point_index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(polygon_index) >= shape->polygons.size())
+            return invalid;
+        const std::vector<le::Point> &points = shape->polygons[static_cast<size_t>(polygon_index)].points;
+        if (static_cast<size_t>(point_index) >= points.size())
+            return invalid;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return invalid;
+
+        const le::Point &point = points[static_cast<size_t>(point_index)];
+        return LePointUm{.x_um = to_um(point.x, *dbu_per_um), .y_um = to_um(point.y, *dbu_per_um)};
+    }
+
+    int le_add_shape_polygon(LeHandle *handle, LeShapeId id, const double *points_um, int32_t point_coord_count)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape)
+            return 1;
+
+        std::optional<le::Polygon> polygon = build_polygon_from_flat_points(handle->root, points_um, point_coord_count, /*min_points=*/3);
+        if (!polygon)
+            return 1;
+
+        shape->polygons.push_back(std::move(*polygon));
+        return 0;
+    }
+
+    int le_remove_shape_polygon(LeHandle *handle, LeShapeId id, int32_t polygon_index)
+    {
+        if (!handle || polygon_index < 0)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(polygon_index) >= shape->polygons.size())
+            return 1;
+        shape->polygons.erase(shape->polygons.begin() + polygon_index);
+        return 0;
+    }
+
+    int32_t le_shape_path_count(LeHandle *handle, LeShapeId id)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        return shape ? static_cast<int32_t>(shape->paths.size()) : 0;
+    }
+
+    double le_shape_path_width_um(LeHandle *handle, LeShapeId id, int32_t path_index)
+    {
+        if (!handle || path_index < 0)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(path_index) >= shape->paths.size())
+            return 0;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return 0;
+        return to_um(static_cast<int64_t>(shape->paths[static_cast<size_t>(path_index)].width), *dbu_per_um);
+    }
+
+    int32_t le_shape_path_point_count(LeHandle *handle, LeShapeId id, int32_t path_index)
+    {
+        if (!handle || path_index < 0)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(path_index) >= shape->paths.size())
+            return 0;
+        return static_cast<int32_t>(shape->paths[static_cast<size_t>(path_index)].polygon.points.size());
+    }
+
+    LePointUm le_shape_path_point_at(LeHandle *handle, LeShapeId id, int32_t path_index, int32_t point_index)
+    {
+        const LePointUm invalid{.x_um = 0, .y_um = 0};
+        if (!handle || path_index < 0 || point_index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(path_index) >= shape->paths.size())
+            return invalid;
+        const std::vector<le::Point> &points = shape->paths[static_cast<size_t>(path_index)].polygon.points;
+        if (static_cast<size_t>(point_index) >= points.size())
+            return invalid;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return invalid;
+
+        const le::Point &point = points[static_cast<size_t>(point_index)];
+        return LePointUm{.x_um = to_um(point.x, *dbu_per_um), .y_um = to_um(point.y, *dbu_per_um)};
+    }
+
+    int le_add_shape_path(LeHandle *handle, LeShapeId id, double width_um, const double *points_um, int32_t point_coord_count)
+    {
+        if (!handle)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape)
+            return 1;
+
+        std::optional<le::Polygon> polygon = build_polygon_from_flat_points(handle->root, points_um, point_coord_count, /*min_points=*/2);
+        if (!polygon)
+            return 1;
+
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return 1;
+
+        shape->paths.push_back(le::Path{.polygon = std::move(*polygon), .width = static_cast<uint64_t>(to_dbu(width_um, *dbu_per_um))});
+        return 0;
+    }
+
+    int le_remove_shape_path(LeHandle *handle, LeShapeId id, int32_t path_index)
+    {
+        if (!handle || path_index < 0)
+            return 1;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        le::ShapeData *shape = handle->root.get_shape(from_c(id));
+        if (!shape || static_cast<size_t>(path_index) >= shape->paths.size())
+            return 1;
+        shape->paths.erase(shape->paths.begin() + path_index);
+        return 0;
     }
 
     LePixelBuffer le_render_pixel_buffer(LeHandle *handle)

@@ -19,16 +19,33 @@ namespace
             abstract_id = root.create_abstract(AbstractData{});
         }
 
+        // Adds a new TerminalPort (with one Shape) to an *existing*
+        // Terminal - for tests that need more than one port on the same
+        // Terminal. add_terminal_shape below is the common case (a fresh
+        // Terminal with a single port/shape) built on top of this.
+        TerminalPortId add_port_shape(TerminalId terminal_id, const Shape &shape)
+        {
+            TerminalPortId port_id = root.create_terminal_port(TerminalPortData{.terminal = terminal_id});
+            Shape owned_shape = shape;
+            owned_shape.terminal_port = port_id;
+            root.create_shape(std::move(owned_shape));
+            return port_id;
+        }
+
         TerminalId add_terminal_shape(const Shape &shape)
         {
             TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
-            root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {shape}});
+            add_port_shape(terminal_id, shape);
             return terminal_id;
         }
 
         ObstructionId add_obstruction_shape(const Shape &shape)
         {
-            return root.create_obstruction(ObstructionData{.abstract = abstract_id, .shapes = {shape}});
+            ObstructionId obstruction_id = root.create_obstruction(ObstructionData{.abstract = abstract_id});
+            Shape owned_shape = shape;
+            owned_shape.obstruction = obstruction_id;
+            root.create_shape(std::move(owned_shape));
+            return obstruction_id;
         }
 
         Root root;
@@ -276,8 +293,8 @@ TEST_F(PipelineFixture, GenerateShapesDoesNotMergeRectsAcrossDifferentPortsOrObs
     // Two disjoint rects, but each its own separate Shape (own port) -
     // merging is scoped per-Shape, not across a Terminal's whole geometry.
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "D4"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {15, 15}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {15, 15}}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 2u);
@@ -288,7 +305,7 @@ TEST_F(PipelineFixture, GenerateShapesDoesNotMergeRectsAcrossDifferentPortsOrObs
 TEST_F(PipelineFixture, GenerateShapesAddsTerminalLabelAtComputedLocation)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "A1"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
@@ -304,10 +321,7 @@ TEST_F(PipelineFixture, GenerateShapesAddsTerminalLabelAtComputedLocation)
 TEST_F(PipelineFixture, GenerateShapesSizesLabelToPathWidth)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "P1"});
-    root.create_terminal_port(TerminalPortData{
-        .terminal = terminal_id,
-        .shapes = {Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{0, 0}, {100, 0}}}, .width = 6}}}},
-    });
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{0, 0}, {100, 0}}}, .width = 6}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
@@ -322,17 +336,14 @@ TEST_F(PipelineFixture, GenerateShapesSizesLabelToLocalPolygonWidthNotBbox)
     // proves the schema field -> Geometry::local_width_at wiring is
     // actually connected end to end, not just correct in isolation.
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "L1"});
-    root.create_terminal_port(TerminalPortData{
-        .terminal = terminal_id,
-        .shapes = {Shape{.layer_name = "M1", .polygons = {Polygon{.points = {
-                                                                        {0, 0},
-                                                                        {100, 0},
-                                                                        {100, 30},
-                                                                        {30, 30},
-                                                                        {30, 100},
-                                                                        {0, 100},
-                                                                    }}}}},
-    });
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .polygons = {Polygon{.points = {
+                                                                                    {0, 0},
+                                                                                    {100, 0},
+                                                                                    {100, 30},
+                                                                                    {30, 30},
+                                                                                    {30, 100},
+                                                                                    {0, 100},
+                                                                                }}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
@@ -343,8 +354,8 @@ TEST_F(PipelineFixture, GenerateShapesSizesLabelToLocalPolygonWidthNotBbox)
 TEST_F(PipelineFixture, GenerateShapesLabelsOnlyTheFirstPortsFirstShape)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "B2"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 2u);
@@ -356,8 +367,8 @@ TEST_F(PipelineFixture, GenerateShapesLabelsOnlyTheFirstPortsFirstShape)
 TEST_F(PipelineFixture, GenerateShapesAddsOneLabelPerDistinctLayer)
 {
     TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "C3"});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}}}});
-    root.create_terminal_port(TerminalPortData{.terminal = terminal_id, .shapes = {Shape{.layer_name = "M2", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+    add_port_shape(terminal_id, Shape{.layer_name = "M2", .rects = {Rect{.ll = {20, 0}, .ur = {30, 10}}}});
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 2u);
@@ -914,14 +925,10 @@ TEST_F(PipelineFixture, HitTestRectReturnsOneHoverTargetPerEnclosedPieceOfTheSam
     // RenderedShape), which converts a multi-piece Shape's rects into
     // polygons regardless of whether they actually overlap - a different
     // scenario from this test's target.
-    const ObstructionId obstruction_id = root.create_obstruction(ObstructionData{
-        .abstract = abstract_id,
-        .shapes = {
-            Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}},
-            Shape{.layer_name = "M1", .rects = {Rect{.ll = {30, 30}, .ur = {40, 40}}}},
-            Shape{.layer_name = "M1", .rects = {Rect{.ll = {100, 100}, .ur = {110, 110}}}}, // outside the drag rect
-        },
-    });
+    const ObstructionId obstruction_id = root.create_obstruction(ObstructionData{.abstract = abstract_id});
+    root.create_shape(ShapeData{.obstruction = obstruction_id, .layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}});
+    root.create_shape(ShapeData{.obstruction = obstruction_id, .layer_name = "M1", .rects = {Rect{.ll = {30, 30}, .ur = {40, 40}}}});
+    root.create_shape(ShapeData{.obstruction = obstruction_id, .layer_name = "M1", .rects = {Rect{.ll = {100, 100}, .ur = {110, 110}}}}); // outside the drag rect
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
