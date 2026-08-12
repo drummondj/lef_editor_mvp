@@ -2063,14 +2063,8 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
-        const auto &pixel_shapes = handle->renderer.transform_to_pixels(handle->root, shapes, handle->scene);
-        const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers, handle->root);
         const auto &tiny_shapes = handle->pipeline.run_tiny_shapes(handle->root, handle->scene, handle->view_layers);
-        const auto &tiny_pixel_shapes = handle->renderer.transform_tiny_shapes_to_pixels(handle->root, tiny_shapes, handle->scene);
-        const auto &tiny_shapes_picture = handle->renderer.build_tiny_shapes_picture(handle->root, tiny_pixel_shapes, handle->scene, handle->view_layers);
-        const auto &overlay_picture = handle->renderer.build_overlay_picture(handle->scene);
-        const auto &selection_overlay_picture = handle->renderer.build_selection_overlay_picture(handle->scene);
-        const auto &buffer = handle->renderer.compose_with_overlays(handle->root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, handle->scene);
+        const auto &buffer = handle->renderer.render(handle->root, shapes, tiny_shapes, handle->scene, handle->view_layers);
 
         return LePixelBuffer{
             .data = buffer.data,

@@ -106,6 +106,16 @@ none of these are duplicated here.
   gets a stale-but-cached frame; verified every real call site
   (`api.cpp`, `render_preview.cpp`, every benchmark) always re-runs the
   full chain in order, so this isn't a live risk today.
+  `Renderer::render(root, shapes, tiny_shapes, scene, view_layers)` wires
+  the whole nine-call chain (mirrors `Pipeline::run()`'s own role) - takes
+  `Pipeline`'s output (`shapes`/`tiny_shapes`, `core`'s own boundary
+  types), not a `Pipeline&`, since `render` doesn't link `pipeline`; the
+  caller runs `Pipeline::run()`/`run_tiny_shapes()` first. `api.cpp`'s
+  `le_render_pixel_buffer` and `render_preview.cpp` both just call this
+  now instead of wiring all nine calls by hand. Every individual stage
+  method still exists alongside it for partial-chain callers (isolation
+  benchmarks in `pipeline_benchmark.cpp`, `render_test.cpp`) - `render()`
+  is a convenience wrapper, not a replacement.
   `TransformToPixelsStage` (dbu→pixel, no Y-flip) → `BuildPictureStage`
   (Skia `SkPictureRecorder` draw calls) → `RasterizeStage` (SkPicture →
   raw `PixelBuffer`) is the main chain; `RasterizeStage`/`ComposeWithOverlaysStage`

@@ -138,17 +138,8 @@ int main(int argc, char **argv)
         Scene scene = fit_scene(root, abstract_id, pipeline, view_layers);
 
         const auto &shapes = pipeline.run(root, scene, view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
-        const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-
-        // UPDATES.md item 6: composite in the sub-pixel single-dot
-        // fallback too, via compose_with_overlays (no mouse/selection
-        // overlay content in this offline tool, so those two pictures are
-        // left null - see rasterize_frame's RETURN_ON_NULL handling).
         const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
-        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
-        const auto &tiny_shapes_picture = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
-        const auto &buffer = renderer.compose_with_overlays(root, picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const auto &buffer = renderer.render(root, shapes, tiny_shapes, scene, view_layers);
 
         // The design's own library name (derived from whichever file's
         // read_lef call actually declared its MACRO - see the file-level

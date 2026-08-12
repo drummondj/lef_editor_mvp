@@ -97,6 +97,36 @@ namespace le
                                        design_picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, scene);
         }
 
+        /// @brief Run the full render chain for a frame - transform_to_pixels
+        /// -> build_picture -> transform_tiny_shapes_to_pixels ->
+        /// build_tiny_shapes_picture -> build_overlay_picture ->
+        /// build_selection_overlay_picture -> compose_with_overlays, in
+        /// that order - mirrors Pipeline::run()'s own role: the single
+        /// entry point every real caller (api.cpp's le_render_pixel_buffer,
+        /// render_preview.cpp) actually wants, instead of each caller
+        /// re-wiring all nine calls by hand. Takes `shapes`/`tiny_shapes`
+        /// (Pipeline's own output, exactly the boundary types `core`
+        /// defines) rather than a `Pipeline&` - Renderer deliberately
+        /// doesn't link `pipeline` (see CLAUDE.md's src/render/ note), so
+        /// this can't call into Pipeline itself; the caller runs
+        /// `Pipeline::run()`/`run_tiny_shapes()` first, same as before.
+        /// Every individual stage method above still exists and is still
+        /// used directly by callers that want a partial chain (e.g.
+        /// render_preview.cpp passes null overlay/selection pictures via
+        /// compose_with_overlays directly; several pipeline_benchmark.cpp
+        /// benchmarks isolate one stage's own cost) - this is a
+        /// convenience wrapper alongside them, not a replacement.
+        const PixelBuffer &render(const Root &root, const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes, const Scene &scene, const ViewLayerSet &view_layers)
+        {
+            const auto &pixel_shapes = transform_to_pixels(root, shapes, scene);
+            const auto &picture = build_picture(pixel_shapes, scene, view_layers, root);
+            const auto &tiny_pixel_shapes = transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+            const auto &tiny_shapes_picture = build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
+            const auto &overlay_picture = build_overlay_picture(scene);
+            const auto &selection_overlay_picture = build_selection_overlay_picture(scene);
+            return compose_with_overlays(root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, scene);
+        }
+
         // Number of times each stage actually recomputed - exposed purely
         // to make cache hits/misses observable in tests.
         uint64_t transform_calls() const { return transform_stage_.call_count(); }
