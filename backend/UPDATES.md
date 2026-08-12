@@ -241,7 +241,7 @@ Also, Shape objects may need to be added to a pool to support this. The reason t
 
 cmg could be used to generate the C API.
 
-# 16. Pipeline and render module refactor for structure and clarity - PARTIALLY DONE (Pipeline done, see BENCHMARKS.md 2026-08-12; Renderer is a separate follow-up)
+# 16. Pipeline and render module refactor for structure and clarity - DONE (see BENCHMARKS.md 2026-08-12 entries for both Pipeline and Renderer)
 
 I would like more structure to help increase code clarity, understanding and readability.
 

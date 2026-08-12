@@ -12,8 +12,6 @@ using namespace le;
 
 namespace
 {
-    SkColor to_sk_color(Color c) { return SkColorSetARGB(c.a, c.r, c.g, c.b); }
-
     // Builds a Root with one Technology, an M1 and M2 layer, a matching
     // ViewLayerSet, and one empty Abstract - the common scaffolding every
     // test below attaches to. Reuses PipelineFixture's shape of setup
@@ -828,6 +826,14 @@ TEST_F(RenderFixture, BuildPictureAndRasterizeAreNotInvalidatedBySelectionChange
 
 TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
 {
+    // UPDATES.md item 16's Renderer refactor: BuildPictureStage's cache
+    // key composes TransformToPixelsStage's own version() instead of
+    // independently re-deriving AbstractId/viewport_version/
+    // visibility_version/root.mutation_version() - so unlike before this
+    // refactor, a visibility change only invalidates build_picture's cache
+    // once transform_to_pixels has actually been re-run to notice it (the
+    // real calling convention every caller already follows - see
+    // ComposeWithOverlaysStage's own doc comment for the full trace).
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
@@ -843,7 +849,9 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
     EXPECT_EQ(renderer.picture_calls(), 1u);
 
     scene.set_layer_name_visible("M1", false);
-    renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &shapes_after = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes_after = renderer.transform_to_pixels(root, shapes_after, scene);
+    renderer.build_picture(pixel_shapes_after, scene, view_layers, root);
     EXPECT_EQ(renderer.picture_calls(), 2u);
 }
 
@@ -1283,6 +1291,55 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     EXPECT_EQ(renderer.compose_calls(), 2u);        // cheap composite did recompute
 }
 
+TEST_F(RenderFixture, ComposeWithOverlaysRecomputesWhenOnlyTheTinyShapesPictureChanges)
+{
+    // UPDATES.md item 16's Renderer refactor: ComposeWithOverlaysStage's
+    // key composes all four upstream stages' own version() (design,
+    // tiny-shapes, and selection-overlay rasterizers, plus the mouse
+    // overlay stage) instead of a hand-copied 6-tuple - see the class's
+    // own doc comment. Every other compose_with_overlays test in this file
+    // passes a null tiny_shapes_picture (see
+    // ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMoves and
+    // friends), so this is the only test proving the composition actually
+    // reacts to the tiny-shapes upstream specifically - design_picture,
+    // overlay_picture, and selection_overlay_picture are held to the exact
+    // same object references across both compose calls to isolate it.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {40, 40}, .ur = {40, 40}}}}); // zero-area -> tiny
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+
+    const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+    const auto &tiny_shapes_picture_1 = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
+    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_1, overlay_picture, selection_overlay_picture, scene);
+    ASSERT_EQ(renderer.compose_calls(), 1u);
+
+    // Toggle M1 invisible: tiny_shapes_by_layer_visibility drops the whole
+    // group, so re-running the tiny-shapes chain produces a different
+    // tiny_shapes_picture - design_picture/overlay_picture/
+    // selection_overlay_picture are passed through as the exact same
+    // objects (never rebuilt) to keep this isolated to the tiny-shapes
+    // upstream alone.
+    scene.set_layer_name_visible("M1", false);
+    const auto &tiny_shapes_after = pipeline.run_tiny_shapes(root, scene, view_layers);
+    ASSERT_TRUE(tiny_shapes_after.empty());
+    const auto &tiny_pixel_shapes_after = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes_after, scene);
+    const auto &tiny_shapes_picture_2 = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes_after, scene, view_layers);
+    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_2, overlay_picture, selection_overlay_picture, scene);
+
+    EXPECT_EQ(renderer.compose_calls(), 2u);
+}
+
 TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore)
 {
     // Regression: le_render_pixel_buffer (api.cpp) calls exactly this
@@ -1472,6 +1529,15 @@ TEST_F(RenderFixture, RasterizeWithZeroSizedViewportDoesNotCrashAndReturnsEmptyB
 
 TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
 {
+    // UPDATES.md item 16's Renderer refactor: RasterizeStage's cache key
+    // composes BuildPictureStage's own version() instead of independently
+    // re-deriving AbstractId/viewport_version/visibility_version/
+    // root.mutation_version() - so unlike before this refactor, a pan
+    // change only invalidates rasterize's cache once the
+    // transform_to_pixels -> build_picture chain has actually been re-run
+    // to notice it (the real calling convention every caller already
+    // follows - see ComposeWithOverlaysStage's own doc comment for the
+    // full trace).
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
@@ -1488,6 +1554,9 @@ TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
     EXPECT_EQ(renderer.rasterize_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    renderer.rasterize(root, picture, scene);
+    const auto &shapes_after = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes_after = renderer.transform_to_pixels(root, shapes_after, scene);
+    const auto &picture_after = renderer.build_picture(pixel_shapes_after, scene, view_layers, root);
+    renderer.rasterize(root, picture_after, scene);
     EXPECT_EQ(renderer.rasterize_calls(), 2u);
 }

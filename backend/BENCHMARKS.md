@@ -845,3 +845,57 @@ all (true for *any* implementation under this benchmark's existing
 design, not something this refactor introduced). Forcing more iterations
 (`--benchmark_min_time=6s`) confirms the cache genuinely works:
 2,185,791,604 iterations at 0.000 ms/call.
+
+## 2026-08-12 — Renderer stage classes + version() composition, "compose everywhere" (UPDATES.md item 16)
+
+Same refactor as the Pipeline entry above, applied to `Renderer`'s 10
+`CachedStage`-backed methods. Two differences from Pipeline's own version:
+
+1. **8 stage classes, not 10**: `rasterize_frame`/`rasterize_tiny_shapes_frame`/
+   `rasterize_selection_overlay_frame` had identical bodies (build an
+   RGBA8888 surface, Y-flip, `drawPicture`, `peekPixels`) - collapsed into
+   one generic `RasterizeStage`, instantiated three times, rather than
+   three copy-pasted classes.
+2. **"Compose everywhere" required rewriting 2 tests**, unlike Pipeline
+   (where composing turned out to need zero test changes once checked).
+   Several Renderer methods take an already-built value (`pixel_shapes`,
+   an `SkPicture`) as an explicit parameter, and two tests
+   (`BuildPictureReusesCacheUntilVisibilityVersionChanges`,
+   `RasterizeReusesCacheUntilViewportVersionChanges`) deliberately reused a
+   stale artifact without re-running the upstream stage, to prove
+   self-sufficient staleness detection - a guarantee added specifically
+   because trusting upstream freshness had already caused two real bugs
+   (see `rasterize_frame`'s pre-refactor doc comment, `git log`). Chose to
+   compose anyway (same call as Pipeline's own "update the tests too");
+   both tests were rewritten to re-run the real chain instead of reusing a
+   stale value, keeping their original assertions/semantics. Traced every
+   real call site (`api.cpp`, `render_preview.cpp`, every relevant
+   benchmark) first to confirm none of them actually rely on the dropped
+   guarantee - see the plan file / commit message for the full writeup.
+
+True A/B via `git stash` (render.cpp/render.hpp/render_test.cpp + the new
+draw_helpers.hpp/pixel_types.hpp/stages/ files, same machine/session, same
+1M-shape stress design), Release build, `--benchmark_repetitions=5
+--benchmark_report_aggregates_only=true`:
+
+| Benchmark | Before (one class, hand-written keys) | After (8 stage classes, version() composition) |
+| --- | --- | --- |
+| `BM_Rasterize` | 29.9 ms (cv 2.07%) | 29.2 ms (cv 0.40%) |
+| `BM_Render` (cold, full chain) | 623 ms (cv 0.84%) | 622 ms (cv 0.35%) |
+| `BM_RenderReused_NoChange` | 575 ms (cv 2.37%) | 570 ms (cv 0.32%) |
+| `BM_RenderReused_PanOnly` | 569 ms (cv 0.62%) | 578 ms (cv 0.82%) |
+| `BM_RenderReused_PanOnly_ZoomedOut` | 534 ms (cv 0.75%) | 537 ms (cv 0.87%) |
+| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut` | 565 ms (cv 0.18%) | 570 ms (cv 0.78%) |
+| `BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes` | 550 ms (cv 1.79%) | 544 ms (cv 0.99%) |
+| `BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly` (0/100/1k/5k/20k selected) | 3.35/3.29/3.36/3.34/3.47 ms | 3.27/3.26/3.29/3.33/3.42 ms |
+
+Statistically indistinguishable across the board - every "after" number
+falls inside the "before" number's own run-to-run noise band. Specifically
+confirms the one real behavior change from this refactor -
+`ComposeWithOverlaysStage` now calls its three `RasterizeStage` upstreams
+unconditionally (to read a guaranteed-current `.version()`) instead of only
+inside a cache-miss lambda, so a truly-nothing-changed repeat call now
+does 3 extra cheap (already-cached, O(1) tuple-compare) calls it didn't do
+before - `BM_RenderReused_NoChange` and
+`BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly` are exactly the
+benchmarks that would show this, and both stayed flat.
