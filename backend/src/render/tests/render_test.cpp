@@ -1,4 +1,5 @@
 #include "../render.hpp"
+#include "../../pipeline/pipeline.hpp"
 #include "include/core/SkBitmap.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkImageInfo.h"

@@ -1,5 +1,7 @@
 #pragma once
-#include "../pipeline/pipeline.hpp"
+#include "../core/rendered_shape.hpp"
+#include "../core/versioned_stage.hpp"
+#include "../geometry/geometry.hpp"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkFont.h"

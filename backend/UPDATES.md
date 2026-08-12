@@ -240,3 +240,20 @@ There is a TCL interface generator called SWIG which may be useful to wrap the C
 Also, Shape objects may need to be added to a pool to support this. The reason they are not in a pool right now, is that they can multiple parent types.
 
 cmg could be used to generate the C API.
+
+# 16. Pipeline and render module refactor for structure and clarity - PARTIALLY DONE (Pipeline done, see BENCHMARKS.md 2026-08-12; Renderer is a separate follow-up)
+
+I would like more structure to help increase code clarity, understanding and readability.
+
+Both pipeline and render perform similar data transformation functions using cached data. To make it easier to determine what feed each stage and waht is cached, I would like to refactor both modules to introduce some helper classes.
+
+This MVP is only a small subset of the number of steps required for a full LEF/DEF editor, so it is only going to get more complex.
+
+My idea is:
+
+1. Each step in the data flow has it's own class
+2. The output of each class contains a version number
+3. Classes can be stitched together, so the inputs of one connect to the outputs of other.
+4. Ideally some generic class can be created for easier future expansion.
+
+This should help reduce the amount of caching bugs, like we had to fix in the previous commit.

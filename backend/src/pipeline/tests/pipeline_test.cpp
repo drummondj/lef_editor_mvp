@@ -526,6 +526,49 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeReusesCacheUntilViewportVersionCh
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
 }
 
+TEST_F(PipelineFixture, FilterByViewportAndSizeRecomputesWhenUpstreamVersionChangesEvenWithSameViewportVersion)
+{
+    // The structural property UPDATES.md item 16's refactor exists for:
+    // FilterByViewportAndSizeStage's key composes via GenerateShapesStage's
+    // own version() (see pipeline.hpp's class comments), not by
+    // re-deriving every trigger GenerateShapesStage itself depends on - so
+    // *any* future trigger added to GenerateShapesStage (not just
+    // Root::mutation_version(), the one that actually caused a real bug -
+    // see GenerateShapesRecomputesAfterACrudMutation... above) invalidates
+    // this stage automatically, without this stage's own key - or this
+    // test - needing to know what that trigger is. Unlike that earlier
+    // regression test (which only proves GenerateShapesStage itself
+    // recomputes), this one proves the *downstream* stage does too, with
+    // its own direct input (viewport_version) deliberately left unchanged
+    // throughout - the exact property that would have caught the
+    // mutation_version() gap automatically before it ever shipped.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    const auto &generated = pipeline.generate_shapes(root, abstract_id, view_layers);
+    const size_t generated_size_before = generated.size();
+    pipeline.filter_by_viewport_and_size(root, generated, scene, view_layers);
+    pipeline.filter_by_viewport_and_size(root, generated, scene, view_layers);
+    ASSERT_EQ(pipeline.generate_calls(), 1u);
+    ASSERT_EQ(pipeline.viewport_filter_calls(), 1u); // nothing changed - cache hit
+
+    // Mutate + bump, exactly like api.cpp's own CRUD functions - scene's
+    // viewport_version() is never touched.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {50, 50}, .ur = {60, 60}}}});
+    root.bump_mutation_version();
+
+    const auto &regenerated = pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(pipeline.generate_calls(), 2u); // GenerateShapesStage recomputed
+    ASSERT_NE(regenerated.size(), generated_size_before); // real content change, not a coincidence
+
+    pipeline.filter_by_viewport_and_size(root, regenerated, scene, view_layers);
+    EXPECT_EQ(pipeline.viewport_filter_calls(), 2u); // must recompute - upstream's version changed, even though viewport_version() alone didn't
+}
+
 TEST_F(PipelineFixture, FilterByLayerVisibilityDropsHiddenViewLayerKeepsVisible)
 {
     ViewLayerId m1_obstruction = view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION);

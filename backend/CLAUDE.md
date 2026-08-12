@@ -44,26 +44,50 @@ none of these are duplicated here.
   layer has independently toggleable `TERMINAL`/`OBSTRUCTION` visibility.
   Selection is `std::variant<TerminalId, ObstructionId>` — extend the
   variant as more selectable kinds need it rather than generalizing early.
-- `src/pipeline/` — `Pipeline`: `generate_shapes` → `filter_by_viewport_and_size`
-  → `filter_by_layer_visibility`, no node/task framework. Each stage is a
-  non-static instance method that self-caches (`CachedStage<Key, Value>`,
-  keyed on whatever it actually depends on) and chains to the previous
-  stage internally — reuse one `Pipeline` instance per `Scene`-equivalent
-  lifetime. `generate_shapes` resolves each `Shape` straight to its
-  `ViewLayerId` in the same pass (no separate resolve stage), merges each
-  Shape's own overlapping rects/polygons via `Geometry::merge_overlapping_fills`,
-  and attaches one text label per distinct layer a Terminal has geometry
-  on. `filter_by_layer_visibility` groups into `std::map<ViewLayerId, ...>`
-  (not `unordered_map`) — deliberate, since `ViewLayerId`'s ordering matches
-  LEF-declared layer stacking order, giving correct bottom-up draw order
-  for free; don't change this to `unordered_map`. See the class's own doc
-  comments for full per-stage rationale, and `BENCHMARKS.md` for current
-  numbers and history. Fully covered by `pipeline_test.cpp`.
-- `src/render/` — `Renderer`, three stages on top of `Pipeline`'s output,
-  same self-caching pattern: `transform_to_pixels` (dbu→pixel, no Y-flip)
-  → `build_picture` (Skia `SkPictureRecorder` draw calls) → `rasterize`
-  (SkPicture → raw `PixelBuffer`). Takes a `Pipeline&` from the caller
-  rather than owning one. `rasterize` uses explicit `kRGBA_8888_SkColorType`
+- `src/core/` — header-only generic building blocks shared between
+  `pipeline` and `render` (UPDATES.md item 16), so neither module depends
+  on the other for them: `RenderedShape`/`TinyShapeDot` (`pipeline`'s
+  output type, `render`'s input type) and `VersionedStage<Key, Value>` —
+  a single-slot memoization primitive (`get(key, compute_fn)`) with its
+  own monotonic `version()`, bumped on every real recompute. A downstream
+  stage composes its own cache key from an upstream stage's `version()`
+  instead of manually re-deriving everything the upstream depends on —
+  the fix for a caching-bug class where a new upstream trigger (e.g.
+  `Root::mutation_version()`) had to be hand-copied into every downstream
+  key or a change silently went unseen. `CachedStage<Key, Value>` is a
+  backward-compatible alias for `VersionedStage`, still used by `render`'s
+  own stages.
+- `src/pipeline/` — `Pipeline` chains five stage classes, one per file
+  under `src/pipeline/stages/`, each built on `core`'s `VersionedStage`:
+  `GenerateShapesStage` → `FilterByViewportAndSizeStage` →
+  `FilterByLayerVisibilityStage` (the `run()` chain) and
+  `GenerateShapesStage` → `TinyShapesByViewportStage` →
+  `TinyShapesByLayerVisibilityStage` (the `run_tiny_shapes()` chain,
+  sharing `GenerateShapesStage` with the first). `Pipeline` itself is a
+  thin owner of one instance of each stage plus orchestration
+  (`run`/`run_tiny_shapes`/`hit_test_point`/`hit_test_rect`) — every
+  public method keeps its original signature, delegating to its stage in
+  one line; reuse one `Pipeline` instance per `Scene`-equivalent
+  lifetime. `GenerateShapesStage::run` resolves each `Shape` straight to
+  its `ViewLayerId` in the same pass (no separate resolve stage), merges
+  each Shape's own overlapping rects/polygons via
+  `Geometry::merge_overlapping_fills`, and attaches one text label per
+  distinct layer a Terminal has geometry on.
+  `FilterByLayerVisibilityStage`/`TinyShapesByLayerVisibilityStage` group
+  into `std::map<ViewLayerId, ...>` (not `unordered_map`) — deliberate,
+  since `ViewLayerId`'s ordering matches LEF-declared layer stacking
+  order, giving correct bottom-up draw order for free; don't change this
+  to `unordered_map`. See each stage class's own doc comment for its
+  exact cache key and why it's shaped that way, and `BENCHMARKS.md` for
+  current numbers and history. Fully covered by `pipeline_test.cpp`.
+- `src/render/` — `Renderer`, stages on top of `Pipeline`'s already-
+  computed, `ViewLayerId`-grouped output maps (`render` links `core`
+  directly for `RenderedShape`/`TinyShapeDot`/`CachedStage`, not
+  `pipeline` — it never names the `Pipeline` class itself, only takes its
+  output by reference), same self-caching pattern:
+  `transform_to_pixels` (dbu→pixel, no Y-flip) → `build_picture` (Skia
+  `SkPictureRecorder` draw calls) → `rasterize` (SkPicture → raw
+  `PixelBuffer`). `rasterize` uses explicit `kRGBA_8888_SkColorType`
   (not Skia's platform-native `kN32_SkColorType`) so byte layout matches
   between the macOS dev machine and the Linux target, and applies the
   Y-axis flip (`transform_to_pixels` deliberately doesn't) as one

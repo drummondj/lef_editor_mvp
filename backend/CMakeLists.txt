@@ -105,10 +105,17 @@ add_library(scene INTERFACE)
 target_include_directories(scene INTERFACE src)
 target_link_libraries(scene INTERFACE database view_style)
 
+# --- core: header-only generic building blocks shared between pipeline and
+# render (RenderedShape/TinyShapeDot, VersionedStage) - neither module
+# depends on the other for these, only both on core. See UPDATES.md item 16. ---
+add_library(core INTERFACE)
+target_include_directories(core INTERFACE src)
+target_link_libraries(core INTERFACE database scene view_style)
+
 # --- pipeline: header-only shape generation + viewport/size/layer filtering ---
 add_library(pipeline INTERFACE)
 target_include_directories(pipeline INTERFACE src)
-target_link_libraries(pipeline INTERFACE database geometry scene view_style)
+target_link_libraries(pipeline INTERFACE database geometry scene view_style core)
 
 # --- Skia (not vendored/built by this project - a pre-built checkout on
 # this machine). SKIA_DIR must contain out/MacStatic/{libskia.a,...} built
@@ -151,7 +158,7 @@ endif()
 # that can't be a header-only detail. ---
 add_library(render STATIC src/render/render.cpp)
 target_include_directories(render PUBLIC src)
-target_link_libraries(render PUBLIC database geometry scene view_style pipeline skia)
+target_link_libraries(render PUBLIC database geometry scene view_style core skia)
 
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp src/io/lef_writer.cpp)

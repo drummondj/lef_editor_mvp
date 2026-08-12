@@ -805,3 +805,43 @@ vs. lost cache locality from shapes no longer being contiguous in their
 parent's memory). Revisit with a profiler if `generate_shapes`'s cold cost
 becomes a real interactive-latency complaint, per this project's own
 "benchmark before optimizing" rule - not preemptively.
+
+## 2026-08-12 — Pipeline stage classes + VersionedStage (UPDATES.md item 16)
+
+Confirming no regression from splitting `Pipeline`'s 5 stages into their
+own classes (`GenerateShapesStage`, `FilterByViewportAndSizeStage`, etc.,
+each wrapping a `VersionedStage` - the renamed, version-tracking
+`CachedStage`) and switching downstream cache keys to compose via an
+upstream stage's own `version()` instead of manually re-deriving its
+triggers - the fix for the caching-bug *class* the 2026-08-10 `mutation_version()`
+fix (see TCL_EXPLORATION.md) needed 9 hand-touched cache keys to patch.
+
+True A/B via `git stash` (pipeline.hpp/pipeline_test.cpp only, same
+machine/session, same 1M-shape stress design):
+
+| Benchmark | Before (one class, hand-written keys) | After (per-stage classes, version() composition) |
+| --- | --- | --- |
+| `BM_GenerateShapes` (1M shapes) | 652 ms (mean of 3, cv 5.61%) | 644 ms (mean of 3, cv 7.47%) |
+| `BM_FilterByViewportAndSize` | 18.1 ms (cv 0.68%) | 18.1 ms (cv 1.08%) |
+| `BM_FilterByLayerVisibility` | 4.58 ms (cv 1.26%) | 4.63 ms (cv 2.60%) |
+| `BM_Run` (cold) | 595 ms (cv 0.29%) | 590 ms (cv 0.81%) |
+
+Statistically indistinguishable - every "after" number falls inside the
+"before" number's own run-to-run noise band, in both directions. Both
+sets are elevated versus this file's own historical baselines (e.g.
+~430-449 ms `BM_GenerateShapes` from earlier 2026-08 sessions) - a
+session-wide effect (background system load, not this change: the *before*
+number is equally elevated) rather than a regression, confirmed by
+comparing before/after on the same loaded machine rather than against an
+older session's numbers.
+
+`BM_RunReused_NoChange` initially looked alarming (~600 ms/call, i.e. as
+expensive as a cold `BM_GenerateShapes`) until checking the raw
+(non-aggregated) output: `Iterations = 1` - Google Benchmark's
+auto-tuner stopped after one call because it already exceeded the default
+minimum measurement time, so the reported number was purely the cold
+first call, never reaching a genuine cached-steady-state measurement at
+all (true for *any* implementation under this benchmark's existing
+design, not something this refactor introduced). Forcing more iterations
+(`--benchmark_min_time=6s`) confirms the cache genuinely works:
+2,185,791,604 iterations at 0.000 ms/call.
