@@ -19,6 +19,40 @@
 #error "LE_TCL_PROCS_PATH must be set by lef_editor_plugin.podspec"
 #endif
 
+namespace {
+// Redefines `puts` to capture its text into `::le_console_output` instead
+// of writing to the real stdout/stderr channels - deliberately injected
+// here as a bootstrap Tcl_Eval, not added to le_tcl_procs.tcl itself:
+// that file is also sourced by le_shell.cpp (a real interactive terminal
+// program, backend/src/tcl/le_shell.cpp), where `puts` must keep printing
+// to the real terminal. Scoping the override to this one embedded
+// Tcl_Interp is what makes it safe to redefine a built-in this way at
+// all.
+//
+// A pure-Tcl `rename`+`proc` override rather than a custom C
+// Tcl_ChannelType (the more "complete" way to intercept stdout/stderr,
+// registered via Tcl_RegisterChannel/Tcl_SetStdChannel) - every realistic
+// source of console output in this project's own Tcl surface (user-typed
+// commands, le_tcl_procs.tcl, Tcl core's own default `bgerror`) goes
+// through the `puts` command, channel argument (stdout/stderr) and all
+// (`puts stderr $msg` is still a call to `puts`), so this catches both
+// without needing a lower-level channel driver. Extend to a real channel
+// intercept only if something is ever found writing to a channel
+// directly, bypassing `puts` - not done speculatively.
+const char *const kCapturePutsBootstrap = R"tcl(
+    set ::le_console_output {}
+    rename ::puts ::le_tcl_real_puts
+    proc ::puts {args} {
+        set noNewline [expr {[lindex $args 0] eq "-nonewline"}]
+        append ::le_console_output [lindex $args end]
+        if {!$noNewline} {
+            append ::le_console_output "\n"
+        }
+        return {}
+    }
+)tcl";
+}  // namespace
+
 @implementation LeTclBridge {
   Tcl_Interp *_interp;
 }
@@ -46,6 +80,10 @@
     if (Tcl_EvalFile(_interp, LE_TCL_PROCS_PATH) != TCL_OK) {
       NSLog(@"LeTclBridge: failed to source le_tcl_procs.tcl: %s", Tcl_GetStringResult(_interp));
     }
+
+    if (Tcl_Eval(_interp, kCapturePutsBootstrap) != TCL_OK) {
+      NSLog(@"LeTclBridge: failed to install puts capture: %s", Tcl_GetStringResult(_interp));
+    }
   }
   return self;
 }
@@ -66,7 +104,24 @@
   // the error message on failure, exactly what a real interactive Tcl
   // shell would print either way (see this class's header comment).
   Tcl_Eval(_interp, command.UTF8String);
-  return [NSString stringWithUTF8String:Tcl_GetStringResult(_interp)];
+  NSString *result = [NSString stringWithUTF8String:Tcl_GetStringResult(_interp)];
+
+  // Drain whatever `puts` captured during this command (see
+  // kCapturePutsBootstrap above) and reset it for the next call - shown
+  // ahead of the interpreter's own result, matching the order a real
+  // terminal would print them in (output as the command runs, its return
+  // value logged last).
+  const char *captured = Tcl_GetVar(_interp, "le_console_output", TCL_GLOBAL_ONLY);
+  NSString *capturedOutput = captured != nullptr ? [NSString stringWithUTF8String:captured] : @"";
+  Tcl_SetVar(_interp, "le_console_output", "", TCL_GLOBAL_ONLY);
+
+  if (capturedOutput.length == 0) {
+    return result;
+  }
+  if (result.length == 0) {
+    return capturedOutput;
+  }
+  return [capturedOutput stringByAppendingString:result];
 }
 
 @end

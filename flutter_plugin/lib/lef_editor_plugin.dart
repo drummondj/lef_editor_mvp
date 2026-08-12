@@ -902,7 +902,12 @@ class LeTclConsole {
   /// whether the command succeeded or failed - Tcl already puts the error
   /// message in the same place on failure, so a caller checks the text
   /// itself rather than a separate success flag, matching how a real
-  /// interactive Tcl shell prints either case.
+  /// interactive Tcl shell prints either case. Also includes any text the
+  /// command wrote via `puts` (stdout or stderr), ahead of the
+  /// interpreter's own result - `puts` inside this console's interpreter
+  /// never reaches this app's real stdout/stderr (see macOS's
+  /// LeTclBridge.evalTcl:), so this is the only place a script's own
+  /// output is observable at all.
   Future<String> eval(String command) async {
     if (_disposed) {
       throw StateError('eval called on a disposed LeTclConsole');

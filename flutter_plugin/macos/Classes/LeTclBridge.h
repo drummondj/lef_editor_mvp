@@ -34,7 +34,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// command succeeded or failed (Tcl already puts the error message in
 /// the same place on `TCL_ERROR` - a caller doesn't need a different
 /// path for errors, matching what a real interactive shell prints
-/// either way).
+/// either way). Also includes anything the command wrote via `puts`
+/// (stdout or stderr - see LeTclBridge.mm's kCapturePutsBootstrap),
+/// prepended ahead of the interpreter's own result - `puts` inside this
+/// bridge's interpreter never reaches the app's real stdout/stderr, so a
+/// script's own output only ever reaches the caller through here.
 - (NSString *)evalTcl:(NSString *)command;
 
 @end
