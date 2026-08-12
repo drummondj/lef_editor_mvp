@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:lef_editor/components/layout_editor.dart';
 import 'package:lef_editor/components/main_menu.dart';
 import 'package:lef_editor/components/message_console.dart';
-import 'package:lef_editor/components/right_sidebar/right_sidebar.dart';
 import 'package:lef_editor/components/right_sidebar/right_sidebar_alt.dart';
 import 'package:lef_editor/components/tcl_console.dart';
+import 'package:lef_editor/components/terminal/terminal.dart';
 import 'package:lef_editor/components/widget_card.dart';
 
 class Home extends StatefulWidget {
@@ -26,6 +26,13 @@ class _HomeState extends State<Home> {
           padding: const EdgeInsets.all(8.0),
           child: Stack(
             children: [
+              // Positioned(
+              //   top: 10,
+              //   left: 10,
+              //   right: 10,
+              //   bottom: 10,
+              //   child: Terminal(),
+              // ),
               Positioned(
                 top: 10,
                 left: 10,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor_plugin/lef_editor_plugin.dart';
@@ -34,6 +36,10 @@ class LeSelectedObjectInfo {
 }
 
 class LeProvider extends ChangeNotifier {
+  LeProvider() {
+    _messageStream = _messageStreamController.stream;
+  }
+
   final double panFactor = 0.25;
   final LeEditor _editor = LeEditor();
 
@@ -42,8 +48,10 @@ class LeProvider extends ChangeNotifier {
 
   final List<String> _openLefFiles = [];
 
-  final List<String> _messages = ["INFO: Welcome to LayoutEngine"];
-  List<String> get messages => _messages;
+  final StreamController<String> _messageStreamController =
+      StreamController<String>.broadcast();
+
+  late final Stream<String> _messageStream;
 
   final List<LeLayerInfo> _layers = [];
   List<LeLayerInfo> get layers => _layers;
@@ -173,10 +181,16 @@ class LeProvider extends ChangeNotifier {
     for (int i = _lastMessageCount; i < count; i++) {
       final message = _editor.messageAt(i);
       if (message != null) {
-        _messages.add(message);
+        _messageStreamController.add(message);
       }
     }
     _lastMessageCount = count;
+  }
+
+  StreamSubscription<String> addMessageListener(Function(String) callback) {
+    var subscription = _messageStream.listen(callback);
+    _messageStreamController.add("LEF Editor: Version 0.1.0");
+    return subscription;
   }
 
   // TODO: this currently refreshed everything all the time (except
@@ -204,11 +218,11 @@ class LeProvider extends ChangeNotifier {
 
   Future<void> readLef(String path) async {
     if (_openLefFiles.contains(path)) {
-      _messages.add("ERROR: $path already open");
+      _messageStreamController.add("ERROR: $path already open");
       refreshAndNotify();
       return;
     }
-    _messages.add("INFO: Reading $path");
+    _messageStreamController.add("INFO: Reading $path");
     if (_editor.readLef(path)) {
       _openLefFiles.add(path);
     }

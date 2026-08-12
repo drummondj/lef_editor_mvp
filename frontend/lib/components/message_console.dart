@@ -101,9 +101,7 @@ class _MessageConsoleState extends State<MessageConsole> {
                           child: SelectableText.rich(
                             TextSpan(
                               style: DefaultTextStyle.of(context).style,
-                              children: provider.messages
-                                  .map((message) => _messageToTextSpan(message))
-                                  .toList(),
+                              children: [],
                             ),
                           ),
                         ),
