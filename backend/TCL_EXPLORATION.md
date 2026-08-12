@@ -906,3 +906,94 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      (`test_data/stripe_15layer.lef`), not just the `testcell.lef`
      fixture — same result, since the bug is structural (which image's
      copy of a symbol gets used), not dependent on LEF file content.
+
+   **Second real bug found and fixed, same testing session**: a Shape
+   created via the console (`create_terminal_port_shape`/
+   `add_shape_rect`) never appeared on screen, no matter how many times
+   the caller re-rendered. Root cause had nothing to do with frame
+   requests: `Pipeline::generate_shapes`'s cache key was `(AbstractId,
+   ViewLayerSet::generation())` - neither changes on a CRUD mutation (no
+   LEF re-read, no Abstract switch), so the pipeline kept returning its
+   pre-mutation cached result forever. `LeProvider.runTclCommand()`
+   already called `refreshTexture()`/`markFrameAvailable()` after every
+   command (that part was never broken) - the bug was one layer deeper,
+   in a cache that had no way to know database *content* had changed at
+   all, only that the viewport/selection/layer-visibility might have.
+   - **Fix**: `Root` gained a `mutation_version()`/`bump_mutation_version()`
+     monotonic counter (added via cmg - `cmg/templates/indexed_pools/root_hpp_j2.py`,
+     Root-level, not per-class - mirroring `Scene::selection_version()`'s
+     existing pattern). `Pipeline`'s three shape-producing stages
+     (`generate_shapes`, `filter_by_viewport_and_size`,
+     `filter_by_layer_visibility` - plus the parallel tiny-shape-dot
+     pair) all fold it into their own cache keys, cascading the same way
+     they already cascade `ViewLayerSet::generation()`. All 19 mutating
+     functions in `api.cpp` (every `le_create_*`/`le_delete_*`/
+     `le_set_*_*`/`le_add_shape_*`/`le_remove_shape_*`) call
+     `handle->root.bump_mutation_version()` on their success path -
+     audited and counted by hand (`grep -c bump_mutation_version
+     api.cpp` == 19), not generated automatically, since cmg's own
+     generated `create_x`/`delete_x`/`set_x_<field>` don't cover every
+     mutation path either (Shape's `rects`/`polygons`/`paths` are plain
+     list fields, mutated directly through a `get_shape()` pointer in
+     `le_add_shape_rect` etc. - never through a generated setter at
+     all - so an auto-bump inside cmg's own codegen would have missed
+     exactly the function the original bug report actually called).
+   - Regression test: `PipelineFixture.GenerateShapesRecomputesAfterACrudMutationEvenForTheSameAbstractIdAndViewLayerSet`
+     (`pipeline_test.cpp`) - mutates via the same `Root` API `api.cpp`
+     itself calls, confirms `generate_shapes` both cache-hits when
+     nothing changed and correctly recomputes (via `generate_calls()`,
+     not just checking the output) after a mutation, same AbstractId and
+     ViewLayerSet throughout.
+   - Verified: full backend `ctest` (506/506) passes; both `build` and
+     `build_release` rebuilt. Unlike the first crash fix (`le_tcl.so`,
+     loaded dynamically at runtime - a relaunch alone picked it up),
+     this fix touches `libapi.a` itself, which `lef_editor_plugin`
+     links **statically** at build time - the Flutter app needs an
+     actual rebuild (`flutter build macos`/`flutter run -d macos`), not
+     just a relaunch, to pick this one up.
+
+   **Second-and-a-half bug, same fix, one layer higher**: after the
+   `Pipeline` fix above, a Tcl-created shape *still* didn't appear until
+   an unrelated action (e.g. zooming) forced a real recompute - reported
+   directly from the running app. Root cause: `Renderer` (`render.hpp`)
+   sits on top of `Pipeline` and has its *own* independent `CachedStage`
+   per stage (`transform_to_pixels`, `build_picture`,
+   `build_tiny_shapes_picture`, `rasterize_frame`,
+   `rasterize_tiny_shapes_frame`, `compose_with_overlays`), every one of
+   which was keyed on some subset of `{AbstractId, viewport_version,
+   visibility_version, selection_version, mouse_version}` - never
+   `Root::mutation_version()`. So even once `Pipeline::generate_shapes`
+   started correctly recomputing, `Renderer`'s own stages kept handing
+   back their pre-mutation cached `SkPicture`/`PixelBuffer`, exactly the
+   failure mode `compose_with_overlays`'s own pre-existing doc comment
+   already warned about in the abstract ("`CachedStage`'s key comparison
+   ... never inspects the picture arguments themselves, so a key that
+   doesn't change would silently return a stale composited buffer even
+   though a *different* picture was passed in") - just not yet connected
+   to this specific trigger.
+   - **Fix**: every shape-content-dependent `Renderer` stage now folds
+     `root.mutation_version()` into its key (a `const Root&` parameter
+     added where one wasn't already present) - `transform_to_pixels`,
+     `transform_tiny_shapes_to_pixels`, `build_picture` (already took
+     `root`, just needed the key updated), `build_tiny_shapes_picture`,
+     `rasterize`/`rasterize_frame`, `rasterize_tiny_shapes_frame`, and
+     `compose_with_overlays` (which also threads `root` into its own
+     internal `rasterize_frame`/`rasterize_tiny_shapes_frame` calls).
+     `build_overlay_picture`/`build_selection_overlay_picture`/
+     `rasterize_selection_overlay_frame` are deliberately untouched -
+     pure mouse/selection chrome, no design content, so they don't need
+     it. Every call site across `api.cpp`, `render_test.cpp`,
+     `pipeline_benchmark.cpp`, and `render_preview.cpp` updated to pass
+     `root` through (~70 call sites, mostly mechanical).
+   - Regression test:
+     `RenderFixture.ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithNoOtherSceneChange`
+     (`render_test.cpp`) - runs the *entire* chain `le_render_pixel_buffer`
+     itself calls, twice, with the identical `Scene` both times (no pan/
+     scale/viewport/selection/mouse change at all) and only a CRUD
+     mutation in between; confirms the new shape's own layer color is
+     genuinely absent before and present after, in the final composited
+     buffer - not just Pipeline's intermediate output, which the earlier
+     `pipeline_test.cpp` regression test already covered on its own and
+     wasn't sufficient by itself.
+   - Verified: full backend `ctest` (507/507) passes; both `build` and
+     `build_release` rebuilt.

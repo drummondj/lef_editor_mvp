@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.19.0",
+    version="0.20.0",
     classes=[
         Klass(
             name="Technology",

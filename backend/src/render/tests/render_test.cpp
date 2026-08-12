@@ -117,7 +117,7 @@ TEST_F(RenderFixture, TransformToPixelsAppliesPanAndScale)
     scene.set_viewport_size(200, 200);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
 
     ASSERT_EQ(pixel_shapes.size(), 1u);
     const auto &group = pixel_shapes.begin()->second;
@@ -146,7 +146,7 @@ TEST_F(RenderFixture, TransformToPixelsHandlesPolygonsPathsAndTexts)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
 
     ASSERT_EQ(pixel_shapes.size(), 1u);
     const auto &group = pixel_shapes.begin()->second;
@@ -214,7 +214,7 @@ TEST_F(RenderFixture, TransformToPixelsFloorsTinyTextSizeToAMinimumPixelSize)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
 
     ASSERT_EQ(pixel_shapes.size(), 1u);
     const auto &ps = pixel_shapes.begin()->second.front();
@@ -233,12 +233,12 @@ TEST_F(RenderFixture, TransformToPixelsReusesCacheUntilViewportVersionChanges)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    renderer.transform_to_pixels(shapes, scene);
-    renderer.transform_to_pixels(shapes, scene);
+    renderer.transform_to_pixels(root, shapes, scene);
+    renderer.transform_to_pixels(root, shapes, scene);
     EXPECT_EQ(renderer.transform_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    renderer.transform_to_pixels(shapes, scene);
+    renderer.transform_to_pixels(root, shapes, scene);
     EXPECT_EQ(renderer.transform_calls(), 2u);
 }
 
@@ -254,7 +254,7 @@ TEST_F(RenderFixture, TransformTinyShapesToPixelsAppliesPanAndScale)
     scene.set_viewport_size(200, 200);
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
-    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
 
     ASSERT_EQ(tiny_pixel_shapes.size(), 1u);
     const auto &group = tiny_pixel_shapes.begin()->second;
@@ -274,12 +274,12 @@ TEST_F(RenderFixture, TransformTinyShapesToPixelsReusesCacheUntilViewportVersion
     scene.set_viewport_size(100, 100);
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
-    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
-    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+    renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
     EXPECT_EQ(renderer.tiny_shapes_transform_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
     EXPECT_EQ(renderer.tiny_shapes_transform_calls(), 2u);
 }
 
@@ -294,8 +294,8 @@ TEST_F(RenderFixture, BuildTinyShapesPictureDrawsASingleOpaquePixelAtEachDotLoca
     scene.set_viewport_size(100, 100);
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
-    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
-    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
 
     ASSERT_EQ(tiny_pixel_shapes.size(), 1u);
     const ViewLayerData *view_layer = view_layers.get(tiny_pixel_shapes.begin()->first);
@@ -317,8 +317,8 @@ TEST_F(RenderFixture, BuildTinyShapesPictureIsEmptyWhenThereAreNoTinyShapes)
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
     ASSERT_TRUE(tiny_shapes.empty());
-    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
-    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
 
     SkColor pixel = sample_pixel(picture, 100, 100, 20, 20);
     EXPECT_EQ(SkColorGetA(pixel), 0);
@@ -338,8 +338,8 @@ TEST_F(RenderFixture, BuildTinyShapesPictureRespectsLayerVisibility)
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
     ASSERT_TRUE(tiny_shapes.empty()); // whole M1 group dropped by tiny_shapes_by_layer_visibility
 
-    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
-    const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, view_layers);
+    const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
+    const auto &picture = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
 
     SkColor pixel = sample_pixel(picture, 100, 100, 40, 40);
     EXPECT_EQ(SkColorGetA(pixel), 0);
@@ -356,7 +356,7 @@ TEST_F(RenderFixture, BuildPictureFillsInteriorPixelWithLayerStyleColor)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // M1 is ROUTING, so its TERMINAL fill is a tiled diagonal-stripe
@@ -383,7 +383,7 @@ TEST_F(RenderFixture, BuildPictureDrawsEachLayerGroupWithItsOwnStyle)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     ASSERT_EQ(shapes.size(), 2u); // two distinct groups: M1/OBSTRUCTION, M2/TERMINAL
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     SkBitmap bitmap = rasterize(picture, 100, 100);
 
@@ -422,7 +422,7 @@ TEST_F(RenderFixture, BuildPictureDrawsAPatternFilledOutlinedPathWithACenterline
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     SkBitmap bitmap = rasterize(picture, 100, 100);
 
@@ -479,7 +479,7 @@ TEST_F(RenderFixture, BuildPictureFillsAShortWidePathWithAPatternNotASolidBlock)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     SkBitmap bitmap = rasterize(picture, 100, 100);
 
@@ -507,7 +507,7 @@ TEST_F(RenderFixture, BuildPictureDrawsTerminalLabelAsOpaqueTextOverTranslucentF
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // The label is drawn at the shape's centroid (20,20), using the
@@ -539,7 +539,7 @@ TEST_F(RenderFixture, BuildPictureDrawsACrossAtEachLabelsOwnAnchorPoint)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // A single rect's label lands at its exact center (20,20) under the
@@ -573,7 +573,7 @@ TEST_F(RenderFixture, BuildPictureSkipsShapesWithUnresolvedViewLayer)
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     ASSERT_EQ(shapes.size(), 1u); // kept by the layer filter despite an invalid ViewLayerId
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     SkColor pixel = sample_pixel(picture, 100, 100, 20, 20);
@@ -595,11 +595,11 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     scene.select(terminal_id, first_piece);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     // Post-flip (see the Y-flip comment on
     // ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore) -
@@ -631,11 +631,11 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     scene.select(terminal_id, polygon_piece);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     // Same square as the rect-piece tests above (10,10)-(30,30) - left
     // edge preflip (9,20) -> post-flip y = 100-20 = 80.
@@ -644,6 +644,72 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     EXPECT_EQ(p[1], 255);
     EXPECT_EQ(p[2], 255);
     EXPECT_GT(p[3], 200);
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithNoOtherSceneChange)
+{
+    // Regression: a real user-reported bug - a Shape created via the
+    // show_gui Tcl console (UPDATES.md item 15 - api.cpp's
+    // le_create_terminal_port_shape/le_add_shape_rect etc.) never
+    // appeared on screen until an unrelated action (zooming) forced a
+    // real recompute. Fixing Pipeline's own cache key (see pipeline_test.cpp's
+    // GenerateShapesRecomputesAfterACrudMutation... test) wasn't enough -
+    // every Renderer stage on top of it (transform_to_pixels,
+    // build_picture, compose_with_overlays, ...) had its own cache key
+    // that also never consulted Root::mutation_version(), so a Renderer-
+    // level cache hit kept returning the pre-mutation composited buffer
+    // even after Pipeline itself started recomputing correctly
+    // underneath. This test exercises the *whole* chain end to end
+    // (matching le_render_pixel_buffer's own call sequence exactly), with
+    // the *same* Scene throughout - no pan/scale/viewport/selection/mouse
+    // change - so the only thing that could possibly invalidate any
+    // cache along the way is the mutation itself.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+
+    auto render_frame = [&]() -> const PixelBuffer &
+    {
+        const auto &shapes = pipeline.run(root, scene, view_layers);
+        const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+        const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        return renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    };
+
+    // M1's OBSTRUCTION outline color - looked up directly (not via an
+    // existing RenderedShape, since none exists yet) so it's known before
+    // the shape below is even created.
+    const ViewLayerId m1_obstruction = view_layers.find(m1, ViewLayerPurpose::OBSTRUCTION);
+    const ViewLayerData *m1_style = view_layers.get(m1_obstruction);
+    ASSERT_NE(m1_style, nullptr);
+    const SkColor m1_color = to_sk_color(m1_style->style.outline_color);
+
+    auto scan_shows_m1_color = [&](const PixelBuffer &buffer)
+    {
+        for (int y = 35; y <= 65; ++y)
+            for (int x = 35; x <= 65; ++x)
+            {
+                const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+                if (p[3] > 0 && p[0] == SkColorGetR(m1_color) && p[1] == SkColorGetG(m1_color) && p[2] == SkColorGetB(m1_color))
+                    return true;
+            }
+        return false;
+    };
+
+    const PixelBuffer &before = render_frame();
+    EXPECT_FALSE(scan_shows_m1_color(before)); // nothing there yet
+
+    // Mirrors api.cpp's own CRUD functions exactly: mutate, then bump the
+    // counter - see e.g. le_create_terminal_port_shape/le_add_shape_rect.
+    add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {40, 40}, .ur = {60, 60}}}});
+    root.bump_mutation_version();
+
+    const PixelBuffer &after = render_frame();
+    EXPECT_TRUE(scan_shows_m1_color(after)); // same Scene throughout - must show up regardless
 }
 
 TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
@@ -666,11 +732,11 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     scene.select(terminal_id, path_piece);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -709,11 +775,11 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
     scene.select(terminal_id, path_piece);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -745,15 +811,15 @@ TEST_F(RenderFixture, BuildPictureAndRasterizeAreNotInvalidatedBySelectionChange
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    renderer.rasterize(picture, scene);
+    renderer.rasterize(root, picture, scene);
     ASSERT_EQ(renderer.picture_calls(), 1u);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
 
     scene.select(terminal_id);
     const auto &picture_after = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    renderer.rasterize(picture_after, scene);
+    renderer.rasterize(root, picture_after, scene);
 
     EXPECT_EQ(renderer.picture_calls(), 1u);
     EXPECT_EQ(renderer.rasterize_calls(), 1u);
@@ -770,7 +836,7 @@ TEST_F(RenderFixture, BuildPictureReusesCacheUntilVisibilityVersionChanges)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     renderer.build_picture(pixel_shapes, scene, view_layers, root);
     renderer.build_picture(pixel_shapes, scene, view_layers, root);
     EXPECT_EQ(renderer.picture_calls(), 1u);
@@ -789,7 +855,7 @@ TEST_F(RenderFixture, BuildPictureDrawsSolidAxisLinesAtDbuOrigin)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // pan=(0,0), scale=1.0 -> dbu (x=0) is pixel column 0, dbu (y=0) is
@@ -808,7 +874,7 @@ TEST_F(RenderFixture, BuildPictureDrawsAMajorGridDotAtAKnownLatticePoint)
     scene.set_viewport_size(200, 200);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (50,50) is on the default major lattice (multiple of 50) but
@@ -825,7 +891,7 @@ TEST_F(RenderFixture, BuildPictureHidesBothGridTiersWhenTooDenseButKeepsAxisLine
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (500,500) -> pixel (50,50) at this scale, and 500 is a multiple
@@ -843,7 +909,7 @@ TEST_F(RenderFixture, BuildPictureHidesMinorTierIndependentlyOfMajorTier)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // dbu (100,100) is on the major lattice (multiple of 50), off-axis,
@@ -865,7 +931,7 @@ TEST_F(RenderFixture, BuildPictureDrawsOriginMarkerAtTheAbstractsOwnOrigin)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // Origin at dbu (33,71) -> pixel (33,71) at this pan/scale
@@ -890,7 +956,7 @@ TEST_F(RenderFixture, BuildPictureOmitsOriginMarkerWhenNoAbstractIsSelected)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // degrades gracefully to empty
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     // Would show the marker's default-origin (0,0) position if
@@ -1150,14 +1216,14 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
     scene.select(terminal_id, path_piece);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     auto compose_once = [&]
     {
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
     };
 
     scene.set_mouse_position(1, 1);
@@ -1191,13 +1257,13 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     scene.set_mouse_position(10, 10);
     const auto &overlay_picture_1 = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, scene);
+    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
@@ -1208,7 +1274,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     scene.set_mouse_position(20, 20);
     const auto &overlay_picture_2 = renderer.build_overlay_picture(scene);
     const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, scene);
+    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
     EXPECT_EQ(renderer.overlay_picture_calls(), 2u); // cheap overlay picture did recompute
@@ -1242,11 +1308,11 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
     auto compose_and_sample_edge = [&]
     {
         const auto &shapes = pipeline.run(root, scene, view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const PixelBuffer &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
         // Same Y-flip as rasterize() - see BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges's comment.
         const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
         return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
@@ -1279,9 +1345,9 @@ TEST_F(RenderFixture, RasterizeFlipsYSoHigherDbuYEndsUpNearerTheTopOfTheBuffer)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    const PixelBuffer &buffer = renderer.rasterize(root, picture, scene);
     ASSERT_NE(buffer.data, nullptr);
 
     auto channel_at = [&](int x, int y, int channel)
@@ -1334,7 +1400,7 @@ TEST_F(RenderFixture, RasterizeBytesArePremultipliedRgba8888RegardlessOfPlatform
     record_canvas->drawRect(SkRect::MakeLTRB(10, 10, 30, 30), paint);
     sk_sp<SkPicture> picture = recorder.finishRecordingAsPicture();
 
-    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    const PixelBuffer &buffer = renderer.rasterize(root, picture, scene);
     ASSERT_NE(buffer.data, nullptr);
 
     // dbu-space concerns don't apply to this hand-built picture - (25,25)
@@ -1367,9 +1433,9 @@ TEST_F(RenderFixture, RasterizeClearsToTransparentWhereNothingIsDrawn)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract, nothing drawn
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    const PixelBuffer &buffer = renderer.rasterize(root, picture, scene);
 
     ASSERT_EQ(buffer.width, 100);
     ASSERT_EQ(buffer.height, 100);
@@ -1393,9 +1459,9 @@ TEST_F(RenderFixture, RasterizeWithZeroSizedViewportDoesNotCrashAndReturnsEmptyB
     scene.set_current_abstract(abstract_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const PixelBuffer &buffer = renderer.rasterize(picture, scene);
+    const PixelBuffer &buffer = renderer.rasterize(root, picture, scene);
 
     EXPECT_EQ(buffer.data, nullptr);
     EXPECT_EQ(buffer.width, 0);
@@ -1414,13 +1480,13 @@ TEST_F(RenderFixture, RasterizeReusesCacheUntilViewportVersionChanges)
     scene.set_viewport_size(100, 100);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    renderer.rasterize(picture, scene);
-    renderer.rasterize(picture, scene);
+    renderer.rasterize(root, picture, scene);
+    renderer.rasterize(root, picture, scene);
     EXPECT_EQ(renderer.rasterize_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    renderer.rasterize(picture, scene);
+    renderer.rasterize(root, picture, scene);
     EXPECT_EQ(renderer.rasterize_calls(), 2u);
 }

@@ -41,7 +41,7 @@ static void BM_FilterByViewportAndSize(benchmark::State &state)
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &filtered = pipeline.filter_by_viewport_and_size(generated, scene, data.view_layers);
+        const auto &filtered = pipeline.filter_by_viewport_and_size(data.root, generated, scene, data.view_layers);
         const auto *filtered_data = filtered.data();
         benchmark::DoNotOptimize(filtered_data);
     }
@@ -56,12 +56,12 @@ static void BM_FilterByLayerVisibility(benchmark::State &state)
 
     Pipeline setup;
     const auto &generated = setup.generate_shapes(data.root, data.abstract_id, data.view_layers);
-    const auto &viewport_filtered = setup.filter_by_viewport_and_size(generated, scene, data.view_layers);
+    const auto &viewport_filtered = setup.filter_by_viewport_and_size(data.root, generated, scene, data.view_layers);
 
     for (auto _ : state)
     {
         Pipeline pipeline;
-        const auto &filtered = pipeline.filter_by_layer_visibility(viewport_filtered, scene, data.view_layers);
+        const auto &filtered = pipeline.filter_by_layer_visibility(data.root, viewport_filtered, scene, data.view_layers);
         const auto *filtered_ptr = &filtered;
         benchmark::DoNotOptimize(filtered_ptr);
     }
@@ -248,7 +248,7 @@ static void BM_TransformToPixels(benchmark::State &state)
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &pixel_shapes = renderer.transform_to_pixels(generated, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, generated, scene);
         const auto *pixel_shapes_ptr = &pixel_shapes;
         benchmark::DoNotOptimize(pixel_shapes_ptr);
     }
@@ -271,7 +271,7 @@ static void BM_TransformTinyShapesToPixels(benchmark::State &state)
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(data.root, tiny_shapes, scene);
         const auto *tiny_pixel_shapes_ptr = &tiny_pixel_shapes;
         benchmark::DoNotOptimize(tiny_pixel_shapes_ptr);
     }
@@ -290,7 +290,7 @@ static void BM_BuildPicture(benchmark::State &state)
     Pipeline setup_pipeline;
     const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
     Renderer setup_renderer;
-    const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
+    const auto &pixel_shapes = setup_renderer.transform_to_pixels(data.root, generated, scene);
 
     for (auto _ : state)
     {
@@ -323,7 +323,7 @@ static void BM_BuildPicture_WithLargeSelection(benchmark::State &state)
     Pipeline setup_pipeline;
     const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
     Renderer setup_renderer;
-    const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
+    const auto &pixel_shapes = setup_renderer.transform_to_pixels(data.root, generated, scene);
 
     const int n = static_cast<int>(state.range(0));
     int selected = 0;
@@ -361,7 +361,7 @@ static void BM_BuildTinyShapesPicture(benchmark::State &state)
     Pipeline setup_pipeline;
     const auto &tiny_shapes = setup_pipeline.run_tiny_shapes(data.root, scene, data.view_layers);
     Renderer setup_renderer;
-    const auto &tiny_pixel_shapes = setup_renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
+    const auto &tiny_pixel_shapes = setup_renderer.transform_tiny_shapes_to_pixels(data.root, tiny_shapes, scene);
 
     size_t total_dots = 0;
     for (const auto &[view_layer, group] : tiny_pixel_shapes)
@@ -370,7 +370,7 @@ static void BM_BuildTinyShapesPicture(benchmark::State &state)
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, data.view_layers);
+        const auto &picture = renderer.build_tiny_shapes_picture(data.root, tiny_pixel_shapes, scene, data.view_layers);
         benchmark::DoNotOptimize(picture.get());
     }
     state.SetItemsProcessed(state.iterations() * total_dots);
@@ -385,13 +385,13 @@ static void BM_Rasterize(benchmark::State &state)
     Pipeline setup_pipeline;
     const auto &generated = setup_pipeline.run(data.root, scene, data.view_layers);
     Renderer setup_renderer;
-    const auto &pixel_shapes = setup_renderer.transform_to_pixels(generated, scene);
+    const auto &pixel_shapes = setup_renderer.transform_to_pixels(data.root, generated, scene);
     const auto &picture = setup_renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
 
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &buffer = renderer.rasterize(picture, scene);
+        const auto &buffer = renderer.rasterize(data.root, picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -413,9 +413,9 @@ static void BM_Render(benchmark::State &state)
         Pipeline pipeline;
         Renderer renderer;
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.rasterize(picture, scene);
+        const auto &buffer = renderer.rasterize(data.root, picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -440,9 +440,9 @@ static void BM_RenderReused_NoChange(benchmark::State &state)
     for (auto _ : state)
     {
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.rasterize(picture, scene);
+        const auto &buffer = renderer.rasterize(data.root, picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -462,9 +462,9 @@ static void BM_RenderReused_PanOnly(benchmark::State &state)
     {
         scene.set_pan(Point{pan_x++, 0});
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.rasterize(picture, scene);
+        const auto &buffer = renderer.rasterize(data.root, picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -476,7 +476,7 @@ BENCHMARK(BM_RenderReused_PanOnly)->Unit(benchmark::kMillisecond);
 // (UPDATES.md item 6), three variants isolating two different things:
 //
 // - BM_RenderReused_PanOnly_ZoomedOut: the design content pass alone,
-//   via renderer.rasterize() directly (no compositing pass at all) - the
+//   via renderer.rasterize(data.root, ) directly (no compositing pass at all) - the
 //   same code BM_RenderReused_PanOnly above exercises, just re-run at a
 //   scale where nearly every shape is tiny so it's dropped from
 //   build_picture's own output almost entirely.
@@ -510,9 +510,9 @@ static void BM_RenderReused_PanOnly_ZoomedOut(benchmark::State &state)
     {
         scene.set_pan(Point{pan_x++, 0});
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.rasterize(picture, scene);
+        const auto &buffer = renderer.rasterize(data.root, picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -532,9 +532,9 @@ static void BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes(benchmark::Sta
     {
         scene.set_pan(Point{pan_x++, 0});
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.compose_with_overlays(picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -554,14 +554,14 @@ static void BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut(benchmark::State &st
     {
         scene.set_pan(Point{pan_x++, 0});
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
-        const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+        const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
 
         const auto &tiny_shapes = pipeline.run_tiny_shapes(data.root, scene, data.view_layers);
-        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(tiny_shapes, scene);
-        const auto &tiny_shapes_picture = renderer.build_tiny_shapes_picture(tiny_pixel_shapes, scene, data.view_layers);
+        const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(data.root, tiny_shapes, scene);
+        const auto &tiny_shapes_picture = renderer.build_tiny_shapes_picture(data.root, tiny_pixel_shapes, scene, data.view_layers);
 
-        const auto &buffer = renderer.compose_with_overlays(picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -684,7 +684,7 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
     select_pieces(scene, shapes, static_cast<int>(state.range(0)));
 
     Renderer renderer;
-    const auto &pixel_shapes = renderer.transform_to_pixels(shapes, scene);
+    const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
 
     int64_t x = 0;
@@ -693,7 +693,7 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
         scene.set_mouse_position(x++ % 2000, 0);
         const auto &overlay_picture = renderer.build_overlay_picture(scene);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const auto &buffer = renderer.compose_with_overlays(design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }

@@ -148,9 +148,9 @@ namespace le
     class Renderer
     {
     public:
-        const std::map<ViewLayerId, std::vector<PixelShape>> &transform_to_pixels(const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const Scene &scene)
+        const std::map<ViewLayerId, std::vector<PixelShape>> &transform_to_pixels(const Root &root, const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return pixel_shapes_.get(key, [&]
                                      {
                 const Point pan = scene.pan();
@@ -242,9 +242,9 @@ namespace le
         /// itself) so this stays a small, independent addition - see
         /// TinyShapeDot's own comment for why tiny shapes are a separate
         /// pipeline/render path throughout, not merged into PixelShape.
-        const std::map<ViewLayerId, std::vector<PixelPoint>> &transform_tiny_shapes_to_pixels(const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes, const Scene &scene)
+        const std::map<ViewLayerId, std::vector<PixelPoint>> &transform_tiny_shapes_to_pixels(const Root &root, const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return tiny_pixel_shapes_.get(key, [&]
                                           {
                 const Point pan = scene.pan();
@@ -308,7 +308,7 @@ namespace le
         /// pure function of the design and viewport/visibility state now.
         const sk_sp<SkPicture> &build_picture(const std::map<ViewLayerId, std::vector<PixelShape>> &shapes, const Scene &scene, const ViewLayerSet &view_layers, const Root &root)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return picture_.get(key, [&]
                                 {
                 SkPictureRecorder recorder;
@@ -393,9 +393,9 @@ namespace le
         /// own comment: this keeps Pipeline::hit_test_point/hit_test_rect
         /// provably unaware of tiny shapes, so "not selectable" holds by
         /// construction, not by an exclusion check.
-        const sk_sp<SkPicture> &build_tiny_shapes_picture(const std::map<ViewLayerId, std::vector<PixelPoint>> &tiny_pixel_shapes, const Scene &scene, const ViewLayerSet &view_layers)
+        const sk_sp<SkPicture> &build_tiny_shapes_picture(const Root &root, const std::map<ViewLayerId, std::vector<PixelPoint>> &tiny_pixel_shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return tiny_shapes_picture_.get(key, [&]
                                             {
                 SkPictureRecorder recorder;
@@ -472,9 +472,9 @@ namespace le
         /// only exposing compose_with_overlays below) since not every
         /// caller wants the overlay composited in - render_preview.cpp
         /// and this class's own tests call it directly.
-        const PixelBuffer &rasterize(const sk_sp<SkPicture> &picture, const Scene &scene)
+        const PixelBuffer &rasterize(const Root &root, const sk_sp<SkPicture> &picture, const Scene &scene)
         {
-            return rasterize_frame(picture, scene).buffer;
+            return rasterize_frame(root, picture, scene).buffer;
         }
 
         /// @brief Composites the design picture's cached, already-rasterized
@@ -495,12 +495,13 @@ namespace le
         /// why that flip exists), since it records pre-flip pixel-space
         /// coordinates, the same convention build_picture's own shapes use.
         ///
-        /// Cached on all five of AbstractId/viewport_version/
-        /// visibility_version/selection_version/mouse_version - a
-        /// superset of every blitted-in picture's own key (tiny_shapes_picture's
-        /// key matches design_picture's own exactly - see
-        /// build_tiny_shapes_picture's own comment) as well as
-        /// rasterize_frame's (selection_version included here for the
+        /// Cached on all six of AbstractId/viewport_version/
+        /// visibility_version/selection_version/mouse_version/
+        /// Root::mutation_version() - a superset of every blitted-in
+        /// picture's own key (tiny_shapes_picture's key matches
+        /// design_picture's own exactly - see build_tiny_shapes_picture's
+        /// own comment) as well as rasterize_frame's (selection_version
+        /// included here for the
         /// same reason it's in rasterize_frame's key: `design_picture`'s
         /// content depends on it, and CachedStage's key comparison is the
         /// only thing that decides whether to recompute - it never
@@ -530,13 +531,13 @@ namespace le
         /// single-picture-per-frame design would re-rasterize the whole
         /// design, or replay an unboundedly large overlay, on every
         /// mouse-move event).
-        const PixelBuffer &compose_with_overlays(const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &tiny_shapes_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
+        const PixelBuffer &compose_with_overlays(const Root &root, const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &tiny_shapes_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version(), scene.mouse_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), scene.selection_version(), scene.mouse_version(), root.mutation_version()};
             return composed_.get(key, [&]
                                  {
-                const RasterizedFrame &design_frame = rasterize_frame(design_picture, scene);
-                const RasterizedFrame &tiny_shapes_frame = rasterize_tiny_shapes_frame(tiny_shapes_picture, scene);
+                const RasterizedFrame &design_frame = rasterize_frame(root, design_picture, scene);
+                const RasterizedFrame &tiny_shapes_frame = rasterize_tiny_shapes_frame(root, tiny_shapes_picture, scene);
                 const RasterizedFrame &selection_frame = rasterize_selection_overlay_frame(selection_overlay_picture, scene);
 
                 const int width = scene.viewport_width_px();
@@ -1396,20 +1397,27 @@ namespace le
         /// always succeed for a surface this function itself just created
         /// via `SkSurfaces::Raster`.
         ///
-        /// Cache key is `{AbstractId, viewport_version, visibility_version}` -
-        /// every one of `picture`'s own upstream triggers (`build_picture`'s
-        /// cache key exactly - kept in sync by hand: CachedStage's `get`
-        /// only ever compares the key tuple, never `picture` itself, so if
-        /// `picture`'s content can change for a reason this key doesn't
-        /// capture, this returns a stale frame for a *different* picture
-        /// than the one just passed in - this bit us once already when
-        /// `build_picture` still had selection-dependent content and this
-        /// key initially omitted `selection_version`; now that
-        /// `build_picture` has no selection-dependent content at all - see
-        /// its own doc comment - neither key needs it).
-        const RasterizedFrame &rasterize_frame(const sk_sp<SkPicture> &picture, const Scene &scene)
+        /// Cache key is `{AbstractId, viewport_version, visibility_version,
+        /// Root::mutation_version()}` - every one of `picture`'s own
+        /// upstream triggers (`build_picture`'s cache key exactly - kept in
+        /// sync by hand: CachedStage's `get` only ever compares the key
+        /// tuple, never `picture` itself, so if `picture`'s content can
+        /// change for a reason this key doesn't capture, this returns a
+        /// stale frame for a *different* picture than the one just passed
+        /// in - this bit us twice already: once when `build_picture` still
+        /// had selection-dependent content and this key initially omitted
+        /// `selection_version` (now that `build_picture` has no selection-
+        /// dependent content at all - see its own doc comment - neither key
+        /// needs it); once when a Tcl/API CRUD mutation (UPDATES.md item
+        /// 15's Terminal/TerminalPort/Obstruction/Shape surface) changed
+        /// neither AbstractId nor either version counter, so a
+        /// Tcl-created Shape stayed invisible until an unrelated viewport/
+        /// visibility change forced a real recompute - `Root::mutation_version()`
+        /// is the fix, see pipeline.hpp's own class comment for the full
+        /// story of where this was first found and fixed one layer down).
+        const RasterizedFrame &rasterize_frame(const Root &root, const sk_sp<SkPicture> &picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return rasterized_.get(key, [&]
                                    {
                 const int width = scene.viewport_width_px();
@@ -1517,9 +1525,9 @@ namespace le
         /// rasterize_selection_overlay_frame - reusing one CachedStage
         /// instance across pictures with different keys would have each
         /// one's rasterization evict the other's on every alternating call.
-        const RasterizedFrame &rasterize_tiny_shapes_frame(const sk_sp<SkPicture> &tiny_shapes_picture, const Scene &scene)
+        const RasterizedFrame &rasterize_tiny_shapes_frame(const Root &root, const sk_sp<SkPicture> &tiny_shapes_picture, const Scene &scene)
         {
-            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version()};
+            const auto key = std::tuple{scene.current_abstract(), scene.viewport_version(), scene.visibility_version(), root.mutation_version()};
             return rasterized_tiny_shapes_.get(key, [&]
                                                {
                 const int width = scene.viewport_width_px();
@@ -1551,15 +1559,15 @@ namespace le
                 }; });
         }
 
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelPoint>>> tiny_pixel_shapes_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, sk_sp<SkPicture>> tiny_shapes_picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelShape>>> pixel_shapes_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, std::map<ViewLayerId, std::vector<PixelPoint>>> tiny_pixel_shapes_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> picture_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> tiny_shapes_picture_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> overlay_picture_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, sk_sp<SkPicture>> selection_overlay_picture_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t>, RasterizedFrame> rasterized_tiny_shapes_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_tiny_shapes_;
         CachedStage<std::tuple<uint64_t, uint64_t, uint64_t>, RasterizedFrame> rasterized_selection_overlay_;
-        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
+        CachedStage<std::tuple<AbstractId, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t>, RasterizedFrame> composed_;
     };
 }

@@ -531,7 +531,7 @@ namespace
     void select_all_unlocked(LeHandle *handle)
     {
         const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
-        const auto &filtered = handle->pipeline.filter_by_layer_visibility(generated, handle->scene, handle->view_layers);
+        const auto &filtered = handle->pipeline.filter_by_layer_visibility(handle->root, generated, handle->scene, handle->view_layers);
 
         std::vector<const le::Shape *> shape_ptrs;
         shape_ptrs.reserve(generated.size());
@@ -1360,11 +1360,13 @@ extern "C"
         if (!handle->root.get_abstract(abstract))
             return invalid;
 
-        return to_c(handle->root.create_terminal(le::TerminalData{
+        const LeTerminalId result = to_c(handle->root.create_terminal(le::TerminalData{
             .abstract = abstract,
             .name = name,
             .direction = static_cast<le::SignalDirection>(direction),
         }));
+        handle->root.bump_mutation_version();
+        return result;
     }
 
     int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id)
@@ -1408,6 +1410,7 @@ extern "C"
         if (!terminal)
             return 1;
         terminal->name = name;
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1421,6 +1424,7 @@ extern "C"
         if (!terminal)
             return 1;
         terminal->direction = static_cast<le::SignalDirection>(direction);
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1443,7 +1447,9 @@ extern "C"
         for (const le::TerminalPortId port_id : port_ids)
             handle->root.delete_terminal_port(port_id);
 
-        return handle->root.delete_terminal(terminal_id) ? 0 : 1;
+        const bool deleted = handle->root.delete_terminal(terminal_id);
+        handle->root.bump_mutation_version();
+        return deleted ? 0 : 1;
     }
 
     int32_t le_search_terminal(LeHandle *handle, const char *filter_expression)
@@ -1488,7 +1494,9 @@ extern "C"
         if (!handle->root.get_terminal(terminal))
             return invalid;
 
-        return to_c(handle->root.create_terminal_port(le::TerminalPortData{.terminal = terminal}));
+        const LeTerminalPortId result = to_c(handle->root.create_terminal_port(le::TerminalPortData{.terminal = terminal}));
+        handle->root.bump_mutation_version();
+        return result;
     }
 
     int32_t le_terminal_port_property_count(LeHandle *handle, LeTerminalPortId id)
@@ -1539,7 +1547,9 @@ extern "C"
         for (const le::ShapeId shape_id : shape_ids)
             handle->root.delete_shape(shape_id);
 
-        return handle->root.delete_terminal_port(port_id) ? 0 : 1;
+        const bool deleted = handle->root.delete_terminal_port(port_id);
+        handle->root.bump_mutation_version();
+        return deleted ? 0 : 1;
     }
 
     int32_t le_search_terminal_port(LeHandle *handle, const char *filter_expression)
@@ -1584,7 +1594,9 @@ extern "C"
         if (!handle->root.get_abstract(abstract))
             return invalid;
 
-        return to_c(handle->root.create_obstruction(le::ObstructionData{.abstract = abstract}));
+        const LeObstructionId result = to_c(handle->root.create_obstruction(le::ObstructionData{.abstract = abstract}));
+        handle->root.bump_mutation_version();
+        return result;
     }
 
     int32_t le_obstruction_property_count(LeHandle *handle, LeObstructionId id)
@@ -1633,7 +1645,9 @@ extern "C"
         for (const le::ShapeId shape_id : shape_ids)
             handle->root.delete_shape(shape_id);
 
-        return handle->root.delete_obstruction(obstruction_id) ? 0 : 1;
+        const bool deleted = handle->root.delete_obstruction(obstruction_id);
+        handle->root.bump_mutation_version();
+        return deleted ? 0 : 1;
     }
 
     int32_t le_search_obstruction(LeHandle *handle, const char *filter_expression)
@@ -1686,6 +1700,7 @@ extern "C"
             polygon.points.push_back(le::Point{.x = to_dbu(coords_um[i], *dbu_per_um), .y = to_dbu(coords_um[i + 1], *dbu_per_um)});
 
         abstract->boundary = {std::move(polygon)};
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1700,7 +1715,9 @@ extern "C"
         if (!handle->root.get_terminal_port(port))
             return invalid;
 
-        return to_c(handle->root.create_shape(le::ShapeData{.terminal_port = port, .layer_name = layer_name}));
+        const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.terminal_port = port, .layer_name = layer_name}));
+        handle->root.bump_mutation_version();
+        return result;
     }
 
     LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name)
@@ -1714,7 +1731,9 @@ extern "C"
         if (!handle->root.get_obstruction(obstruction))
             return invalid;
 
-        return to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
+        const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
+        handle->root.bump_mutation_version();
+        return result;
     }
 
     int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)
@@ -1779,6 +1798,7 @@ extern "C"
         if (!shape)
             return 1;
         shape->layer_name = layer_name;
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1787,7 +1807,9 @@ extern "C"
         if (!handle)
             return 1;
         std::lock_guard<std::mutex> lock(handle->mutex_);
-        return handle->root.delete_shape(from_c(id)) ? 0 : 1;
+        const bool deleted = handle->root.delete_shape(from_c(id));
+        handle->root.bump_mutation_version();
+        return deleted ? 0 : 1;
     }
 
     int32_t le_shape_rect_count(LeHandle *handle, LeShapeId id)
@@ -1842,6 +1864,7 @@ extern "C"
             .ll = le::Point{.x = to_dbu(ll_x_um, *dbu_per_um), .y = to_dbu(ll_y_um, *dbu_per_um)},
             .ur = le::Point{.x = to_dbu(ur_x_um, *dbu_per_um), .y = to_dbu(ur_y_um, *dbu_per_um)},
         });
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1855,6 +1878,7 @@ extern "C"
         if (!shape || static_cast<size_t>(index) >= shape->rects.size())
             return 1;
         shape->rects.erase(shape->rects.begin() + index);
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1917,6 +1941,7 @@ extern "C"
             return 1;
 
         shape->polygons.push_back(std::move(*polygon));
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -1930,6 +1955,7 @@ extern "C"
         if (!shape || static_cast<size_t>(polygon_index) >= shape->polygons.size())
             return 1;
         shape->polygons.erase(shape->polygons.begin() + polygon_index);
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -2012,6 +2038,7 @@ extern "C"
             return 1;
 
         shape->paths.push_back(le::Path{.polygon = std::move(*polygon), .width = static_cast<uint64_t>(to_dbu(width_um, *dbu_per_um))});
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -2025,6 +2052,7 @@ extern "C"
         if (!shape || static_cast<size_t>(path_index) >= shape->paths.size())
             return 1;
         shape->paths.erase(shape->paths.begin() + path_index);
+        handle->root.bump_mutation_version();
         return 0;
     }
 
@@ -2035,14 +2063,14 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
-        const auto &pixel_shapes = handle->renderer.transform_to_pixels(shapes, handle->scene);
+        const auto &pixel_shapes = handle->renderer.transform_to_pixels(handle->root, shapes, handle->scene);
         const auto &picture = handle->renderer.build_picture(pixel_shapes, handle->scene, handle->view_layers, handle->root);
         const auto &tiny_shapes = handle->pipeline.run_tiny_shapes(handle->root, handle->scene, handle->view_layers);
-        const auto &tiny_pixel_shapes = handle->renderer.transform_tiny_shapes_to_pixels(tiny_shapes, handle->scene);
-        const auto &tiny_shapes_picture = handle->renderer.build_tiny_shapes_picture(tiny_pixel_shapes, handle->scene, handle->view_layers);
+        const auto &tiny_pixel_shapes = handle->renderer.transform_tiny_shapes_to_pixels(handle->root, tiny_shapes, handle->scene);
+        const auto &tiny_shapes_picture = handle->renderer.build_tiny_shapes_picture(handle->root, tiny_pixel_shapes, handle->scene, handle->view_layers);
         const auto &overlay_picture = handle->renderer.build_overlay_picture(handle->scene);
         const auto &selection_overlay_picture = handle->renderer.build_selection_overlay_picture(handle->scene);
-        const auto &buffer = handle->renderer.compose_with_overlays(picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, handle->scene);
+        const auto &buffer = handle->renderer.compose_with_overlays(handle->root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, handle->scene);
 
         return LePixelBuffer{
             .data = buffer.data,

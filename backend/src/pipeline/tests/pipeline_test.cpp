@@ -422,6 +422,34 @@ TEST_F(PipelineFixture, GenerateShapesRecomputesWhenViewLayersIsRebuiltEvenForTh
     EXPECT_EQ(pipeline.generate_calls(), 2u); // same AbstractId, but a freshly rebuilt ViewLayerSet - must recompute
 }
 
+TEST_F(PipelineFixture, GenerateShapesRecomputesAfterACrudMutationEvenForTheSameAbstractIdAndViewLayerSet)
+{
+    // Regression: a real crash-adjacent bug (see TCL_EXPLORATION.md and
+    // pipeline.hpp's own class comment) - a Tcl/API CRUD mutation
+    // (UPDATES.md item 15's Terminal/TerminalPort/Obstruction/Shape
+    // surface - api.cpp's le_create_terminal, le_add_shape_rect, etc.)
+    // changes neither AbstractId nor ViewLayerSet (no LEF was re-read),
+    // so before Root::mutation_version() existed, this cache had no way
+    // to know the database changed at all - a Tcl-created Shape never
+    // appeared on screen no matter how many times the caller re-rendered,
+    // since the frame *was* regenerating, just from a stale cache. Found
+    // this way (a real user hitting it through the show_gui Tcl console),
+    // not anticipated up front.
+    pipeline.generate_shapes(root, abstract_id, view_layers);
+    ASSERT_EQ(pipeline.generate_calls(), 1u);
+    ASSERT_TRUE(pipeline.generate_shapes(root, abstract_id, view_layers).empty());
+    ASSERT_EQ(pipeline.generate_calls(), 1u); // nothing changed - cache hit
+
+    // Mirrors api.cpp's own CRUD functions: mutate, then bump the
+    // counter - see e.g. le_create_terminal_port_shape/le_add_shape_rect.
+    add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
+    root.bump_mutation_version();
+
+    const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
+    EXPECT_EQ(pipeline.generate_calls(), 2u); // same AbstractId, same ViewLayerSet - must still recompute
+    EXPECT_EQ(shapes.size(), 1u);
+}
+
 TEST_F(PipelineFixture, FilterByViewportAndSizeKeepsShapesInsideViewport)
 {
     Scene scene;
@@ -432,7 +460,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeKeepsShapesInsideViewport)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}}, .view_layer = {}},
     };
-    const auto &result = pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
+    const auto &result = pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers);
     EXPECT_EQ(result.size(), 1u);
 }
 
@@ -448,7 +476,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesWithNoGeometry)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .texts = {Text{.label = "A1", .location = {5, 5}}}}, .view_layer = {}},
     };
-    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene, view_layers).empty());
+    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers).empty());
 }
 
 TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesOutsideViewport)
@@ -461,7 +489,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsShapesOutsideViewport)
     std::vector<RenderedShape> shapes = {
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {1000, 1000}, .ur = {1010, 1010}}}}, .view_layer = {}},
     };
-    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(shapes, scene, view_layers).empty());
+    EXPECT_TRUE(pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers).empty());
 }
 
 TEST_F(PipelineFixture, FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLongShapes)
@@ -474,7 +502,7 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeDropsSubPixelDotsButKeepsThinLong
     RenderedShape dot{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 5}}}}, .view_layer = {}};             // 0x0
     RenderedShape thin_long_line{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {5, 5}, .ur = {5, 105}}}}, .view_layer = {}}; // 0 wide, 100 tall
 
-    const auto &result = pipeline.filter_by_viewport_and_size(std::vector<RenderedShape>{dot, thin_long_line}, scene, view_layers);
+    const auto &result = pipeline.filter_by_viewport_and_size(root, std::vector<RenderedShape>{dot, thin_long_line}, scene, view_layers);
     ASSERT_EQ(result.size(), 1u);
     EXPECT_EQ(result.front().shape.rects.front().ur.y, 105);
 }
@@ -489,12 +517,12 @@ TEST_F(PipelineFixture, FilterByViewportAndSizeReusesCacheUntilViewportVersionCh
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}}, .view_layer = {}},
     };
 
-    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
-    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
+    pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers);
+    pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 1u);
 
     scene.set_pan(Point{1, 1});
-    pipeline.filter_by_viewport_and_size(shapes, scene, view_layers);
+    pipeline.filter_by_viewport_and_size(root, shapes, scene, view_layers);
     EXPECT_EQ(pipeline.viewport_filter_calls(), 2u);
 }
 
@@ -511,7 +539,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityDropsHiddenViewLayerKeepsVisible)
         RenderedShape{.shape = Shape{.layer_name = "M2", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = m2_obstruction},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    const auto &result = pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 1u); // only the M1 group survives - the whole M2 group is dropped
     ASSERT_TRUE(result.contains(m1_obstruction));
     EXPECT_EQ(result.at(m1_obstruction).front().shape.layer_name, "M1");
@@ -524,7 +552,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityKeepsShapesWithInvalidViewLayer)
         RenderedShape{.shape = Shape{.layer_name = "DOES_NOT_EXIST", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = {}},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    const auto &result = pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 1u);
     ASSERT_TRUE(result.contains(ViewLayerId{}));
     EXPECT_EQ(result.at(ViewLayerId{}).size(), 1u);
@@ -546,7 +574,7 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityGroupsInBottomUpLayerOrder)
         RenderedShape{.shape = Shape{.layer_name = "M1"}, .view_layer = m1_terminal},
     };
 
-    const auto &result = pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    const auto &result = pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 3u);
 
     std::vector<ViewLayerId> order;
@@ -566,12 +594,12 @@ TEST_F(PipelineFixture, FilterByLayerVisibilityReusesCacheUntilVisibilityVersion
         RenderedShape{.shape = Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {1, 1}}}}, .view_layer = {}},
     };
 
-    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
-    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
+    pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
     EXPECT_EQ(pipeline.layer_filter_calls(), 1u);
 
     scene.set_layer_name_visible("M1", false);
-    pipeline.filter_by_layer_visibility(shapes, scene, view_layers);
+    pipeline.filter_by_layer_visibility(root, shapes, scene, view_layers);
     EXPECT_EQ(pipeline.layer_filter_calls(), 2u);
 }
 
@@ -634,7 +662,7 @@ TEST_F(PipelineFixture, TinyShapesByLayerVisibilityDropsHiddenViewLayerKeepsVisi
     const auto &tiny_shapes = pipeline.tiny_shapes_by_viewport(root, abstract_id, scene, view_layers);
     ASSERT_EQ(tiny_shapes.size(), 2u);
 
-    const auto &result = pipeline.tiny_shapes_by_layer_visibility(tiny_shapes, scene, view_layers);
+    const auto &result = pipeline.tiny_shapes_by_layer_visibility(root, tiny_shapes, scene, view_layers);
     ASSERT_EQ(result.size(), 1u); // only the M1/TERMINAL group survives
     const auto m1_terminal = view_layers.find(m1, ViewLayerPurpose::TERMINAL);
     ASSERT_TRUE(result.contains(m1_terminal));
