@@ -251,6 +251,15 @@ extern "C"
     /// selection is left unchanged on failure.
     int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id);
 
+    /// @brief Look up the Design named `name` (exact match) on this
+    /// handle - lets a caller resolve a name straight to a LeDesignId
+    /// (e.g. for le_set_current_design_by_id) without walking the flat
+    /// le_library_design_at() enumeration by hand (UPDATES.md item 17's
+    /// `open_design <name>`). Returns an invalid id (index == UINT32_MAX)
+    /// if handle or name is null, or no Design with that name is loaded
+    /// on this handle.
+    LeDesignId le_design_by_name(LeHandle *handle, const char *name);
+
     /// @brief Number of layer-widget rows currently available - mirrors
     /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
     /// includes BOUNDARY and any future non-Technology-derived "extra"
@@ -915,6 +924,21 @@ extern "C"
     /// handle is null or index is out of range.
     LeTerminalId le_search_result_terminal_at(LeHandle *handle, int32_t index);
 
+    /// @brief Search only the Terminals belonging to the currently
+    /// selected Design's Abstract (see le_set_current_design/
+    /// le_set_current_design_by_id) for `filter_expression` - same
+    /// grammar/error contract as le_search_terminal, but scoped instead
+    /// of scanning every Terminal on the handle (UPDATES.md item 17: a
+    /// TCL script's "give me the terminals" means "in the view I have
+    /// open", not "across every open Library/Design"). Pass "*" to match
+    /// every Terminal in the current Abstract without parsing it as a
+    /// filter expression at all. Shares le_search_terminal's result
+    /// buffer - read results back via le_search_result_terminal_at, same
+    /// as le_search_terminal's own results. Returns the match count (0 if
+    /// handle or filter_expression is null, or no Design is currently
+    /// selected), or -1 if filter_expression fails to parse.
+    int32_t le_get_terminals(LeHandle *handle, const char *filter_expression);
+
     // --- TerminalPort/Obstruction CRUD + filter-search, and Abstract
     // boundary update (Phase 4, continued) ---
     //
@@ -972,6 +996,13 @@ extern "C"
     /// own comment for the general contract.
     LeTerminalPortId le_search_result_terminal_port_at(LeHandle *handle, int32_t index);
 
+    /// @brief Search only the TerminalPorts whose Terminal belongs to the
+    /// currently selected Design's Abstract - see le_get_terminals' own
+    /// comment for the full contract (grammar/"*"/error/result-buffer
+    /// behavior), identical here, just scoped to TerminalPort. Returns
+    /// the match count, or -1 on a parse error.
+    int32_t le_get_terminal_ports(LeHandle *handle, const char *filter_expression);
+
     /// @brief Create an empty Obstruction on the Abstract at
     /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
     /// Returns an invalid LeObstructionId (index == UINT32_MAX) if
@@ -1008,6 +1039,12 @@ extern "C"
     /// le_search_obstruction call - see le_search_result_terminal_at's
     /// own comment for the general contract.
     LeObstructionId le_search_result_obstruction_at(LeHandle *handle, int32_t index);
+
+    /// @brief Search only the Obstructions belonging to the currently
+    /// selected Design's Abstract - see le_get_terminals' own comment for
+    /// the full contract, identical here, just scoped to Obstruction.
+    /// Returns the match count, or -1 on a parse error.
+    int32_t le_get_obstructions(LeHandle *handle, const char *filter_expression);
 
     /// @brief Replace the Abstract at `id`'s boundary outline wholesale
     /// with a single polygon built from `coords_um` (UPDATES.md item

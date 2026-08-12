@@ -257,3 +257,25 @@ My idea is:
 4. Ideally some generic class can be created for easier future expansion.
 
 This should help reduce the amount of caching bugs, like we had to fix in the previous commit.
+
+# 17. Limiting TCL database access commands to current view scope - DONE (query scoping only - see below)
+
+At the moment, all TCL commands access database objects from the global pools, which contains terminals and obstructions across all open abstract views.
+
+From a users perspective, they only want to operate on objects related to the currently open abstract.
+
+Example user flow:
+
+```tcl
+read_lef test_data/stripe_15layer.lef
+open_design STRIPETEST -view abstract ;# NOTE: -view is redundant at the moment and should default to abstract for now
+set terminals [get_terminals *]
+```
+
+Then the terminals variable will contain a list of terminal IDs for the STRIPETEST abstract only.
+
+Also, I think the database TCL commands may be too low level. There is a serious risk that the user could modify something in the database that breaks the consistence. I think my previous request didn't account for this.
+
+**Resolution**: `open_design <name> [-view abstract]` (`le_tcl_procs.tcl`) resolves a Design by name and sets it as the session's current view (`Scene::current_abstract()` - already existed for the render path, just not reachable from TCL before this). `search_terminal`/`search_obstruction`/`search_terminal_port` were replaced outright by `get_terminals`/`get_obstructions`/`get_terminal_ports`, scoped to the current view's Abstract (`le_get_terminals`/`le_get_obstructions`/`le_get_terminal_ports` in `api.hpp`/`api.cpp`, via `Root::get_abstract_terminals`/`get_abstract_obstructions` - no unscoped TCL escape hatch kept; `le_search_terminal`/`le_search_obstruction`/`le_search_terminal_port` remain in the C API unscoped, for any future Dart/GUI use, but no longer back a TCL command). Pass `*` instead of a filter expression to match everything in the current view. See `src/tcl/tests/crud_test.tcl`'s "Current-view scoping" section for the regression check (two Designs read into one session, `get_terminals *` proven not to leak across `open_design` switches).
+
+The "TCL commands may be too low level" consistency-risk concern is **not** addressed here - deliberately deferred as a separate future item once it's specified concretely (e.g. should mutation commands reject cross-abstract operations, or is a higher-level guarded API wanted instead of raw CRUD). The CRUD commands (`create_terminal`, `create_obstruction`, `update_abstract_boundary`, ...) are unchanged - still explicit-`-abstract`, still low-level.

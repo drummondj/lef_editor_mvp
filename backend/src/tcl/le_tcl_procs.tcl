@@ -55,6 +55,38 @@ proc set_viewport_size {args} {
     return [set_viewport_size_cmd $opts(-width) $opts(-height)]
 }
 
+# --- Current view (UPDATES.md item 17) ---
+
+# Selects `name`'s Design as this session's current view - every
+# subsequent get_terminals/get_obstructions/get_terminal_ports call is
+# scoped to its Abstract (see le_tcl_shim.hpp's own comment on
+# get_terminals for why: a script's "give me the terminals" means "in the
+# view I have open", not "across every open Library/Design"). `-view` is
+# accepted but currently only "abstract" is meaningful - every Design
+# read via read_lef() has exactly one Abstract view and no
+# DEF/placement-driven Design exists in this project yet (see
+# le_tcl_shim.hpp's design_abstract_id comment for the same caveat).
+proc open_design {name args} {
+    array set opts {-view abstract}
+    foreach {flag value} $args {
+        if {![info exists opts($flag)]} {
+            error "open_design: unknown flag $flag"
+        }
+        set opts($flag) $value
+    }
+    if {$opts(-view) ne "abstract"} {
+        error "open_design: -view $opts(-view) is not supported - only \"abstract\" is currently meaningful"
+    }
+    set design_id [design_by_name $name]
+    if {$design_id == $::kInvalidId} {
+        error "open_design: no such design \"$name\""
+    }
+    if {[set_current_design_cmd $design_id] != 0} {
+        error "open_design: failed to select design \"$name\""
+    }
+    return $design_id
+}
+
 # --- Terminal ---
 
 proc create_terminal {args} {

@@ -18,15 +18,15 @@ Machine: 10-core Apple Silicon Mac (macOS), Clang.
 
 Commit: `71f9acd`
 
-| Stage | Mean | cv |
-| --- | --- | --- |
-| `generate_shapes` | 46.9 ms | 0.58% |
-| `filter_by_viewport_and_size` | 4.50 ms | 1.31% |
-| `resolve_view_layers` | 1.89 ms | 0.56% |
-| `filter_by_layer_visibility` | 0.825 ms | 1.01% |
-| `run()` (all 4 stages) | 55.7 ms | 0.39% |
+| Stage                         | Mean     | cv    |
+| ----------------------------- | -------- | ----- |
+| `generate_shapes`             | 46.9 ms  | 0.58% |
+| `filter_by_viewport_and_size` | 4.50 ms  | 1.31% |
+| `resolve_view_layers`         | 1.89 ms  | 0.56% |
+| `filter_by_layer_visibility`  | 0.825 ms | 1.01% |
+| `run()` (all 4 stages)        | 55.7 ms  | 0.39% |
 
-`resolve_view_layers` as its own stage *after* the viewport/size filter
+`resolve_view_layers` as its own stage _after_ the viewport/size filter
 pays the layer-lookup cost on only the ~25% of shapes that survive
 culling — an earlier design resolving during `generate_shapes` measured
 ~46% slower. `generate_shapes` is ~84% of `run()` and the natural
@@ -42,12 +42,12 @@ only on `AbstractId`; v2 decoupled it (key: `AbstractId` alone), trading
 instead of the ~250K viewport-filtered survivors) for -1.7ms on every
 subsequent pan/zoom frame:
 
-| Scenario | v1 | v2 |
-| --- | --- | --- |
-| No change (steady state) | ~0 ms | ~0 ms |
-| Pan-only | 7.83 ms | 6.11 ms |
-| Visibility-only | 0.579 ms | 0.614 ms |
-| Cold start (fresh, one `run()`) | 55.7 ms (uncached baseline) | 97.7 ms |
+| Scenario                        | v1                          | v2       |
+| ------------------------------- | --------------------------- | -------- |
+| No change (steady state)        | ~0 ms                       | ~0 ms    |
+| Pan-only                        | 7.83 ms                     | 6.11 ms  |
+| Visibility-only                 | 0.579 ms                    | 0.614 ms |
+| Cold start (fresh, one `run()`) | 55.7 ms (uncached baseline) | 97.7 ms  |
 
 Investigated why `resolve_view_layers` on the full 1M set (40.3ms) is far
 more than 4x the 250K-subset cost (1.88ms) despite both lookups being
@@ -73,17 +73,17 @@ Two structural changes landed close together:
   always share the same cache key (`AbstractId`) and always recompute
   together — the reason they were originally split (resolving during
   generation measured ~46% slower) no longer applied, since that finding
-  was for a design where viewport-filtering ran *between* them; the
+  was for a design where viewport-filtering ran _between_ them; the
   current design always resolves on the full set regardless. Merged:
   `generate_shapes` now resolves each shape's `ViewLayerId` inline;
   `TaggedShape` is gone; pipeline is down to 3 stages.
 
-| Benchmark | Before (PipelineCache v2) | After both merges |
-| --- | --- | --- |
-| `BM_Run` (cold start) | 97.7 ms | **58.9 ms** |
-| `generate_shapes` alone | ~52.6ms + ~40.3ms (two stages) ≈ 92.9 ms | **52.6 ms** |
-| Reused, pan-only | 6.11 ms | 5.91 ms |
-| Reused, visibility-only | 0.614 ms | 0.587 ms |
+| Benchmark               | Before (PipelineCache v2)                | After both merges |
+| ----------------------- | ---------------------------------------- | ----------------- |
+| `BM_Run` (cold start)   | 97.7 ms                                  | **58.9 ms**       |
+| `generate_shapes` alone | ~52.6ms + ~40.3ms (two stages) ≈ 92.9 ms | **52.6 ms**       |
+| Reused, pan-only        | 6.11 ms                                  | 5.91 ms           |
+| Reused, visibility-only | 0.614 ms                                 | 0.587 ms          |
 
 Cold-start dropped ~39%, and the merged `generate_shapes` costs far less
 than the sum of the two stages it replaced — consistent with eliminating
@@ -95,13 +95,13 @@ New `src/render/render.hpp`: `Renderer` adds two more `CachedStage`-backed
 stages on top of `Pipeline`'s output — `transform_to_pixels` and
 `build_picture` (Skia `SkPictureRecorder` draw calls).
 
-| Benchmark | Mean |
-| --- | --- |
-| `BM_TransformToPixels` (isolated, ~250K shapes) | 0.715 ms |
-| `BM_BuildPicture` (isolated, ~250K shapes) | 1.43 ms |
-| `BM_Render` (pipeline + render, cold) | 62.0 ms (+2.5ms over pipeline-only) |
-| `BM_RenderReused_PanOnly` (warm) | 8.56 ms (+2.75ms over pipeline-only) |
-| `BM_RenderReused_NoChange` | ~0 ms |
+| Benchmark                                       | Mean                                 |
+| ----------------------------------------------- | ------------------------------------ |
+| `BM_TransformToPixels` (isolated, ~250K shapes) | 0.715 ms                             |
+| `BM_BuildPicture` (isolated, ~250K shapes)      | 1.43 ms                              |
+| `BM_Render` (pipeline + render, cold)           | 62.0 ms (+2.5ms over pipeline-only)  |
+| `BM_RenderReused_PanOnly` (warm)                | 8.56 ms (+2.75ms over pipeline-only) |
+| `BM_RenderReused_NoChange`                      | ~0 ms                                |
 
 **Threading decision, backed by these numbers**: warm/interactive path is
 8.56ms at 1M shapes, comfortably under a 60fps/16.6ms budget — no case for
@@ -112,7 +112,7 @@ shows otherwise.
 ## 2026-08-03 — Pipeline groups by ViewLayerId (bottom-up draw order) + Terminal text labels
 
 - `filter_by_layer_visibility`/`run()` now return `std::map<ViewLayerId,
-  vector<RenderedShape>>` instead of a flat vector — checks visibility
+vector<RenderedShape>>` instead of a flat vector — checks visibility
   once per distinct ViewLayerId, and map iteration order gives correct
   bottom-up draw order for free (`ViewLayerId`'s ordering, via `Id<Tag>`'s
   new `operator<=>` added to `cmg`'s template, matches LEF-declared layer
@@ -122,12 +122,12 @@ shows otherwise.
   `Geometry::get_label_location`), riding on a real geometric Shape so it
   survives the viewport/size filter's bbox check.
 
-| Benchmark | Before | After |
-| --- | --- | --- |
-| `BM_GenerateShapes` (1M shapes) | 52.6 ms | 101 ms |
-| `BM_FilterByLayerVisibility` | 0.82 ms | 2.28 ms |
-| `BM_Run` (cold) | 58.9 ms | 108 ms |
-| `BM_RunReused_PanOnly` | 5.91 ms | 8.47 ms |
+| Benchmark                              | Before  | After   |
+| -------------------------------------- | ------- | ------- |
+| `BM_GenerateShapes` (1M shapes)        | 52.6 ms | 101 ms  |
+| `BM_FilterByLayerVisibility`           | 0.82 ms | 2.28 ms |
+| `BM_Run` (cold)                        | 58.9 ms | 108 ms  |
+| `BM_RunReused_PanOnly`                 | 5.91 ms | 8.47 ms |
 | `BM_RenderReused_PanOnly` (full chain) | 8.56 ms | 12.3 ms |
 
 The `generate_shapes` regression is ~36ms of `Geometry::get_label_location`
@@ -147,10 +147,10 @@ now buckets a Terminal's Shapes by `layer_name` instead of one combined
 label per Terminal; single-layer Terminals (the common case) still get
 exactly one label.
 
-| Benchmark | Before | After |
-| --- | --- | --- |
-| `BM_GenerateShapes` (1M shapes) | 102 ms | 106 ms |
-| `BM_Run` (cold) | 110 ms | 112-113 ms |
+| Benchmark                       | Before | After      |
+| ------------------------------- | ------ | ---------- |
+| `BM_GenerateShapes` (1M shapes) | 102 ms | 106 ms     |
+| `BM_Run` (cold)                 | 110 ms | 112-113 ms |
 
 ~4ms from one `unordered_map` construction per Terminal, even single-layer
 ones. Not pursued further: small relative to the already-accepted
@@ -161,7 +161,7 @@ label-placement cost, and the warm/interactive path is unaffected
 
 Found visually (`render_preview` against `Nangate45_stdcell.lef`): a
 Terminal Port's or Obstruction's Shape can contain several rects that
-overlap *each other* (e.g. an L/T-shaped pin), and drawing each with a
+overlap _each other_ (e.g. an L/T-shaped pin), and drawing each with a
 translucent fill double-painted the overlap into a visibly darker patch.
 `Geometry::merge_overlapping_fills(Shape&)` unions a Shape's own
 rects+polygons into a minimal non-overlapping set; paths are left
@@ -173,11 +173,11 @@ Isolated micro-benchmark (N half-overlapping rects) to measure the actual
 union cost, since the stress data can't:
 
 | N rects | Copy alone | Copy + merge |
-| --- | --- | --- |
-| 2 | 0.016 us | 3.48 us |
-| 5 | 0.017 us | 13.6 us |
-| 10 | 0.024 us | 30.1 us |
-| 50 | 0.033 us | 176 us |
+| ------- | ---------- | ------------ |
+| 2       | 0.016 us   | 3.48 us      |
+| 5       | 0.017 us   | 13.6 us      |
+| 10      | 0.024 us   | 30.1 us      |
+| 50      | 0.033 us   | 176 us       |
 
 Grows slightly worse than linearly (each iterative union operates on a
 result that's grown from previous ones). Real-world check: the full
@@ -207,7 +207,7 @@ height + row_bytes), a third `CachedStage`-backed stage. Two decisions:
 **Real bug found via visual testing, not the unit tests**: a whole-canvas
 flip also mirrors glyph rendering — Terminal labels came out
 upside-down/mirrored ("VSS" as "SSV") in `render_preview` output. None of
-the existing text tests caught this since they only scan for *any* opaque
+the existing text tests caught this since they only scan for _any_ opaque
 pixel, not a legible glyph. Fixed with a local counter-flip
 (`save`/`translate`/`scale(1,-1)`/`drawString`/`restore`) around each
 label's own anchor in `build_picture`, which couples that `SkPicture` to
@@ -216,16 +216,16 @@ upright (documented in both methods). A reminder that pixel-level
 assertions don't catch every rendering bug — occasionally looking at the
 actual image still matters.
 
-| Benchmark | Result |
-| --- | --- |
-| `BM_Rasterize` (isolated) | 6.21 ms |
-| `BM_Render` (cold, full chain) | 117 ms |
-| `BM_RenderReused_NoChange` | ~0 ms |
+| Benchmark                                    | Result      |
+| -------------------------------------------- | ----------- |
+| `BM_Rasterize` (isolated)                    | 6.21 ms     |
+| `BM_Render` (cold, full chain)               | 117 ms      |
+| `BM_RenderReused_NoChange`                   | ~0 ms       |
 | `BM_RenderReused_PanOnly` (warm, full chain) | **21.5 ms** |
 
 **Headline finding**: the warm/interactive pan-only path went from 12.5ms
 to 21.5ms (confirmed via in-session A/B, not just a cross-session
-comparison) — the first time this project has *exceeded* a 60fps/16.6ms
+comparison) — the first time this project has _exceeded_ a 60fps/16.6ms
 budget rather than stayed under it. Investigated one hypothesis (per-frame
 raster-surface allocation) and ruled it out (isolated measurement: 0.25ms,
 too small to explain the gap); more likely explanation is that the
@@ -237,7 +237,7 @@ Threading question instead.
 ## 2026-08-07 — Pipeline::hit_test_point (UPDATES.md 7.1 mouse hover)
 
 Unlike every stage above, `hit_test_point` isn't `CachedStage`-backed —
-it's called fresh on *every* pointer-move event (`le_set_mouse_position`
+it's called fresh on _every_ pointer-move event (`le_set_mouse_position`
 in api.cpp), against the already viewport-culled/visibility-filtered
 shape set `Pipeline::run` produces, not the full 1M-shape design. The
 concern this benchmark was written to settle: is bounding the candidate
@@ -250,17 +250,17 @@ visible viewport (`make_scene`'s own `[0, 100,000,000)` dbu range on each
 axis, roughly a quarter of the design's ~250K on-screen candidates after
 viewport culling and the M2-layer-hidden visibility filter).
 
-| Version | `BM_HitTestPoint` |
-| --- | --- |
-| Naive `Geometry::contains` (no bbox pre-check) | 16.9 ms |
-| With a cheap bbox pre-check before `bg::within`/`path_to_polygons` | **60.0 µs** |
+| Version                                                            | `BM_HitTestPoint` |
+| ------------------------------------------------------------------ | ----------------- |
+| Naive `Geometry::contains` (no bbox pre-check)                     | 16.9 ms           |
+| With a cheap bbox pre-check before `bg::within`/`path_to_polygons` | **60.0 µs**       |
 
 Bounding the candidate set to on-screen shapes alone was **not** enough -
 16.9ms/call would cap interactive hover responsiveness well below 60fps,
 confirmed by direct comparison against `BM_RunReused_PanOnly`'s 9.76ms
-(the cost of re-filtering the *entire* shape set on every viewport
+(the cost of re-filtering the _entire_ shape set on every viewport
 change) elsewhere in this file: hit-testing on every mouse pixel move was
-costing *more* than a full pipeline re-filter that only happens on
+costing _more_ than a full pipeline re-filter that only happens on
 pan/zoom. Root cause: `Geometry::contains` called `path_to_polygons`
 (a real Boost.Geometry buffer operation) on every visible path-shaped
 candidate regardless of whether the query point was anywhere near it -
@@ -284,13 +284,13 @@ cmake --build build --target pipeline_benchmarks
 ## 2026-08-07 — compose_with_overlays: selection-overlay picture replay scaled with selection size
 
 Reported symptom: after a piece-level selection fix (`Pipeline::hit_test_rect`/
-`draw_selected_piece_outline` now trace a selected PATH piece's *buffered*
+`draw_selected_piece_outline` now trace a selected PATH piece's _buffered_
 outline via `Geometry::path_to_polygons`, not a cheap centerline halo),
 interactive mouse-move/zoom/multi-select got progressively slower the more
 objects were selected. First fix attempt split `build_overlay_picture`
 (mouse-driven chrome: drag rect/cursor/hover) from a new
 `build_selection_overlay_picture` (selected-piece outlines), so a pure
-mouse move no longer *re-records* the selection outline SkPicture. That
+mouse move no longer _re-records_ the selection outline SkPicture. That
 fix alone didn't resolve the report - added `BM_ComposeWithOverlays_
 ManySelectedPieces_MouseMoveOnly` (selects N real pieces from the stress
 design's own filtered output, mixed RECT/POLYGON/PATH, then measures
@@ -298,14 +298,14 @@ design's own filtered output, mixed RECT/POLYGON/PATH, then measures
 out why, instead of continuing to reason about it from code alone:
 
 | Selected pieces | Before raster fix | After raster fix |
-| --- | --- | --- |
-| 0 | 1.37 ms | 2.29 ms |
-| 100 | 1.59 ms | 2.28 ms |
-| 1,000 | 1.66 ms | 2.32 ms |
-| 5,000 | 2.56 ms | 2.30 ms |
-| 20,000 | 6.28 ms | 2.33 ms |
+| --------------- | ----------------- | ---------------- |
+| 0               | 1.37 ms           | 2.29 ms          |
+| 100             | 1.59 ms           | 2.28 ms          |
+| 1,000           | 1.66 ms           | 2.32 ms          |
+| 5,000           | 2.56 ms           | 2.30 ms          |
+| 20,000          | 6.28 ms           | 2.33 ms          |
 
-Root cause: `compose_with_overlays` *replayed* `selection_overlay_picture`
+Root cause: `compose_with_overlays` _replayed_ `selection_overlay_picture`
 (`canvas->drawPicture`) on every call, regardless of whether the picture
 had actually been re-recorded. SkPicture replay cost, like recording
 cost, scales with the number of recorded draw ops - so even with
@@ -326,7 +326,7 @@ always paid now instead of a near-free empty `drawPicture` call.
 This is the second time this session a "the picture-cache call count
 looks right" test passed while the actual regression (replay cost, not
 recompute cost) remained - a reminder that `CachedStage` call-count
-assertions only prove *recomputation* was avoided, not that *replay* of
+assertions only prove _recomputation_ was avoided, not that _replay_ of
 whatever's cached is cheap; when what's cached is an `SkPicture` rather
 than a flat buffer, replay cost still needs its own reasoning (or
 benchmark) before assuming a cache hit means "cheap."
@@ -344,13 +344,13 @@ keep guessing: a benchmark exercising the real repro end-to-end
 `BM_RefreshSelectedObjects_ManySelectedPieces`) ran for **7+ minutes**
 without completing what should be a sub-second setup step - had to be
 killed. Root cause: `Scene::select()`'s dedup (`src/scene/scene.hpp`)
-scanned the *entire current selection*, doing a full structural
+scanned the _entire current selection_, doing a full structural
 rect/polygon/path comparison (`same_piece`) against every existing entry
 sharing the candidate's origin, on every single insert. The stress-test
 LEF's ~900,000 obstruction shapes all share **one** `ObstructionId`
 origin (one `OBS` block), which is exactly the worst case for this: every
-`select()` call during a big drag-select scans against *every previously
-selected piece*, since they all share that one origin and the existing
+`select()` call during a big drag-select scans against _every previously
+selected piece_, since they all share that one origin and the existing
 origin-mismatch short-circuit never fires. `le_mouse_up`'s drag branch
 (`src/api/api.cpp`) calls `scene.select()` once per enclosed piece, so a
 drag enclosing M pieces cost O(M²) `same_piece` calls - and ran inside the
@@ -366,10 +366,10 @@ sharing one synthetic origin, timing only the `select()` loop, not LEF
 parsing or `hit_test_rect`):
 
 | N pieces | Before (O(N²)) | After (O(N) average) |
-| --- | --- | --- |
-| 1,000 | 2.38 ms | 0.073 ms |
-| 5,000 | 58.5 ms | 0.413 ms |
-| 20,000 | 930 ms | 1.71 ms |
+| -------- | -------------- | -------------------- |
+| 1,000    | 2.38 ms        | 0.073 ms             |
+| 5,000    | 58.5 ms        | 0.413 ms             |
+| 20,000   | 930 ms         | 1.71 ms              |
 
 544x faster at 20,000 pieces, and the "before" column's growth
 (~24.6x time for 5x items, ~15.9x time for 4x items) confirms the
@@ -380,7 +380,7 @@ sizes, confirming O(1) average per call, not just "faster."
 A second, independent, additive cause was found the same investigation:
 the Flutter frontend (`frontend/lib/providers/le_provider.dart`)
 unconditionally rebuilds its entire selected-object list - several FFI
-calls per selected object - on *every* mouse-move event, regardless of
+calls per selected object - on _every_ mouse-move event, regardless of
 whether the selection changed. Fixed by exposing `Scene::selection_version()`
 through the C API (`le_selection_version`) so the frontend can skip that
 rebuild when nothing selection-related has actually changed since the
@@ -401,7 +401,7 @@ Even after both fixes above, the reported symptom persisted: selecting
 more than a handful of objects was slow, and stayed slow adding just one
 more object to an already-large selection - not explained by either
 prior fix (`Scene::select()` was already confirmed O(1) average; the
-Dart-side refresh gate only helps *unchanged* frames, not actual
+Dart-side refresh gate only helps _unchanged_ frames, not actual
 selection changes). Asked directly to profile rather than keep
 hypothesizing, and to justify prior claims about where time was going
 (none of which had been profiler-verified) - used three independent
@@ -415,28 +415,29 @@ methods, escalating in rigor:
 2. **macOS `sample`** (statistical call-stack sampler, no source changes)
    attached to a Release build running that same benchmark: of 6,245
    samples inside `build_picture`'s recompute call, 5,630 (90%) landed
-   directly in the lambda's own *inlined* code, vs. only ~321 total for
+   directly in the lambda's own _inlined_ code, vs. only ~321 total for
    the separately-visible `draw_group` (the actual per-shape drawing
    work) - and 272 samples specifically in `std::variant`'s equality-
    dispatch machinery, the one piece of evidence that survived inlining
    and pointed concretely at `SelectionRef == SelectionRef` comparisons.
 3. **Same benchmark, Debug build** (no inlining, so every function keeps
    its own call-tree frame) - removed all ambiguity: `Scene::
-   is_selected_as_whole_object` (`scene.hpp:552`) accounted for 1,056
+is_selected_as_whole_object` (`scene.hpp:552`) accounted for 1,056
    samples in one call-tree branch alone, ~30x more than `draw_group`
    (~35) and ~100x more than `Scene::select` (~9) in the same branch -
    with `find_if.h:24-25` (the linear scan inside it) and
    `scene.hpp:554` (the comparison lambda) as its own direct children.
 
 Root cause: `build_picture`'s whole-object selection-outline pass (drawn
-once per *visible* `PixelShape`, gated on `Scene::is_selected_as_whole_object`
-- itself a linear scan of the *entire current selection*) was O(visible
-shapes * selection size), and reran on every selection change since
-`selection_version()` was part of `build_picture`'s cache key. It was
-also provably dead: `api.cpp`'s `le_mouse_up` only ever calls
-`Scene::select()` with a piece (confirmed by grep, both call sites), so
-`is_selected_as_whole_object` could never return true through the public
-API - this was pure wasted cost with no possible visual effect.
+once per _visible_ `PixelShape`, gated on `Scene::is_selected_as_whole_object`
+
+- itself a linear scan of the _entire current selection_) was O(visible
+  shapes \* selection size), and reran on every selection change since
+  `selection_version()` was part of `build_picture`'s cache key. It was
+  also provably dead: `api.cpp`'s `le_mouse_up` only ever calls
+  `Scene::select()` with a piece (confirmed by grep, both call sites), so
+  `is_selected_as_whole_object` could never return true through the public
+  API - this was pure wasted cost with no possible visual effect.
 
 Fix: removed the whole-object pass, `Scene::is_selected_as_whole_object`,
 and `draw_selection_outline` entirely (all otherwise unused). Since
@@ -445,12 +446,12 @@ also dropped `selection_version()` from its cache key and
 `rasterize_frame`'s (kept in sync by hand, per their documented
 invariant) - a selection change no longer invalidates either.
 
-| N pieces selected | Before | After |
-| --- | --- | --- |
-| 0 | 3.95 ms | 4.02 ms |
-| 1,000 | 12.9 ms | 4.02 ms |
-| 5,000 | 64.5 ms | 3.99 ms |
-| 20,000 | 64.3 ms | 4.00 ms |
+| N pieces selected | Before  | After   |
+| ----------------- | ------- | ------- |
+| 0                 | 3.95 ms | 4.02 ms |
+| 1,000             | 12.9 ms | 4.02 ms |
+| 5,000             | 64.5 ms | 3.99 ms |
+| 20,000            | 64.3 ms | 4.00 ms |
 
 Flat regardless of selection size. Re-profiled with `sample` after the
 fix as a final check, not just re-benchmarked: neither `build_picture`'s
@@ -463,14 +464,14 @@ one-time LEF parsing setup, exactly what should be there.
 
 Reported: the slowdown was still reproducible selecting Obstruction
 pieces specifically, never Terminal pieces - a real clue, not a red
-herring. The user's own hypothesis (too many shapes embedded in *one*
+herring. The user's own hypothesis (too many shapes embedded in _one_
 Obstruction, not too many selected pieces) was correct. Root cause:
-`cmg` (the schema code generator, `/Users/john/Projects/synthosilicon/cmg`)
+`cmg` (the schema code generator, `/Volumes/Docking/Projects/synthosilicon/cmg`)
 generates `to_string`/`to_properties`/`operator<<` for every schema
-class taking the struct *by value*
+class taking the struct _by value_
 (`cmg/templates/indexed_pools/struct_hpp_j2.py`). Invisible for small
 classes, but `ObstructionData::shapes` (`std::vector<Shape>`) is an
-*embedded* struct field, not pool-referenced like `TerminalData`'s ports
+_embedded_ struct field, not pool-referenced like `TerminalData`'s ports
 (fetched separately via `Root::get_terminal_ports`) - so every call to
 `le::to_properties(*obstruction)` (`api.cpp`'s
 `build_selected_object_properties`, called on every property fetch for
@@ -481,14 +482,14 @@ Isolated benchmark (`BM_ToPropertiesObstructionCopyCost`) against the
 real stress-design Obstruction (900K shapes, all under one
 `ObstructionId` - the same one this whole investigation has used):
 
-| | Before | After |
-| --- | --- | --- |
+|                                           | Before  | After                                                                    |
+| ----------------------------------------- | ------- | ------------------------------------------------------------------------ |
 | `to_properties(ObstructionData)` per call | 29.1 ms | sub-microsecond (50M+ iterations in the benchmark's own min-time window) |
 
 Fixed at the generator (not by hand-patching generated/, which must
 never be hand-edited): changed the three signatures in `cmg`'s template
 to `const T&`, none of the three bodies mutate their own copy. Fixes
-*every* schema class generically, not just Obstruction - any future
+_every_ schema class generically, not just Obstruction - any future
 class with a large embedded field gets this for free. Regenerated via
 the local `cmg` checkout (`poetry run cmg --schema ... --output
 src/database/generated --export-style INDEXED_POOLS`, per the
@@ -502,7 +503,7 @@ but unable to complete even once until now (killed once at O(N²)
 `Scene::select`, silently paying this same 29ms-per-call cost on every
 run after that was fixed) - finally completed cleanly: 36.4 ms at
 50,996 selected pieces, 88.5 ms at 122,333 - real remaining cost now
-proportional to *actual FFI call count* (kind + properties per selected
+proportional to _actual FFI call count_ (kind + properties per selected
 object), not a hidden per-call landmine.
 
 ## 2026-08-08 — PATH rendering: buffered outline + pattern fill + centerline
@@ -513,7 +514,7 @@ RECT/POLYGON on the same layer. Confirmed visually via `render_preview`
 against a small hand-written LEF (PIN/OBS PATH shapes on M1) before
 touching any code. Root cause: `draw_group`'s PATH branch drew an
 outline-colored "border" stroke at `path.width + 2*kPathOutlineMarginPx`
-directly *underneath* a narrower pattern-shaded "wire" stroke - since a
+directly _underneath_ a narrower pattern-shaded "wire" stroke - since a
 layer's `outline_color` is also `pattern_shader`'s own tile color, that
 border acted as an opaque same-color backing plate showing straight
 through every transparent gap in the pattern.
@@ -546,9 +547,9 @@ min-time and only 3-8 iterations, which gave wildly unstable numbers
 ranging 43-173ms for the same benchmark on the same code; only the
 long-running, ~1700+-iteration numbers below should be trusted):
 
-| Benchmark | Before | After |
-| --- | --- | --- |
-| `BM_GenerateShapes` (1M shapes, cold) | 137 ms | 434 ms |
+| Benchmark                                    | Before  | After   |
+| -------------------------------------------- | ------- | ------- |
+| `BM_GenerateShapes` (1M shapes, cold)        | 137 ms  | 434 ms  |
 | `BM_RunReused_PanOnly` (pipeline only, warm) | 10.3 ms | 11.7 ms |
 | `BM_RenderReused_PanOnly` (full chain, warm) | 39.0 ms | 52.1 ms |
 
@@ -556,7 +557,7 @@ long-running, ~1700+-iteration numbers below should be trusted):
 above (~330K paths × ~768ns + overhead) - paid once per Abstract-load,
 within this project's documented cold-start budget (see
 `pipeline_latency_budget` memory: 1-2s is fine, spinner shown).
-`BM_RunReused_PanOnly`'s +1.4ms is small and was *not* the concerning
+`BM_RunReused_PanOnly`'s +1.4ms is small and was _not_ the concerning
 number it first appeared to be: `RenderedShape::path_outlines` was
 originally a plain `std::vector<std::vector<Polygon>>`, and
 `filter_by_viewport_and_size`/`filter_by_layer_visibility` both already
@@ -571,7 +572,7 @@ pipeline-only number - the difference is in `Renderer`'s own stages
 (`transform_to_pixels` now also transforms `buffered_outline` polygons;
 `draw_group` now issues a shader-filled polygon draw plus a boundary
 stroke plus a centerline stroke per path, instead of two plain strokes).
-Not investigated further: this project's render pipeline was *already*
+Not investigated further: this project's render pipeline was _already_
 well over its 60fps/16.6ms interactive-frame budget before this change
 (39.0ms warm-pan, flagged as an open question in README's Threading
 section since 2026-08-04 - see the `Renderer::rasterize()` entry above),
@@ -611,11 +612,11 @@ frame costs. `--benchmark_min_time=8s --benchmark_repetitions=3
 Isolated per-stage cost (fresh `Renderer`/one-shot `Pipeline` call per
 iteration, matching this file's existing isolated-stage convention):
 
-| Benchmark | Time |
-| --- | --- |
+| Benchmark                                                               | Time    |
+| ----------------------------------------------------------------------- | ------- |
 | `BM_TinyShapesByViewport` (second pass over `generate_shapes`'s output) | 4.09 ms |
-| `BM_TransformTinyShapesToPixels` | 1.44 ms |
-| `BM_BuildTinyShapesPicture` (record only) | 0.43 ms |
+| `BM_TransformTinyShapesToPixels`                                        | 1.44 ms |
+| `BM_BuildTinyShapesPicture` (record only)                               | 0.43 ms |
 
 `BM_TinyShapesByViewport`'s 4.09ms is small relative to
 `BM_GenerateShapes`'s own 449ms cold cost (same stress design, same
@@ -626,11 +627,11 @@ Full-chain warm/pan-only (one `Pipeline`+`Renderer` reused across
 iterations, only `pan` changing each call - the interactive-panning
 case `BM_RenderReused_PanOnly` already benchmarks at a normal scale):
 
-| Benchmark | Time |
-| --- | --- |
-| `BM_RenderReused_PanOnly_ZoomedOut` (design content only, `rasterize()` direct) | 4.40 ms |
+| Benchmark                                                                                                                     | Time    |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `BM_RenderReused_PanOnly_ZoomedOut` (design content only, `rasterize()` direct)                                               | 4.40 ms |
 | `BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes` (same content, via `compose_with_overlays`, null tiny-shapes picture) | 9.10 ms |
-| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut` (real tiny-shapes chain) | 22.3 ms |
+| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut` (real tiny-shapes chain)                                                    | 22.3 ms |
 
 Read as two deltas, not one: `compose_with_overlays`'s own pre-existing
 fixed overhead (rasterizing+blitting a second full-viewport surface for
@@ -690,13 +691,14 @@ built a Debug `pipeline_benchmarks`, ran `BM_GenerateShapes` in the
 background with `--benchmark_min_time=30s`, sampled the running process
 for 15s at a 10ms interval (`sample <pid> 15 10 -file ...`). Of 1344
 total samples, 523 (39%) were inside `get_label_location`, and 457 of
-those (34% of the *entire* `generate_shapes` cost) were inside one line
+those (34% of the _entire_ `generate_shapes` cost) were inside one line
+
 - the `bg::intersection` call in `fracture_into_rects`.
 
 Reading that call site with the profile in hand found the fix wasn't a
 trade-off: with exactly 2 distinct cuts (one slab), that slab's own
 strip is - by construction - identical to the polygon's whole bbox in
-both dimensions, so intersecting the polygon against it is *always* a
+both dimensions, so intersecting the polygon against it is _always_ a
 no-op (`bg::intersection(polygon, its own bbox) == polygon`, whatever
 the polygon's actual shape) and enveloping that gives back the same
 bbox already computed at the top. So `fracture_into_rects`'s early-out
@@ -710,11 +712,11 @@ are already exactly their own bbox (2 cuts), so this fast path is the
 common case, not an edge case - confirmed by the fix essentially
 eliminating the regression entirely:
 
-| Benchmark | Before (old algorithm) | After (fracture, unoptimized) | After (fracture, 2-cut fast path) |
-| --- | --- | --- | --- |
-| `BM_GenerateShapes` | 430 ms | 743 ms | 432 ms |
-| `BM_GetLabelLocationSingleRect` | - | 2.00 ns | 2.00 ns |
-| `BM_GetLabelLocationLShapedPolygon` (real 3-cut case, unaffected by the fast path) | - | 8160 ns | 8293 ns |
+| Benchmark                                                                          | Before (old algorithm) | After (fracture, unoptimized) | After (fracture, 2-cut fast path) |
+| ---------------------------------------------------------------------------------- | ---------------------- | ----------------------------- | --------------------------------- |
+| `BM_GenerateShapes`                                                                | 430 ms                 | 743 ms                        | 432 ms                            |
+| `BM_GetLabelLocationSingleRect`                                                    | -                      | 2.00 ns                       | 2.00 ns                           |
+| `BM_GetLabelLocationLShapedPolygon` (real 3-cut case, unaffected by the fast path) | -                      | 8160 ns                       | 8293 ns                           |
 
 Net: a behaviorally different (and, per the old algorithm's own
 disjoint-geometry flaw, strictly more correct) label-placement algorithm
@@ -735,11 +737,11 @@ gated, Release-only) and benchmarked before/after on a clean rebuild
 actually present in `compile_commands.json`/`link.txt` before trusting
 the numbers):
 
-| Benchmark | Before (no LTO) | After (LTO) |
-| --- | --- | --- |
-| `BM_GenerateShapes` | 423 ms | 421 ms |
-| `BM_Render` (full cold chain) | 467 ms | 470 ms |
-| `BM_RenderReused_PanOnly` (warm, interactive) | 53.9 ms | 54.1 ms |
+| Benchmark                                     | Before (no LTO) | After (LTO) |
+| --------------------------------------------- | --------------- | ----------- |
+| `BM_GenerateShapes`                           | 423 ms          | 421 ms      |
+| `BM_Render` (full cold chain)                 | 467 ms          | 470 ms      |
+| `BM_RenderReused_PanOnly` (warm, interactive) | 53.9 ms         | 54.1 ms     |
 
 All three within noise - no measurable benefit. In hindsight this tracks:
 most of this project's hot path (`geometry`/`pipeline`/`scene`/
@@ -778,9 +780,9 @@ indirection) to `Root::get_terminal_port_shapes(id)`/
 `get_obstruction_shapes(id)` (an index lookup returning `vector<ShapeId>`)
 followed by one `Root::get_shape(id)` pool lookup per shape.
 
-| Benchmark | Before (embedded `Shape`) | After (pooled `Shape`) |
-| --- | --- | --- |
-| `BM_GenerateShapes` (1M shapes) | 423 ms | 590 ms (mean of 5, cv 1.52%) |
+| Benchmark                       | Before (embedded `Shape`) | After (pooled `Shape`)       |
+| ------------------------------- | ------------------------- | ---------------------------- |
+| `BM_GenerateShapes` (1M shapes) | 423 ms                    | 590 ms (mean of 5, cv 1.52%) |
 
 A real, reproducible ~40% regression (+167 ms) on the full 1M-shape
 stress design, not noise - confirms the concern was justified, not
@@ -791,7 +793,7 @@ per-`AbstractId` (see `pipeline.hpp`'s own `CachedStage` comments) - this
 cost is paid once per structural change to a Design, not per frame/pan/
 zoom, which is where interactive responsiveness actually lives. One
 partly offsetting effect measured in the same session:
-`BM_ToPropertiesObstructionCopyCost` (a *different* hot path, `api.cpp`'s
+`BM_ToPropertiesObstructionCopyCost` (a _different_ hot path, `api.cpp`'s
 `build_selected_object_properties`) went from a fixed cost to reading
 `ObstructionData` (now just one `AbstractId`, no embedded shapes vector
 at all) - previously already fixed to be cheap by passing structs by
@@ -813,24 +815,24 @@ own classes (`GenerateShapesStage`, `FilterByViewportAndSizeStage`, etc.,
 each wrapping a `VersionedStage` - the renamed, version-tracking
 `CachedStage`) and switching downstream cache keys to compose via an
 upstream stage's own `version()` instead of manually re-deriving its
-triggers - the fix for the caching-bug *class* the 2026-08-10 `mutation_version()`
+triggers - the fix for the caching-bug _class_ the 2026-08-10 `mutation_version()`
 fix (see TCL_EXPLORATION.md) needed 9 hand-touched cache keys to patch.
 
 True A/B via `git stash` (pipeline.hpp/pipeline_test.cpp only, same
 machine/session, same 1M-shape stress design):
 
-| Benchmark | Before (one class, hand-written keys) | After (per-stage classes, version() composition) |
-| --- | --- | --- |
-| `BM_GenerateShapes` (1M shapes) | 652 ms (mean of 3, cv 5.61%) | 644 ms (mean of 3, cv 7.47%) |
-| `BM_FilterByViewportAndSize` | 18.1 ms (cv 0.68%) | 18.1 ms (cv 1.08%) |
-| `BM_FilterByLayerVisibility` | 4.58 ms (cv 1.26%) | 4.63 ms (cv 2.60%) |
-| `BM_Run` (cold) | 595 ms (cv 0.29%) | 590 ms (cv 0.81%) |
+| Benchmark                       | Before (one class, hand-written keys) | After (per-stage classes, version() composition) |
+| ------------------------------- | ------------------------------------- | ------------------------------------------------ |
+| `BM_GenerateShapes` (1M shapes) | 652 ms (mean of 3, cv 5.61%)          | 644 ms (mean of 3, cv 7.47%)                     |
+| `BM_FilterByViewportAndSize`    | 18.1 ms (cv 0.68%)                    | 18.1 ms (cv 1.08%)                               |
+| `BM_FilterByLayerVisibility`    | 4.58 ms (cv 1.26%)                    | 4.63 ms (cv 2.60%)                               |
+| `BM_Run` (cold)                 | 595 ms (cv 0.29%)                     | 590 ms (cv 0.81%)                                |
 
 Statistically indistinguishable - every "after" number falls inside the
 "before" number's own run-to-run noise band, in both directions. Both
 sets are elevated versus this file's own historical baselines (e.g.
 ~430-449 ms `BM_GenerateShapes` from earlier 2026-08 sessions) - a
-session-wide effect (background system load, not this change: the *before*
+session-wide effect (background system load, not this change: the _before_
 number is equally elevated) rather than a regression, confirmed by
 comparing before/after on the same loaded machine rather than against an
 older session's numbers.
@@ -841,7 +843,7 @@ expensive as a cold `BM_GenerateShapes`) until checking the raw
 auto-tuner stopped after one call because it already exceeded the default
 minimum measurement time, so the reported number was purely the cold
 first call, never reaching a genuine cached-steady-state measurement at
-all (true for *any* implementation under this benchmark's existing
+all (true for _any_ implementation under this benchmark's existing
 design, not something this refactor introduced). Forcing more iterations
 (`--benchmark_min_time=6s`) confirms the cache genuinely works:
 2,185,791,604 iterations at 0.000 ms/call.
@@ -878,16 +880,16 @@ draw_helpers.hpp/pixel_types.hpp/stages/ files, same machine/session, same
 1M-shape stress design), Release build, `--benchmark_repetitions=5
 --benchmark_report_aggregates_only=true`:
 
-| Benchmark | Before (one class, hand-written keys) | After (8 stage classes, version() composition) |
-| --- | --- | --- |
-| `BM_Rasterize` | 29.9 ms (cv 2.07%) | 29.2 ms (cv 0.40%) |
-| `BM_Render` (cold, full chain) | 623 ms (cv 0.84%) | 622 ms (cv 0.35%) |
-| `BM_RenderReused_NoChange` | 575 ms (cv 2.37%) | 570 ms (cv 0.32%) |
-| `BM_RenderReused_PanOnly` | 569 ms (cv 0.62%) | 578 ms (cv 0.82%) |
-| `BM_RenderReused_PanOnly_ZoomedOut` | 534 ms (cv 0.75%) | 537 ms (cv 0.87%) |
-| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut` | 565 ms (cv 0.18%) | 570 ms (cv 0.78%) |
-| `BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes` | 550 ms (cv 1.79%) | 544 ms (cv 0.99%) |
-| `BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly` (0/100/1k/5k/20k selected) | 3.35/3.29/3.36/3.34/3.47 ms | 3.27/3.26/3.29/3.33/3.42 ms |
+| Benchmark                                                                            | Before (one class, hand-written keys) | After (8 stage classes, version() composition) |
+| ------------------------------------------------------------------------------------ | ------------------------------------- | ---------------------------------------------- |
+| `BM_Rasterize`                                                                       | 29.9 ms (cv 2.07%)                    | 29.2 ms (cv 0.40%)                             |
+| `BM_Render` (cold, full chain)                                                       | 623 ms (cv 0.84%)                     | 622 ms (cv 0.35%)                              |
+| `BM_RenderReused_NoChange`                                                           | 575 ms (cv 2.37%)                     | 570 ms (cv 0.32%)                              |
+| `BM_RenderReused_PanOnly`                                                            | 569 ms (cv 0.62%)                     | 578 ms (cv 0.82%)                              |
+| `BM_RenderReused_PanOnly_ZoomedOut`                                                  | 534 ms (cv 0.75%)                     | 537 ms (cv 0.87%)                              |
+| `BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut`                                    | 565 ms (cv 0.18%)                     | 570 ms (cv 0.78%)                              |
+| `BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes`                              | 550 ms (cv 1.79%)                     | 544 ms (cv 0.99%)                              |
+| `BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly` (0/100/1k/5k/20k selected) | 3.35/3.29/3.36/3.34/3.47 ms           | 3.27/3.26/3.29/3.33/3.42 ms                    |
 
 Statistically indistinguishable across the board - every "after" number
 falls inside the "before" number's own run-to-run noise band. Specifically

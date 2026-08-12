@@ -32,12 +32,12 @@ codegen instead.
    pip install cmg==1.2.1
    ```
 
-   A local checkout also exists at `/Users/john/Projects/synthosilicon/cmg`
+   A local checkout also exists at `/Volumes/Docking/Projects/synthosilicon/cmg`
    (poetry project, same version) if you need to develop against an unreleased
    cmg change — run it there with `poetry run cmg ...` instead of installing.
 
 3. **Run the generator with the INDEXED_POOLS export style** — this repo's
-   generated code is *not* in cmg's default `SMART_POINTERS` style:
+   generated code is _not_ in cmg's default `SMART_POINTERS` style:
 
    ```
    cmg --schema src/database/schema.py --output src/database/generated --export-style INDEXED_POOLS

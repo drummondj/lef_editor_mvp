@@ -15,7 +15,7 @@ Phase 6's own entry for why.
 - TCL commands to create/get/update/delete Terminal, Obstruction, Boundary
   objects and their shapes (rect/poly/path), e.g. `create_terminal`,
   `create_terminal_port -shapes {...} -layer M4`, `get_terminal -filter
-  {...}`, `update_terminal_port`, `delete_terminal`.
+{...}`, `update_terminal_port`, `delete_terminal`.
 - A batch mode: run a TCL shell from the terminal, then a command like
   `show_gui` opens the Flutter GUI on the already-loaded database.
 - Flagged open problems: (1) how to connect the GUI to the Root database
@@ -47,9 +47,10 @@ getters, and there is no mutation path at all today. The whole CRUD surface
 item 15 wants would be new work.
 
 ### cmg cannot generate a C API or SWIG bindings today — but will be
+
 enhanced to generate generic C++ CRUD/search (round 2 decision)
 
-`cmg` (`/Users/john/Projects/synthosilicon/cmg`) has exactly two export
+`cmg` (`/Volumes/Docking/Projects/synthosilicon/cmg`) has exactly two export
 styles, `SMART_POINTERS` and `INDEXED_POOLS` (this repo uses
 `INDEXED_POOLS`) — both are pure C++ database codegen: `XxxData` struct,
 `XxxId` handle, `Pool<XxxData, XxxId>`, and a `Root` with
@@ -71,6 +72,7 @@ not an automatic consequence of a class being pooled. See "cmg codegen
 design" below for what this actually requires in cmg's generator.
 
 ### Shape needs to become a real pooled class; Boundary stays a field
+
 (round 2 decision)
 
 `Shape` (`schema.py`, `has_pool=False`) is an embedded-by-value struct
@@ -247,7 +249,7 @@ between `api.hpp` and the SWIG-wrapped surface** (`src/tcl/le_tcl_shim.hpp`/
 `.cpp`, proved out in Phase 0): a process-global `LeHandle*`, lazily
 created, that a set of bare, domain-named functions (`read_lef`,
 `design_count`, ...) close over and call into `api.hpp` through — SWIG
-wraps *this* shim, not `api.hpp` directly. This keeps session/business
+wraps _this_ shim, not `api.hpp` directly. This keeps session/business
 logic in C++ (reviewable, testable, consistent with how the rest of this
 backend is built) rather than in hand-written Tcl.
 
@@ -297,7 +299,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    round trip, and unknown-flag rejection — against the same
    `testcell.lef` fixture `api_test.cpp` already uses. Verified: full
    build + `ctest` (441/441, including `le_tcl_smoke`) pass. Toolchain
-   *and* the representative command shape both confirmed — proceed to
+   _and_ the representative command shape both confirmed — proceed to
    Phase 1.
 2. **Phase 1 — cmg: generic CRUD + filter-search codegen. DONE.** All in
    the `cmg` repo (`cmg/templates/indexed_pools/`, `cmg/schema.py`),
@@ -312,7 +314,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      fields aren't indexed or parent-linked, and for those, direct
      mutation through the pointer `get_x()` already returns is exactly
      right — no update function needed at all, and always has worked this
-     way; (2) for the fields that *are* indexed/parent-linked, item 15's
+     way; (2) for the fields that _are_ indexed/parent-linked, item 15's
      own TCL examples are single-field updates
      (`update_terminal_port -name ...`), and whole-record replace would
      force a read-modify-write on every one of them. Replaced with a
@@ -335,7 +337,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      the full field list since `is_child` list fields are never struct
      members).
    - `struct_hpp_j2.py`: per class (pooled and non-pooled alike — a
-     non-pooled class like `Shape` can still be a hop *target*), a
+     non-pooled class like `Shape` can still be a hop _target_), a
      generated `get_x_field(data, name)` (reuses the exact same
      `wrap_with_to_property()` helper `to_properties()` already uses — no
      new value type invented, just a by-name lookup into the same
@@ -346,12 +348,12 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      see `get_filterable_hop_fields()`'s branches). Non-pooled classes get
      a simpler signature with no `root`/`id` parameters, since they can
      never have parent/child relationships (only pooled classes have ids
-     to be a parent/child *of*).
+     to be a parent/child _of_).
 
    **Real finding from building this, not just designing it**: because
    `hop` is a runtime `string_view`, `match_x_hop`'s branches are ordinary
    runtime `if`s, not `if constexpr` — so for a given `Matcher` type,
-   *every* branch's body gets instantiated together, not just whichever
+   _every_ branch's body gets instantiated together, not just whichever
    one a particular call happens to take. A class with many hop fields
    (`Layer` has over a dozen) requires its `Matcher` to compile against
    every one of those target types at once. This isn't a flaw — it's
@@ -382,7 +384,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    be a plain scalar (a `str`, mainly `name`), for which the fallen-through
    default and the correctly-styled answer are identical. The first
    parent-linked setter (`set_layer_technology`) was also the first
-   `root.hpp`-generated code to need a *reference* field's type from
+   `root.hpp`-generated code to need a _reference_ field's type from
    inside `root.hpp`, which is exactly where the two diverge — it
    generated `bool set_layer_technology(LayerId id, Technology value)`,
    referencing a type (`Technology`, no `Data` suffix, no `Id` type) that
@@ -427,6 +429,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      wasn't possible before this fix.
 
    Verified: full build + `ctest` (455/455) pass after both refinements.
+
 3. **Phase 2 — shared filter-expression engine. DONE.** `backend/src/database/filter.hpp`
    (header-only, matching `database`/`geometry`'s own convention) — a
    hand-rolled recursive-descent parser (`parse_filter_expression`,
@@ -434,12 +437,12 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    throwing, matching this project's "no exceptions for expected-missing-
    data paths" convention — a malformed `-filter {...}` string is
    user-input-shaped, not a bug) plus a generic `evaluate_filter(expr,
-   root, id, data)` walking `FilterExpr`'s path segments through the
+root, id, data)` walking `FilterExpr`'s path segments through the
    Phase 1 `match_hop`/`get_field` functions. Grammar (matches item 15's
    own examples exactly):
    `expr := or_expr; or_expr := and_expr ('||' and_expr)*; and_expr :=
-   unary ('&&' unary)*; unary := '(' expr ')' | comparison; comparison :=
-   path op literal` — `&&` binds tighter than `||`, parens override it.
+unary ('&&' unary)*; unary := '(' expr ')' | comparison; comparison :=
+path op literal` — `&&` binds tighter than `||`, parens override it.
    Operators: `== != < <= > >= =~` (glob, Tcl `string match` semantics:
    `*`/`?`, hand-rolled, no `<regex>`). A literal's type isn't decided at
    parse time — it's kept as raw text and compared against whatever
@@ -507,7 +510,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    once per structural Design change, not per frame/pan/zoom. Full
    writeup in `BENCHMARKS.md`'s 2026-08-10 entry, including a partly
    offsetting effect: `ObstructionData` no longer has a `shapes` field
-   at all, so `to_properties(ObstructionData)` (a *different* hot path,
+   at all, so `to_properties(ObstructionData)` (a _different_ hot path,
    `api.cpp`'s `build_selected_object_properties`) can never again
    regress into the exact "deep-copies 900K embedded shapes" bug
    `BENCHMARKS.md`'s 2026-08-07 entry already fixed once - there's no
@@ -515,6 +518,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
 
    491 tests passing after the migration itself (before Phase 4's new
    shape API below added more).
+
 5. **Phase 4 — hand-written C API in `backend/src/api/`. DONE.** Thin
    `le_*` wrappers over the Phase 1/2/3 `Root` methods for
    Terminal/TerminalPort/Obstruction/Shape, plus
@@ -577,23 +581,23 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      `lef_reader.cpp` parses all three from PIN/OBS the same way. Baking
      rects (and only rects) into `le_create_terminal_port`/
      `le_create_obstruction` was an asymmetry, not a simplification -
-     user feedback on this exact point: "Either le_create_* handles all
-     shape members, or le_create_* does not handle any shape members and
+     user feedback on this exact point: "Either le*create*_ handles all
+     shape members, or le*create*_ does not handle any shape members and
      they are added with separate calls... rects is not more important
      than polygons or paths." Chose the latter globally:
      - `le_create_terminal_port`/`le_create_obstruction` now take **no**
        layer/geometry parameters - just the parent id.
      - `le_create_terminal_port_shape`/`le_create_obstruction_shape`
        create an empty Shape (just `layer_name`) on a given parent.
-     - Every geometry kind gets the *same* shape thereafter: count/read
-       + `le_add_shape_<kind>` + `le_remove_shape_<kind>` for
-       rects (`le_add_shape_rect` takes 4 plain doubles - simpler than an
-       array, since a rect is always exactly 4 numbers),
-       polygons (`le_add_shape_polygon`, flat microns array, ≥3 points),
-       and paths (`le_add_shape_path`, width + flat microns centerline,
-       ≥2 points). `le_update_shape` (rects-only, replace-wholesale) is
-       **removed** - replaced by `le_set_shape_layer_name` (renames only)
-       plus the symmetric add/remove primitives.
+     - Every geometry kind gets the _same_ shape thereafter: count/read
+       - `le_add_shape_<kind>` + `le_remove_shape_<kind>` for
+         rects (`le_add_shape_rect` takes 4 plain doubles - simpler than an
+         array, since a rect is always exactly 4 numbers),
+         polygons (`le_add_shape_polygon`, flat microns array, ≥3 points),
+         and paths (`le_add_shape_path`, width + flat microns centerline,
+         ≥2 points). `le_update_shape` (rects-only, replace-wholesale) is
+         **removed** - replaced by `le_set_shape_layer_name` (renames only)
+         plus the symmetric add/remove primitives.
      - Rects/polygons/paths are addressed by plain 0-based position
        within their own Shape's list, not a further stable id (unlike a
        Shape itself) - removing one shifts later ones down, which is
@@ -613,23 +617,23 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    10 tests for the Terminal slice, plus 21 for
    TerminalPort/Obstruction/boundary/Shape (31 total for Phase 4).
    Verified: full build + `ctest` (500/500) pass.
+
 6. **Phase 5 — SWIG interface + typemaps. DONE.** `le_tcl_shim.hpp`/`.cpp`
    and `le_api.i` now cover the full Phase 4 CRUD/search surface —
    Terminal, TerminalPort, Obstruction, Shape (rect/polygon/path), and
    Abstract boundary — following the same shim-plus-`*_cmd`-plus-
    `le_tcl_procs.tcl` shape Phase 0 proved out.
-
    - **Ids cross the shim packed into a plain `long long`, not as a
      wrapped C struct.** Every `LeXxxId` in `api.hpp` is `{uint32_t
-     index, generation}` — wrapping each of the seven distinct id types
+index, generation}` — wrapping each of the seven distinct id types
      (`LeAbstractId`/`LeTerminalId`/`LeTerminalPortId`/`LeObstructionId`/
      `LeShapeId`/...) would mean seven custom SWIG struct typemap pairs
      (in + out each). Instead `le_tcl_shim.cpp` has one generic
      `pack<IdT>`/`unpack<IdT>` pair (`generation << 32 | index`) and every
      shim function takes/returns `long long` — a fundamental type SWIG
      already marshals to/from a plain Tcl integer via `%include
-     <stdint.i>`, zero custom typemap code needed. `kInvalidId`
-     (`0xFFFFFFFF`, *not* `-1`) is a plain Tcl variable set in
+<stdint.i>`, zero custom typemap code needed. `kInvalidId`
+     (`0xFFFFFFFF`, _not_ `-1`) is a plain Tcl variable set in
      `le_tcl_procs.tcl`, matching what `pack()` produces for every
      api.hpp failure path (`index == UINT32_MAX`, `generation == 0`,
      never left uninitialized — see the "zero-init bug" note above).
@@ -646,7 +650,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      functions was normalized to use (`api.hpp`'s own `coords_um`/
      `coord_count` boundary-specific wording was renamed to match in the
      shim) — a Tcl caller writes `add_shape_polygon -shape $s -points {0
-     0 10 0 10 10}`, never a pre-flattened C array.
+0 10 0 10 10}`, never a pre-flattened C array.
    - **Property tables and search-result lists are built in Tcl, not
      C++.** `le_tcl_shim.cpp` only exposes plain `count`+by-index
      accessors (`terminal_property_count`/`_name`/`_value`, mirroring
@@ -678,34 +682,42 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      spec) via a hand-maintained `direction_codes` array in
      `le_tcl_procs.tcl`; `set_terminal_direction_cmd` (the shim's raw-int
      form) is what SWIG actually wraps.
-   - **Known, deliberate scope limit**: no "current library/design/view"
-     context exists yet (item 15's own `current_library`/
-     `current_design`/`current_view`, which it flagged as needing a
-     concrete specification, not something this round invents
-     unprompted) — `create_terminal`/`create_obstruction`/
-     `update_abstract_boundary` all take an explicit `-abstract` id
-     argument instead of operating on an implicit "current" one. A new
-     `design_abstract_id <design_index>` shim function (scoped to the
-     first Library only, via `le_library_design_at`'s
-     `library_index = 0`) is the way a script gets one — correct as long
-     as only one LEF file/library is in play, the same assumption this
-     project's single-shared-Technology convention already makes
-     elsewhere. A real context stack, if item 15's own implicit-target
-     syntax is wanted verbatim, is Phase 6 scope, not this one.
+   - **Known, deliberate scope limit (resolved by UPDATES.md item 17)**:
+     no "current library/design/view" context existed yet at this point
+     (item 15's own `current_library`/`current_design`/`current_view`,
+     which it flagged as needing a concrete specification, not something
+     this round invented unprompted) — `create_terminal`/
+     `create_obstruction`/`update_abstract_boundary` all take an explicit
+     `-abstract` id argument instead of operating on an implicit
+     "current" one, and still do. A new `design_abstract_id
+     <design_index>` shim function (scoped to the first Library only, via
+     `le_library_design_at`'s `library_index = 0`) was the only way a
+     script got one — correct as long as only one LEF file/library is in
+     play, the same assumption this project's single-shared-Technology
+     convention already makes elsewhere. Item 17 later added
+     `open_design <name>` (backed by a new `Root::get_design_by_name`
+     wrapper and `Scene::current_abstract()`, both of which already
+     existed for the render path) as the "current view" this note called
+     out as unbuilt, and scoped the read-only `get_terminals`/
+     `get_obstructions`/`get_terminal_ports` commands (replacing
+     `search_terminal`/`search_obstruction`/`search_terminal_port`) to
+     it — the CRUD commands above remain explicit-`-abstract`, unchanged;
+     item 17 was query scoping only, not a full context stack.
 
    `src/tcl/tests/crud_test.tcl` (`ctest`'s `le_tcl_crud`) exercises the
    whole surface end to end against the same `testcell.lef` fixture:
    create/rename/redirect/delete a Terminal, `&&`/`||`/glob filter
    searches (including one exercising `.terminal.name`/`.shapes.layer_name`
    relational + list-hop traversal on `TerminalPort`, straight from item
-   15's own example), a TerminalPort/Shape with a rect *and* a polygon
-   *and* a path all added through the coordinate-list typemap and read
+   15's own example), a TerminalPort/Shape with a rect _and_ a polygon
+   _and_ a path all added through the coordinate-list typemap and read
    back, an Obstruction with its own shape, an Abstract boundary update,
    and cascade-delete (deleting a Terminal takes its TerminalPort and
    Shape with it, verified by a follow-up search finding nothing).
    Verified: full build + `ctest` (501/501, including `le_tcl_smoke` and
    `le_tcl_crud`) pass; `build_release`'s `api`/`render`/`io` targets
    confirmed unaffected (this phase only adds a new `src/tcl/` target).
+
 7. **Phase 6 — Batch shell + `show_gui`. DONE (batch shell only —
    `show_gui` deliberately deferred, see below).** `src/tcl/le_shell.cpp`
    is a small custom Tcl shell binary, built the same way `tclsh`/`wish`/
@@ -732,7 +744,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    the recommended-direction section above (round 1) proposed a single-
    process/shared-`LeHandle` model matching OpenROAD's own `gui_start`,
    but that section predates this project's Flutter-based GUI actually
-   existing — OpenROAD's Qt GUI is a C++ library in the *same* process as
+   existing — OpenROAD's Qt GUI is a C++ library in the _same_ process as
    its Tcl interpreter, while this project's only GUI is a separate Dart/
    Flutter runtime that consumes `api`/`render`/`io` via FFI, not
    something a C++/Tcl process can "just start rendering" in-process
@@ -745,7 +757,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    calls `show_gui` gets full CRUD/search functionality today).
 
    `src/tcl/tests/shell_test.tcl` (`ctest`'s `le_tcl_shell`) runs as a
-   batch script *under the real compiled `le_shell` binary* (not `tclsh`
+   batch script _under the real compiled `le_shell` binary_ (not `tclsh`
    directly loading `le_tcl`, which `le_tcl_smoke`/`le_tcl_crud` already
    cover) — this is what actually exercises `le_shell.cpp`'s own
    bootstrap (`-module`/`-procs` argv handling, `load`, sourcing
@@ -776,7 +788,6 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    reconcile, no bundle-discovery problem, no `FlutterTexture`
    reimplementation, since the Flutter app's process/run loop/rendering
    pipeline are all untouched.
-
    - `src/tcl/le_tcl_shim.{hpp,cpp}` gained one new function,
      `set_session_handle(long long)`, backward-compatibly overriding
      `session()`'s lazy self-create with an externally-owned handle when
@@ -786,8 +797,8 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      `SessionHandle.InjectedHandleIsSharedNotFresh`) proves this two
      ways: a handle pre-loaded directly via `api.hpp` (no Tcl involved)
      is visible through an injected Tcl interpreter, and — the stronger
-     check — a Terminal created *via a Tcl command* is visible through a
-     *direct* `api.hpp` call on the same raw pointer afterward, ruling
+     check — a Terminal created _via a Tcl command_ is visible through a
+     _direct_ `api.hpp` call on the same raw pointer afterward, ruling
      out "two handles that happen to agree on one read."
    - `flutter_plugin/macos/Classes/LeTclBridge.h`/`.mm` (new): owns one
      `Tcl_Interp*`, created lazily, `load`s the same `le_tcl.so`
@@ -842,19 +853,19 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    from `le_tcl.so`'s own copy of the vendored LEF parser). Root cause:
    `le_tcl.so` (dynamically `load`ed by `LeTclBridge`, statically linking
    its own copy of `api`/`io`/`liblef.a`) and `lef_editor_plugin.framework`
-   (which *also* statically links the same code, for Dart FFI) are two
-   independently-compiled Mach-O images loaded into the *same* process.
+   (which _also_ statically links the same code, for Dart FFI) are two
+   independently-compiled Mach-O images loaded into the _same_ process.
    `lefGetKeyword`'s keyword-table `std::map` is a function-local
    `static` — ordinary, safe within one image — but with both images
    exporting a symbol of the same mangled name at default visibility,
-   dyld bound `le_tcl.so`'s own internal call to the *other* image's
+   dyld bound `le_tcl.so`'s own internal call to the _other_ image's
    (uninitialized, in this call order) copy instead of its own,
    dereferencing a garbage pointer. Reproduced headlessly and
    deterministically (no need for the GUI or Accessibility permission)
    via `SessionHandle.ReadLefThroughTclFirstDoesNotCrash`
    (`src/tcl/tests/session_handle_test.cpp`): a plain GTest binary that
    itself links `api` directly (mirroring the framework's own static
-   link) *and* dynamically `load`s `le_tcl.so` — the same two-copies-
+   link) _and_ dynamically `load`s `le_tcl.so` — the same two-copies-
    one-process shape, no Flutter needed.
    - **Fix**: `le_tcl`'s CMake target now links with
      `-Wl,-unexported_symbols_list,src/tcl/le_tcl_unexported_symbols.txt`,
@@ -865,13 +876,13 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      the wrong copy.
    - **Two wrong turns on the way there, both instructive**:
      `CXX_VISIBILITY_PRESET hidden` on the `le_tcl` target alone did
-     *nothing* — it only affects compile flags for the target's own two
+     _nothing_ — it only affects compile flags for the target's own two
      listed sources; `api`/`io`/`render`/`lef_lib` are separate CMake
      targets already compiled into `.a` archives with default-visible
      symbols, and no downstream target's visibility preset can
      retroactively hide symbols already baked into linked-in object
      code. A blanket `-exported_symbols_list` allowlist (hide
-     everything except the two SWIG entry points) *did* stop the
+     everything except the two SWIG entry points) _did_ stop the
      segfault, but broke something worse: it also hides libc++ typeinfo
      that's supposed to stay coalescable across dylib boundaries, so
      `std::system_error` thrown deep in the parser's own
@@ -888,11 +899,11 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      `ReadLefThroughTclFirstDoesNotCrash` directly after
      `InjectedHandleIsSharedNotFresh` in one raw binary invocation (no
      `--gtest_filter`) reintroduced the same `std::system_error`
-     symptom — a *second*, independent `Tcl_Interp` re-loading the
+     symptom — a _second_, independent `Tcl_Interp` re-loading the
      already-resident `le_tcl.so`. Isolated with a dedicated test
      (`DirectReadThenSingleTclInterpReadBothSucceed`, one `Tcl_Interp`
      only) that passes cleanly, confirming this is specific to two
-     *sequential, separate* `Tcl_Interp`s each loading the same `.so` —
+     _sequential, separate_ `Tcl_Interp`s each loading the same `.so` —
      not how `LeTclBridge` (one `Tcl_Interp`, created once, reused for
      the session) or `le_shell` (`Tcl_Main`, also exactly one
      `Tcl_Interp` per process) actually work, and not reachable through
@@ -912,12 +923,12 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    `add_shape_rect`) never appeared on screen, no matter how many times
    the caller re-rendered. Root cause had nothing to do with frame
    requests: `Pipeline::generate_shapes`'s cache key was `(AbstractId,
-   ViewLayerSet::generation())` - neither changes on a CRUD mutation (no
+ViewLayerSet::generation())` - neither changes on a CRUD mutation (no
    LEF re-read, no Abstract switch), so the pipeline kept returning its
    pre-mutation cached result forever. `LeProvider.runTclCommand()`
    already called `refreshTexture()`/`markFrameAvailable()` after every
    command (that part was never broken) - the bug was one layer deeper,
-   in a cache that had no way to know database *content* had changed at
+   in a cache that had no way to know database _content_ had changed at
    all, only that the viewport/selection/layer-visibility might have.
    - **Fix**: `Root` gained a `mutation_version()`/`bump_mutation_version()`
      monotonic counter (added via cmg - `cmg/templates/indexed_pools/root_hpp_j2.py`,
@@ -931,7 +942,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      `le_set_*_*`/`le_add_shape_*`/`le_remove_shape_*`) call
      `handle->root.bump_mutation_version()` on their success path -
      audited and counted by hand (`grep -c bump_mutation_version
-     api.cpp` == 19), not generated automatically, since cmg's own
+api.cpp` == 19), not generated automatically, since cmg's own
      generated `create_x`/`delete_x`/`set_x_<field>` don't cover every
      mutation path either (Shape's `rects`/`polygons`/`paths` are plain
      list fields, mutated directly through a `get_shape()` pointer in
@@ -953,15 +964,15 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      just a relaunch, to pick this one up.
 
    **Second-and-a-half bug, same fix, one layer higher**: after the
-   `Pipeline` fix above, a Tcl-created shape *still* didn't appear until
+   `Pipeline` fix above, a Tcl-created shape _still_ didn't appear until
    an unrelated action (e.g. zooming) forced a real recompute - reported
    directly from the running app. Root cause: `Renderer` (`render.hpp`)
-   sits on top of `Pipeline` and has its *own* independent `CachedStage`
+   sits on top of `Pipeline` and has its _own_ independent `CachedStage`
    per stage (`transform_to_pixels`, `build_picture`,
    `build_tiny_shapes_picture`, `rasterize_frame`,
    `rasterize_tiny_shapes_frame`, `compose_with_overlays`), every one of
    which was keyed on some subset of `{AbstractId, viewport_version,
-   visibility_version, selection_version, mouse_version}` - never
+visibility_version, selection_version, mouse_version}` - never
    `Root::mutation_version()`. So even once `Pipeline::generate_shapes`
    started correctly recomputing, `Renderer`'s own stages kept handing
    back their pre-mutation cached `SkPicture`/`PixelBuffer`, exactly the
@@ -969,7 +980,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
    already warned about in the abstract ("`CachedStage`'s key comparison
    ... never inspects the picture arguments themselves, so a key that
    doesn't change would silently return a stale composited buffer even
-   though a *different* picture was passed in") - just not yet connected
+   though a _different_ picture was passed in") - just not yet connected
    to this specific trigger.
    - **Fix**: every shape-content-dependent `Renderer` stage now folds
      `root.mutation_version()` into its key (a `const Root&` parameter
@@ -987,7 +998,7 @@ shim-plus-procs shape rather than being wrapped ad hoc.
      `root` through (~70 call sites, mostly mechanical).
    - Regression test:
      `RenderFixture.ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithNoOtherSceneChange`
-     (`render_test.cpp`) - runs the *entire* chain `le_render_pixel_buffer`
+     (`render_test.cpp`) - runs the _entire_ chain `le_render_pixel_buffer`
      itself calls, twice, with the identical `Scene` both times (no pan/
      scale/viewport/selection/mouse change at all) and only a CRUD
      mutation in between; confirms the new shape's own layer color is

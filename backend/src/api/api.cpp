@@ -865,6 +865,16 @@ extern "C"
         return 0;
     }
 
+    LeDesignId le_design_by_name(LeHandle *handle, const char *name)
+    {
+        const LeDesignId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        return to_c(handle->root.get_design_by_name(name));
+    }
+
     int32_t le_layer_count(LeHandle *handle)
     {
         if (!handle)
@@ -1483,6 +1493,37 @@ extern "C"
         return to_c(handle->terminal_search_results[static_cast<size_t>(index)]);
     }
 
+    int32_t le_get_terminals(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const std::vector<le::TerminalId> &candidates = handle->root.get_abstract_terminals(handle->scene.current_abstract());
+
+        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
+        {
+            handle->terminal_search_results = candidates;
+            return static_cast<int32_t>(handle->terminal_search_results.size());
+        }
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_get_terminals: {}", expr.error()));
+            return -1;
+        }
+
+        handle->terminal_search_results.clear();
+        for (const le::TerminalId id : candidates)
+        {
+            const le::TerminalData *data = handle->root.get_terminal(id);
+            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
+                handle->terminal_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->terminal_search_results.size());
+    }
+
     LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id)
     {
         const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
@@ -1583,6 +1624,47 @@ extern "C"
         return to_c(handle->terminal_port_search_results[static_cast<size_t>(index)]);
     }
 
+    int32_t le_get_terminal_ports(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        // TerminalPort has no direct Abstract field - it's one hop away via
+        // its parent Terminal, so scope by unioning each of the current
+        // Abstract's own Terminals' port lists rather than filtering the
+        // whole TerminalPort pool by a hop expression (see UPDATES.md item
+        // 17's plan: .abstract isn't a filterable leaf field at all).
+        std::vector<le::TerminalPortId> candidates;
+        for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(handle->scene.current_abstract()))
+        {
+            const auto &ports = handle->root.get_terminal_ports(terminal_id);
+            candidates.insert(candidates.end(), ports.begin(), ports.end());
+        }
+
+        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
+        {
+            handle->terminal_port_search_results = std::move(candidates);
+            return static_cast<int32_t>(handle->terminal_port_search_results.size());
+        }
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_get_terminal_ports: {}", expr.error()));
+            return -1;
+        }
+
+        handle->terminal_port_search_results.clear();
+        for (const le::TerminalPortId id : candidates)
+        {
+            const le::TerminalPortData *data = handle->root.get_terminal_port(id);
+            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
+                handle->terminal_port_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->terminal_port_search_results.size());
+    }
+
     LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id)
     {
         const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
@@ -1679,6 +1761,37 @@ extern "C"
         if (static_cast<size_t>(index) >= handle->obstruction_search_results.size())
             return invalid;
         return to_c(handle->obstruction_search_results[static_cast<size_t>(index)]);
+    }
+
+    int32_t le_get_obstructions(LeHandle *handle, const char *filter_expression)
+    {
+        if (!handle || !filter_expression)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const std::vector<le::ObstructionId> &candidates = handle->root.get_abstract_obstructions(handle->scene.current_abstract());
+
+        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
+        {
+            handle->obstruction_search_results = candidates;
+            return static_cast<int32_t>(handle->obstruction_search_results.size());
+        }
+
+        auto expr = le::parse_filter_expression(filter_expression);
+        if (!expr)
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_get_obstructions: {}", expr.error()));
+            return -1;
+        }
+
+        handle->obstruction_search_results.clear();
+        for (const le::ObstructionId id : candidates)
+        {
+            const le::ObstructionData *data = handle->root.get_obstruction(id);
+            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
+                handle->obstruction_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->obstruction_search_results.size());
     }
 
     int le_update_abstract_boundary(LeHandle *handle, LeAbstractId id, const double *coords_um, int32_t coord_count)

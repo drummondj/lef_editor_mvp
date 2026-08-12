@@ -89,55 +89,55 @@ none of these are duplicated here.
   `core`) and `draw_helpers.hpp` (style constants and free Skia drawing
   functions - `draw_grid`, `draw_group`, `pattern_shader`, etc. - shared
   across several stage classes). `render.hpp` itself is a thin aggregator
-  + the `Renderer` class, one member per stage, every public method a
-  one-line delegate — same shape as `Pipeline`'s own refactor.
-  `RasterizeStage` (SkPicture → Y-flipped RGBA8888 `RasterizedFrame`) is
-  instantiated three times (design/tiny-shapes/selection-overlay frames)
-  rather than three separate classes — those three methods had identical
-  bodies, differing only in which picture and which upstream `.version()`
-  fed them (UPDATES.md item 16 point 4's "generic class for future
-  expansion"). Unlike `Pipeline`, cache keys compose via upstream
-  `.version()` **uniformly**, including two stages
-  (`BuildPictureStage`/`RasterizeStage`) whose pre-refactor keys
-  deliberately did *not* trust upstream freshness (a fix for two earlier
-  real bugs — see git history / BENCHMARKS.md 2026-08-12's Renderer
-  entry for the full trade-off writeup) — composing means a caller that
-  reuses a stale artifact without re-running its upstream now silently
-  gets a stale-but-cached frame; verified every real call site
-  (`api.cpp`, `render_preview.cpp`, every benchmark) always re-runs the
-  full chain in order, so this isn't a live risk today.
-  `Renderer::render(root, shapes, tiny_shapes, scene, view_layers)` wires
-  the whole nine-call chain (mirrors `Pipeline::run()`'s own role) - takes
-  `Pipeline`'s output (`shapes`/`tiny_shapes`, `core`'s own boundary
-  types), not a `Pipeline&`, since `render` doesn't link `pipeline`; the
-  caller runs `Pipeline::run()`/`run_tiny_shapes()` first. `api.cpp`'s
-  `le_render_pixel_buffer` and `render_preview.cpp` both just call this
-  now instead of wiring all nine calls by hand. Every individual stage
-  method still exists alongside it for partial-chain callers (isolation
-  benchmarks in `pipeline_benchmark.cpp`, `render_test.cpp`) - `render()`
-  is a convenience wrapper, not a replacement.
-  `TransformToPixelsStage` (dbu→pixel, no Y-flip) → `BuildPictureStage`
-  (Skia `SkPictureRecorder` draw calls) → `RasterizeStage` (SkPicture →
-  raw `PixelBuffer`) is the main chain; `RasterizeStage`/`ComposeWithOverlaysStage`
-  use explicit `kRGBA_8888_SkColorType` (not Skia's platform-native
-  `kN32_SkColorType`) so byte layout matches between the macOS dev
-  machine and the Linux target, and apply the Y-axis flip
-  (`TransformToPixelsStage` deliberately doesn't) as one whole-canvas
-  transform — `draw_group` (in `draw_helpers.hpp`) counter-flips each
-  text label locally to keep glyphs upright under that flip, so the two
-  are coupled; check both if touching either. `render` is a compiled
-  library (`add_library(render STATIC src/render/render.cpp)`), not
-  header-only like its siblings — isolates `SkFontMgr_mac_ct.h`/
-  `ApplicationServices.h` (legacy Carbon `Rect`/`Point`/`Polygon`
-  typedefs collide with `le::` types under `using namespace le`) to
-  `render.cpp`, which now defines a free `default_typeface()` function
-  (declared in `draw_helpers.hpp`) rather than a `Renderer::` static
-  method; don't change this back to `INTERFACE`. Single-threaded — see
-  README's Threading open design question and `BENCHMARKS.md` for
-  current warm-path numbers. Fully covered by `render_test.cpp`,
-  including real pixel-byte assertions, not just "didn't crash". Depends
-  on a machine-specific Skia checkout, not committed to this repo — see
-  Open gaps below.
+  - the `Renderer` class, one member per stage, every public method a
+    one-line delegate — same shape as `Pipeline`'s own refactor.
+    `RasterizeStage` (SkPicture → Y-flipped RGBA8888 `RasterizedFrame`) is
+    instantiated three times (design/tiny-shapes/selection-overlay frames)
+    rather than three separate classes — those three methods had identical
+    bodies, differing only in which picture and which upstream `.version()`
+    fed them (UPDATES.md item 16 point 4's "generic class for future
+    expansion"). Unlike `Pipeline`, cache keys compose via upstream
+    `.version()` **uniformly**, including two stages
+    (`BuildPictureStage`/`RasterizeStage`) whose pre-refactor keys
+    deliberately did _not_ trust upstream freshness (a fix for two earlier
+    real bugs — see git history / BENCHMARKS.md 2026-08-12's Renderer
+    entry for the full trade-off writeup) — composing means a caller that
+    reuses a stale artifact without re-running its upstream now silently
+    gets a stale-but-cached frame; verified every real call site
+    (`api.cpp`, `render_preview.cpp`, every benchmark) always re-runs the
+    full chain in order, so this isn't a live risk today.
+    `Renderer::render(root, shapes, tiny_shapes, scene, view_layers)` wires
+    the whole nine-call chain (mirrors `Pipeline::run()`'s own role) - takes
+    `Pipeline`'s output (`shapes`/`tiny_shapes`, `core`'s own boundary
+    types), not a `Pipeline&`, since `render` doesn't link `pipeline`; the
+    caller runs `Pipeline::run()`/`run_tiny_shapes()` first. `api.cpp`'s
+    `le_render_pixel_buffer` and `render_preview.cpp` both just call this
+    now instead of wiring all nine calls by hand. Every individual stage
+    method still exists alongside it for partial-chain callers (isolation
+    benchmarks in `pipeline_benchmark.cpp`, `render_test.cpp`) - `render()`
+    is a convenience wrapper, not a replacement.
+    `TransformToPixelsStage` (dbu→pixel, no Y-flip) → `BuildPictureStage`
+    (Skia `SkPictureRecorder` draw calls) → `RasterizeStage` (SkPicture →
+    raw `PixelBuffer`) is the main chain; `RasterizeStage`/`ComposeWithOverlaysStage`
+    use explicit `kRGBA_8888_SkColorType` (not Skia's platform-native
+    `kN32_SkColorType`) so byte layout matches between the macOS dev
+    machine and the Linux target, and apply the Y-axis flip
+    (`TransformToPixelsStage` deliberately doesn't) as one whole-canvas
+    transform — `draw_group` (in `draw_helpers.hpp`) counter-flips each
+    text label locally to keep glyphs upright under that flip, so the two
+    are coupled; check both if touching either. `render` is a compiled
+    library (`add_library(render STATIC src/render/render.cpp)`), not
+    header-only like its siblings — isolates `SkFontMgr_mac_ct.h`/
+    `ApplicationServices.h` (legacy Carbon `Rect`/`Point`/`Polygon`
+    typedefs collide with `le::` types under `using namespace le`) to
+    `render.cpp`, which now defines a free `default_typeface()` function
+    (declared in `draw_helpers.hpp`) rather than a `Renderer::` static
+    method; don't change this back to `INTERFACE`. Single-threaded — see
+    README's Threading open design question and `BENCHMARKS.md` for
+    current warm-path numbers. Fully covered by `render_test.cpp`,
+    including real pixel-byte assertions, not just "didn't crash". Depends
+    on a machine-specific Skia checkout, not committed to this repo — see
+    Open gaps below.
 - `src/io/` — format readers. Currently `lef_reader.{hpp,cpp}`, which drives
   the vendored `lefr*` LEF-parser C callbacks and populates `Root` via the
   generated create/get API. Tested against `src/lefdef/lef/TEST/complete.5.8.lef`
@@ -197,10 +197,10 @@ then regenerate with the `regen-database` skill rather than editing
   reader module is added.
 - `cmg` itself isn't installed in this environment — see the `regen-database`
   skill for setup (or run it via `poetry run cmg` from the local
-  `/Users/john/Projects/synthosilicon/cmg` checkout).
+  `/Volumes/Docking/Projects/synthosilicon/cmg` checkout).
 - Skia isn't vendored/built by this project — `src/render/`'s
   `CMakeLists.txt` `skia` target points `SKIA_DIR` at a pre-built checkout
-  (default `/Users/john/Projects/synthosilicon/skia/skia`, override with
+  (default `/Volumes/Docking/Projects/synthosilicon/skia/skia`, override with
   `-DSKIA_DIR=...`). That checkout must have `out/MacStatic/libskia.a`
   built with `is_component_build=false` (static). Links `libskia.a` +
   Homebrew `harfbuzz`/`icu4c`/`jpeg`/`png`/`z`/`webp`/`webpdemux` + macOS
@@ -255,7 +255,7 @@ written to `build/coverage/report.txt` and `build/coverage/lcov.info`).
 Requires Clang and `llvm-profdata`/`llvm-cov` — resolved via `xcrun`
 automatically on macOS.
 
-**Gotcha:** `ENABLE_COVERAGE` is a *cached* option — reconfiguring with e.g.
+**Gotcha:** `ENABLE_COVERAGE` is a _cached_ option — reconfiguring with e.g.
 `-DCMAKE_BUILD_TYPE=Release` alone does **not** reset a previously-set-ON
 value back to OFF, and coverage instrumentation forces `-O0` regardless of
 `CMAKE_BUILD_TYPE`. Always pass `-DENABLE_COVERAGE=OFF` explicitly (or use a

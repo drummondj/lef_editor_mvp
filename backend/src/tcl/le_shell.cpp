@@ -11,7 +11,7 @@
 // wrapped le_tcl module (built by the le_tcl CMake target - a shared
 // library, not linked into this binary, same as any other Tcl
 // extension) and source le_tcl_procs.tcl, so every CRUD/search command
-// (create_terminal, search_terminal_port, ...) is ready to type the
+// (create_terminal, get_terminal_ports, ...) is ready to type the
 // moment the shell starts, without the caller sourcing anything
 // themselves.
 //

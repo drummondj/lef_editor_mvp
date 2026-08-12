@@ -88,6 +88,8 @@ int viewport_width();
 int viewport_height();
 
 long long design_abstract_id(int design_index);
+long long design_by_name(const char *name);
+int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
 // --- Terminal ---
@@ -98,7 +100,7 @@ const char *terminal_property_value(long long id, int index);
 int set_terminal_name(long long id, const char *name);
 int set_terminal_direction_cmd(long long id, int direction);
 int delete_terminal(long long id);
-const char *search_terminal(const char *filter_expression);
+const char *get_terminals(const char *filter_expression);
 
 // --- TerminalPort ---
 long long create_terminal_port_cmd(long long terminal_id);
@@ -106,7 +108,7 @@ int terminal_port_property_count(long long id);
 const char *terminal_port_property_name(long long id, int index);
 const char *terminal_port_property_value(long long id, int index);
 int delete_terminal_port(long long id);
-const char *search_terminal_port(const char *filter_expression);
+const char *get_terminal_ports(const char *filter_expression);
 const char *terminal_port_shapes(long long id);
 
 // --- Obstruction ---
@@ -115,7 +117,7 @@ int obstruction_property_count(long long id);
 const char *obstruction_property_name(long long id, int index);
 const char *obstruction_property_value(long long id, int index);
 int delete_obstruction(long long id);
-const char *search_obstruction(const char *filter_expression);
+const char *get_obstructions(const char *filter_expression);
 const char *obstruction_shapes(long long id);
 
 // --- Abstract boundary ---

@@ -31,8 +31,9 @@ check "read_lef return code" 0 [read_lef $lef_path]
 check "design_count" 1 [design_count]
 
 set abstract_id [design_abstract_id 0]
+open_design TESTCELL
 set terminal [create_terminal -abstract $abstract_id -name SHELL_TEST -direction INPUT]
-check "created terminal is searchable" $terminal [search_terminal ".name == SHELL_TEST"]
+check "created terminal is searchable" $terminal [get_terminals ".name == SHELL_TEST"]
 check "delete_terminal return code" 0 [delete_terminal $terminal]
 
 # show_gui is a deliberate stub (le_tcl_procs.tcl) - just confirm it

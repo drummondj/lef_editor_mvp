@@ -24,7 +24,7 @@
 # or the relative walk below lands inside .symlinks instead of the repo.
 backend_dir = File.expand_path('../../backend', File.realpath(__dir__))
 backend_build = File.join(backend_dir, 'build_release')
-skia_dir = ENV['SKIA_DIR'] || '/Users/john/Projects/synthosilicon/skia/skia'
+skia_dir = ENV['SKIA_DIR'] || '/Volumes/Docking/Projects/synthosilicon/skia/skia'
 
 unless File.exist?(File.join(backend_build, 'libapi.a'))
   raise "backend/build_release/libapi.a not found - build it first: " \

@@ -127,7 +127,7 @@ target_link_libraries(pipeline INTERFACE database geometry scene view_style core
 # use the raster (CPU) surface APIs, and static linking never pulls in the
 # unused GPU object files. Machine-specific - not portable/committed;
 # override -DSKIA_DIR=... to point at a different checkout.
-set(SKIA_DIR "/Users/john/Projects/synthosilicon/skia/skia" CACHE PATH
+set(SKIA_DIR "/Volumes/Docking/Projects/synthosilicon/skia/skia" CACHE PATH
     "Path to a built Skia checkout (must contain out/MacStatic/libskia.a)")
 add_library(skia INTERFACE)
 target_include_directories(skia INTERFACE ${SKIA_DIR})
@@ -287,6 +287,7 @@ if(SWIG_FOUND AND TCL_FOUND)
             $<TARGET_FILE:le_tcl>
             ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl
             ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/othercell.lef
     )
 
     # Phase 6 batch shell (src/tcl/le_shell.cpp) - a small Tcl_Main-based

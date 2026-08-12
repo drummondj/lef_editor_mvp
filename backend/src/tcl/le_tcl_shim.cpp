@@ -50,7 +50,7 @@ namespace
 
     // Shared scratch buffer for shim functions that format and return a
     // `const char*` built on the fly here (not memory owned by Root, see
-    // e.g. terminal_property_value/search_terminal/shape_rect_at below).
+    // e.g. terminal_property_value/get_terminals/shape_rect_at below).
     // Safe to share across every such function despite the project's
     // usual "valid until the next call" pointer convention: SWIG's Tcl
     // typemap for `const char*` copies the bytes into a new Tcl_Obj
@@ -90,9 +90,9 @@ namespace
     }
 
     // Packed-id-list-as-space-separated-string, shared by every
-    // search_x/x_shapes function below - already a well-formed Tcl list
+    // get_x/x_shapes function below - already a well-formed Tcl list
     // with no escaping needed, see le_tcl_shim.hpp's own comment on
-    // search_terminal for why.
+    // get_terminals for why.
     template <typename IdT>
     std::string join_ids(int32_t count, IdT (*at)(LeHandle *, int32_t))
     {
@@ -154,6 +154,16 @@ long long design_abstract_id(int design_index)
     return pack(le_library_design_at(session(), 0, design_index).abstract_id);
 }
 
+long long design_by_name(const char *name)
+{
+    return pack(le_design_by_name(session(), name));
+}
+
+int set_current_design_cmd(long long design_id)
+{
+    return le_set_current_design_by_id(session(), unpack<LeDesignId>(design_id));
+}
+
 void set_session_handle(long long handle_address)
 {
     injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
@@ -196,9 +206,9 @@ int delete_terminal(long long id)
     return le_delete_terminal(session(), unpack<LeTerminalId>(id));
 }
 
-const char *search_terminal(const char *filter_expression)
+const char *get_terminals(const char *filter_expression)
 {
-    int32_t count = le_search_terminal(session(), filter_expression);
+    int32_t count = le_get_terminals(session(), filter_expression);
     if (count <= 0)
     {
         return return_string("");
@@ -233,9 +243,9 @@ int delete_terminal_port(long long id)
     return le_delete_terminal_port(session(), unpack<LeTerminalPortId>(id));
 }
 
-const char *search_terminal_port(const char *filter_expression)
+const char *get_terminal_ports(const char *filter_expression)
 {
-    int32_t count = le_search_terminal_port(session(), filter_expression);
+    int32_t count = le_get_terminal_ports(session(), filter_expression);
     if (count <= 0)
     {
         return return_string("");
@@ -290,9 +300,9 @@ int delete_obstruction(long long id)
     return le_delete_obstruction(session(), unpack<LeObstructionId>(id));
 }
 
-const char *search_obstruction(const char *filter_expression)
+const char *get_obstructions(const char *filter_expression)
 {
-    int32_t count = le_search_obstruction(session(), filter_expression);
+    int32_t count = le_get_obstructions(session(), filter_expression);
     if (count <= 0)
     {
         return return_string("");

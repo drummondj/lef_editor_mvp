@@ -9,13 +9,19 @@
 # against the real backend, not a mock.
 #
 # argv: <path to le_tcl shared module> <path to le_tcl_procs.tcl>
-#       <path to testcell.lef fixture>
+#       <path to testcell.lef fixture> <path to othercell.lef fixture>
+#
+# othercell.lef (MACRO OTHERCELL, PIN B) is read in as a second Design
+# late in this script purely to prove UPDATES.md item 17's scoping: that
+# open_design's current-view selection actually confines
+# get_terminals/get_obstructions/get_terminal_ports to the Abstract in
+# view, not every Abstract ever read into the session.
 
-if {[llength $argv] != 3} {
-    puts stderr "usage: crud_test.tcl <le_tcl.so> <le_tcl_procs.tcl> <testcell.lef>"
+if {[llength $argv] != 4} {
+    puts stderr "usage: crud_test.tcl <le_tcl.so> <le_tcl_procs.tcl> <testcell.lef> <othercell.lef>"
     exit 2
 }
-lassign $argv module_path procs_path lef_path
+lassign $argv module_path procs_path lef_path other_lef_path
 
 proc check {what expected actual} {
     if {$expected ne $actual} {
@@ -42,6 +48,15 @@ check "message_count after read_lef" 0 [message_count]
 set abstract_id [design_abstract_id 0]
 check_true "design_abstract_id is valid" [expr {$abstract_id != $kInvalidId}]
 
+check_true "open_design returns a valid design id" [expr {[open_design TESTCELL] != $kInvalidId}]
+
+if {[catch {open_design DOES_NOT_EXIST} err]} {
+    check "open_design unknown name error message" "open_design: no such design \"DOES_NOT_EXIST\"" $err
+} else {
+    puts stderr "FAIL: open_design on an unknown name did not raise a Tcl error"
+    exit 1
+}
+
 # --- Terminal ---
 
 set in0 [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
@@ -62,20 +77,20 @@ check "set_terminal_direction return code" 0 [set_terminal_direction $in0 INOUT]
 check "changed terminal_properties direction" INOUT [dict get [terminal_properties $in0] direction]
 check "set_terminal_direction restore return code" 0 [set_terminal_direction $in0 INPUT]
 
-set matches [search_terminal ".name =~ IN*"]
-check "search_terminal glob match" $in0 $matches
+set matches [get_terminals ".name =~ IN*"]
+check "get_terminals glob match" $in0 $matches
 
-set both [search_terminal ".direction == INPUT || .direction == OUTPUT"]
-check "search_terminal or-expression match count" 3 [llength $both]
+set both [get_terminals ".direction == INPUT || .direction == OUTPUT"]
+check "get_terminals or-expression match count" 3 [llength $both]
 
-check "search_terminal no match" {} [search_terminal ".name == DOES_NOT_EXIST"]
+check "get_terminals no match" {} [get_terminals ".name == DOES_NOT_EXIST"]
 
 set messages_before_parse_error [message_count]
-if {[catch {search_terminal "not a filter expression"} bad_result]} {
-    puts "unexpected: search_terminal on a bad expression raised a Tcl error ($bad_result)"
+if {[catch {get_terminals "not a filter expression"} bad_result]} {
+    puts "unexpected: get_terminals on a bad expression raised a Tcl error ($bad_result)"
 } else {
-    check "search_terminal parse-error result" {} $bad_result
-    check_true "search_terminal parse error was logged" [expr {[message_count] > $messages_before_parse_error}]
+    check "get_terminals parse-error result" {} $bad_result
+    check_true "get_terminals parse error was logged" [expr {[message_count] > $messages_before_parse_error}]
 }
 
 # --- TerminalPort + Shape (rect/polygon/path via the coordinate typemap) ---
@@ -109,8 +124,8 @@ check "shape_paths point count" 3 [llength [dict get [lindex $paths 0] points]]
 
 check "terminal_port_shapes lists the created shape" $shape [terminal_port_shapes $port]
 
-set port_matches [search_terminal_port ".terminal.name =~ IN* && .shapes.layer_name == M1"]
-check "search_terminal_port relational + list-hop match" $port $port_matches
+set port_matches [get_terminal_ports ".terminal.name =~ IN* && .shapes.layer_name == M1"]
+check "get_terminal_ports relational + list-hop match" $port $port_matches
 
 check "remove_shape_rect return code" 0 [remove_shape_rect $shape 0]
 check "shape_rects after remove" {} [shape_rects $shape]
@@ -124,11 +139,11 @@ set obstruction_shape [create_obstruction_shape -obstruction $obstruction -layer
 check "add rect to obstruction shape" 0 [add_shape_rect -shape $obstruction_shape -rect {0 0 1 1}]
 check "obstruction_shapes lists the created shape" $obstruction_shape [obstruction_shapes $obstruction]
 
-set obstruction_matches [search_obstruction ".shapes.layer_name == M1"]
-check "search_obstruction list-hop match" $obstruction $obstruction_matches
+set obstruction_matches [get_obstructions ".shapes.layer_name == M1"]
+check "get_obstructions list-hop match" $obstruction $obstruction_matches
 
 check "delete_obstruction return code" 0 [delete_obstruction $obstruction]
-check "search_obstruction after delete" {} [search_obstruction ".shapes.layer_name == M1"]
+check "get_obstructions after delete" {} [get_obstructions ".shapes.layer_name == M1"]
 
 # --- Abstract boundary ---
 
@@ -139,13 +154,41 @@ check "update_abstract_boundary return code" 0 [update_abstract_boundary -abstra
 # way (see le_delete_terminal's own doc comment in api.hpp). ---
 
 check "delete_terminal return code" 0 [delete_terminal $in0]
-check "search_terminal_port after cascade delete" {} [search_terminal_port ".terminal.name == IN0"]
+check "get_terminal_ports after cascade delete" {} [get_terminal_ports ".terminal.name == IN0"]
 
 check "delete_terminal (out0) return code" 0 [delete_terminal $out0]
 
 # The fixture's own LEF-authored PIN A is untouched by any of the above -
 # it's the only Terminal left once both terminals this test created are
 # gone.
-check "search_terminal after deleting both created terminals" A [dict get [terminal_properties [search_terminal ".name =~ *"]] name]
+check "get_terminals after deleting both created terminals" A [dict get [terminal_properties [get_terminals ".name =~ *"]] name]
+
+# --- Current-view scoping (UPDATES.md item 17) ---
+#
+# Read a second, independent Design (othercell.lef's OTHERCELL/PIN B)
+# into the same session and confirm switching the current view via
+# open_design actually confines get_terminals to the Abstract in view -
+# neither Design's terminals leak into the other's results.
+# get_obstructions/get_terminal_ports share get_terminals' own
+# current-abstract scoping mechanism (api.cpp), so this one check
+# exercises the same code path all three rely on.
+
+check "read_lef (othercell.lef) return code" 0 [read_lef $other_lef_path]
+
+check_true "open_design OTHERCELL returns a valid design id" [expr {[open_design OTHERCELL] != $kInvalidId}]
+
+set other_terminal_names {}
+foreach id [get_terminals "*"] {
+    lappend other_terminal_names [dict get [terminal_properties $id] name]
+}
+check "get_terminals * in OTHERCELL's view only sees OTHERCELL's own terminal" B $other_terminal_names
+
+check_true "open_design TESTCELL returns a valid design id" [expr {[open_design TESTCELL] != $kInvalidId}]
+
+set testcell_terminal_names {}
+foreach id [get_terminals "*"] {
+    lappend testcell_terminal_names [dict get [terminal_properties $id] name]
+}
+check "get_terminals * back in TESTCELL's view only sees TESTCELL's own terminal, not OTHERCELL's" A $testcell_terminal_names
 
 puts "le_tcl CRUD test passed"

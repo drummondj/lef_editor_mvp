@@ -74,12 +74,24 @@ int viewport_height();
 /// update_abstract_boundary below. Scoped to the first Library only
 /// (le_library_design_at's library_index=0) - correct as long as only
 /// one LEF file/library is in play, same assumption this project's
-/// single-shared-Technology convention already makes elsewhere; a real
-/// "current library/design/view" context (UPDATES.md item 15's own
-/// `current_library`/`current_design`/`current_view`) is unbuilt
-/// (TCL_EXPLORATION.md Phase 6, not this phase) and would replace this.
+/// single-shared-Technology convention already makes elsewhere. Superseded
+/// for the "select a view to work in" use case by open_design below
+/// (UPDATES.md item 17) - kept as-is since scripts may still want a raw
+/// AbstractId without changing the session's current-view state.
 /// Returns kInvalidId if index is out of range.
 long long design_abstract_id(int design_index);
+
+/// @brief Positional form behind `open_design NAME -view abstract` (see
+/// le_tcl_procs.tcl) - resolves NAME to a LeDesignId. Returns kInvalidId
+/// if no Design named `name` is loaded on this session.
+long long design_by_name(const char *name);
+
+/// @brief Select the Design `design_id` (as returned by design_by_name)
+/// as this session's current view (UPDATES.md item 17) - every
+/// subsequent get_terminals/get_obstructions/get_terminal_ports call is
+/// scoped to its Abstract. Returns 0 on success, nonzero if design_id
+/// doesn't name a Design on this session.
+int set_current_design_cmd(long long design_id);
 
 /// @brief Sentinel for "no such id" - see this header's own "IDs"
 /// comment. Every api.hpp failure path returns an id struct with
@@ -126,15 +138,19 @@ int set_terminal_name(long long id, const char *name);
 int set_terminal_direction_cmd(long long id, int direction);
 int delete_terminal(long long id);
 
-/// @brief Search every Terminal for `filter_expression` (see
-/// backend/src/database/filter.hpp for the grammar) - returns a
+/// @brief Search the Terminals belonging to the current view's Abstract
+/// (see open_design/set_current_design_cmd - UPDATES.md item 17) for
+/// `filter_expression` (see backend/src/database/filter.hpp for the
+/// grammar, or pass "*" to match every Terminal in the current view
+/// without parsing a filter expression at all) - returns a
 /// space-separated string of packed ids (already a well-formed Tcl list:
 /// packed ids are plain integers, never containing whitespace/braces, so
 /// no escaping is needed - see this header's own "property tables and
 /// search results" comment for why that's not always true elsewhere).
-/// Empty string on no match or a parse error - check message_count()
-/// for a parse error same as any other backend-originated message.
-const char *search_terminal(const char *filter_expression);
+/// Empty string on no match, no current design selected, or a parse
+/// error - check message_count() for a parse error same as any other
+/// backend-originated message.
+const char *get_terminals(const char *filter_expression);
 
 // --- TerminalPort CRUD + search ---
 
@@ -143,11 +159,16 @@ int terminal_port_property_count(long long id);
 const char *terminal_port_property_name(long long id, int index);
 const char *terminal_port_property_value(long long id, int index);
 int delete_terminal_port(long long id);
-const char *search_terminal_port(const char *filter_expression);
+
+/// @brief Search the TerminalPorts whose Terminal belongs to the current
+/// view's Abstract - see get_terminals' own comment for the full
+/// contract (grammar/"*"/empty-string-on-no-match), identical here, just
+/// scoped to TerminalPort.
+const char *get_terminal_ports(const char *filter_expression);
 
 /// @brief Space-separated string of packed ShapeIds owned by the
 /// TerminalPort at `id` - same "already a well-formed Tcl list"
-/// reasoning as search_terminal's own comment.
+/// reasoning as get_terminals' own comment.
 const char *terminal_port_shapes(long long id);
 
 // --- Obstruction CRUD + search ---
@@ -157,7 +178,11 @@ int obstruction_property_count(long long id);
 const char *obstruction_property_name(long long id, int index);
 const char *obstruction_property_value(long long id, int index);
 int delete_obstruction(long long id);
-const char *search_obstruction(const char *filter_expression);
+
+/// @brief Search the Obstructions belonging to the current view's
+/// Abstract - see get_terminals' own comment for the full contract,
+/// identical here, just scoped to Obstruction.
+const char *get_obstructions(const char *filter_expression);
 const char *obstruction_shapes(long long id);
 
 // --- Abstract boundary ---

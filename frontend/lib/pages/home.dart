@@ -26,39 +26,39 @@ class _HomeState extends State<Home> {
           padding: const EdgeInsets.all(8.0),
           child: Stack(
             children: [
-              // Positioned(
-              //   top: 10,
-              //   left: 10,
-              //   right: 10,
-              //   bottom: 10,
-              //   child: Terminal(),
-              // ),
               Positioned(
                 top: 10,
                 left: 10,
-                right: rightWidth,
-                bottom: 50,
-                child: LayoutEditor(),
+                right: 10,
+                bottom: 10,
+                child: Terminal(),
               ),
-              Positioned(
-                top: 0,
-                left: 0,
-                bottom: 0,
-                width: leftWidth,
-                child: WidgetCard(child: MainMenu()),
-              ),
-              Positioned(
-                bottom: 0,
-                left: leftWidth,
-                right: rightWidth,
-                child: WidgetCard(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [MessageConsole(), TclConsole()],
-                  ),
-                ),
-              ),
-              Positioned(top: 0, bottom: 0, right: 0, child: RightSidebarAlt()),
+              // Positioned(
+              //   top: 10,
+              //   left: 10,
+              //   right: rightWidth,
+              //   bottom: 50,
+              //   child: LayoutEditor(),
+              // ),
+              // Positioned(
+              //   top: 0,
+              //   left: 0,
+              //   bottom: 0,
+              //   width: leftWidth,
+              //   child: WidgetCard(child: MainMenu()),
+              // ),
+              // Positioned(
+              //   bottom: 0,
+              //   left: leftWidth,
+              //   right: rightWidth,
+              //   child: WidgetCard(
+              //     child: Column(
+              //       mainAxisSize: MainAxisSize.min,
+              //       children: [MessageConsole(), TclConsole()],
+              //     ),
+              //   ),
+              // ),
+              // Positioned(top: 0, bottom: 0, right: 0, child: RightSidebarAlt()),
             ],
           ),
         ),
