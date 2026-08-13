@@ -250,6 +250,39 @@ TEST_F(ApiFixture, TooltipMessageWithNullHandleReturnsNull)
     EXPECT_EQ(le_tooltip_message(nullptr), nullptr);
 }
 
+TEST_F(ApiFixture, TooltipMessageReflectsEditMode)
+{
+    le_set_mode(handle, LE_MODE_EDIT);
+    const char *tooltip = le_tooltip_message(handle);
+    ASSERT_NE(tooltip, nullptr);
+    EXPECT_EQ(std::string(tooltip).find("Left click to select"), std::string::npos);
+}
+
+// le_get_mode/le_set_mode (UPDATES.md item 11).
+TEST_F(ApiFixture, GetModeDefaultsToSelectMode)
+{
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+}
+
+TEST_F(ApiFixture, SetModeThenGetModeRoundTrips)
+{
+    le_set_mode(handle, LE_MODE_EDIT);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+
+    le_set_mode(handle, LE_MODE_SELECT);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+}
+
+TEST_F(ApiFixture, GetModeWithNullHandleReturnsSelectMode)
+{
+    EXPECT_EQ(le_get_mode(nullptr), LE_MODE_SELECT);
+}
+
+TEST_F(ApiFixture, SetModeWithNullHandleDoesNotCrash)
+{
+    le_set_mode(nullptr, LE_MODE_EDIT);
+}
+
 TEST_F(ApiFixture, DesignCountAndNameAreZeroOrNullForNullHandle)
 {
     EXPECT_EQ(le_design_count(nullptr), 0);
@@ -1297,6 +1330,23 @@ TEST_F(ApiFixture, KeyDownPanDirectionsAreEachOthersOpposite)
     EXPECT_TRUE(region_has_opaque_pixel(after, 21, 21, 79, 79));
 }
 
+// LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (UPDATES.md item 11).
+TEST_F(ApiFixture, KeyDownEditModeSwitchesToEditMode)
+{
+    ASSERT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+    le_key_down(handle, LE_KEY_EDIT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+}
+
+TEST_F(ApiFixture, KeyDownSelectModeSwitchesBackToSelectMode)
+{
+    le_key_down(handle, LE_KEY_EDIT_MODE);
+    ASSERT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+
+    le_key_down(handle, LE_KEY_SELECT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+}
+
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
@@ -1787,6 +1837,52 @@ TEST_F(ApiFixture, DragSelectOnAnUnselectableLayerSelectsNothing)
 
     le_mouse_down(handle, 0, 200);
     le_mouse_up(handle, 200, 0);
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+// Edit mode gates le_mouse_up's selection changes (UPDATES.md item 11).
+TEST_F(ApiFixture, ClickInEditModeDoesNotChangeSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A, in Select mode
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_mouse_down(handle, 175, 25); // PIN B, in Edit mode
+    le_mouse_up(handle, 175, 25);
+    EXPECT_EQ(le_selection_count(handle), 1); // still just PIN A - unchanged
+}
+
+TEST_F(ApiFixture, DragSelectInEditModeDoesNotChangeSelection)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_EDIT);
+
+    // Same full-viewport drag rectangle that enclosed both pins in Select
+    // mode (see DragSelectEnclosesEverySelectableShapeInTheRectangle).
+    le_mouse_down(handle, 0, 200);
+    le_mouse_up(handle, 200, 0);
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, MouseUpInEditModeStillEndsDragging)
+{
+    // No public le_is_dragging accessor exists, so this is verified
+    // indirectly: le_mouse_up's own guard (`if (!is_dragging()) return`,
+    // api.cpp) makes a *second* mouse-up with no preceding mouse-down a
+    // no-op only if the first mouse-up's end_drag() actually ran despite
+    // the Edit-mode gate skipping the selection block around it.
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_EDIT);
+
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175); // end_drag() must run even though selection is skipped
+
+    le_set_mode(handle, LE_MODE_SELECT);
+    le_mouse_up(handle, 175, 25); // no preceding mouse-down - a no-op if dragging really ended
     EXPECT_EQ(le_selection_count(handle), 0);
 }
 

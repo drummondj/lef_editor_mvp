@@ -39,11 +39,16 @@ none of these are duplicated here.
   by `view_style_test.cpp`.
 - `src/scene/` — `Scene`, per-handle mutable view state (currently displayed
   `AbstractId`, pan/scale/viewport-size transform, per-`ViewLayer`
-  visibility, selection). Distinct from the persistent `Root` database.
+  visibility, selection, and current interaction mode). Distinct from the
+  persistent `Root` database.
   Layer visibility is keyed by `ViewLayerId`, not `LayerId` — a physical
   layer has independently toggleable `TERMINAL`/`OBSTRUCTION` visibility.
   Selection is `std::variant<TerminalId, ObstructionId>` — extend the
   variant as more selectable kinds need it rather than generalizing early.
+  `Scene::Mode` (`SELECT`/`EDIT`, UPDATES.md item 11) is Select by
+  default — Select is the only mode where `le_mouse_up` changes the
+  current selection; Edit mode restricts mouse interaction to editing
+  whatever is already selected (behavior TBD, a later item).
 - `src/core/` — header-only generic building blocks shared between
   `pipeline` and `render` (UPDATES.md item 16), so neither module depends
   on the other for them: `RenderedShape`/`TinyShapeDot` (`pipeline`'s

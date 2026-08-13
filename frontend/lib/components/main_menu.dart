@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor/components/library_browser.dart';
 import 'package:lef_editor/providers/le_provider.dart';
+import 'package:lef_editor_plugin/lef_editor_plugin.dart';
 import 'package:provider/provider.dart';
 
 class MainMenu extends StatefulWidget {
@@ -72,6 +73,18 @@ class _MainMenuState extends State<MainMenu> {
             icon: Icon(Icons.my_library_books_sharp),
             onPressed: _loadTestData,
             label: Text("Load test data"),
+          ),
+          TextButton.icon(
+            icon: Icon(Icons.near_me),
+            onPressed: () =>
+                context.read<LeProvider>().setMode(LeMode.LE_MODE_SELECT),
+            label: Text("Select Mode"),
+          ),
+          TextButton.icon(
+            icon: Icon(Icons.edit),
+            onPressed: () =>
+                context.read<LeProvider>().setMode(LeMode.LE_MODE_EDIT),
+            label: Text("Edit Mode"),
           ),
         ],
       ),

@@ -86,6 +86,9 @@ class LeProvider extends ChangeNotifier {
   String _tooltipMessage = '';
   String get tooltipMessage => _tooltipMessage;
 
+  LeMode _mode = LeMode.LE_MODE_SELECT;
+  LeMode get mode => _mode;
+
   final List<LeSelectedObjectInfo> _selectedObjects = [];
   List<LeSelectedObjectInfo> get selectedObjects => _selectedObjects;
 
@@ -139,6 +142,11 @@ class LeProvider extends ChangeNotifier {
   // and nothing costly to skip).
   void refreshTooltipMessage() {
     _tooltipMessage = _editor.tooltipMessage;
+  }
+
+  // Same "cheap direct read" shape as refreshTooltipMessage above.
+  void refreshMode() {
+    _mode = _editor.mode;
   }
 
   // Rebuilding _selectedObjects makes several FFI calls per selected
@@ -202,8 +210,16 @@ class LeProvider extends ChangeNotifier {
     refreshLayers();
     refreshMessages();
     refreshTooltipMessage();
+    refreshMode();
     refreshTexture();
     notifyListeners();
+  }
+
+  /// Switches the current interaction mode (UPDATES.md item 11) - also
+  /// reachable via the 's'/'e' keyboard shortcuts (see handleKeyEvent).
+  Future<void> setMode(LeMode mode) async {
+    _editor.setMode(mode);
+    refreshAndNotify();
   }
 
   Future<void> init() async {

@@ -403,6 +403,27 @@ extern "C"
     /// (affects rendering). A no-op if handle is null.
     void le_set_purpose_visible(LeHandle *handle, int32_t purpose, int32_t visible);
 
+    /// @brief The current interaction mode (UPDATES.md item 11). Select
+    /// is the only mode where le_mouse_up's mouse clicks/drags change the
+    /// current selection - Edit mode restricts mouse interaction to
+    /// editing whatever is already selected (behavior TBD, a later item).
+    /// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (keyboard)
+    /// or le_set_mode (a Flutter UI event) - both paths converge on the
+    /// same Scene::Mode state.
+    typedef enum LeMode
+    {
+        LE_MODE_SELECT = 0,
+        LE_MODE_EDIT = 1,
+    } LeMode;
+
+    /// @brief The current interaction mode (see LeMode). Returns
+    /// LE_MODE_SELECT if handle is null.
+    int32_t le_get_mode(LeHandle *handle);
+
+    /// @brief Switch the current interaction mode (see LeMode). A no-op
+    /// if handle is null.
+    void le_set_mode(LeHandle *handle, int32_t mode);
+
     /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
     /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
     /// general row/column model this mirrors. Selectable by default until
@@ -591,6 +612,18 @@ extern "C"
         /// double up on (LE_KEY_1..LE_KEY_9 already cover the first
         /// nine). Same VIA-pairing behavior as LE_KEY_1..LE_KEY_9.
         LE_KEY_0 = 20,
+        /// Switch to Select mode (UPDATES.md item 11) - not Ctrl-gated,
+        /// an "action" code like LE_KEY_ZOOM/LE_KEY_FIT: le_key_down()
+        /// calls Scene::set_mode(Scene::Mode::SELECT) immediately, every
+        /// call (including key-repeat - idempotent, so no special
+        /// one-shot handling is needed). See le_get_mode/le_set_mode for
+        /// the non-keyboard (Flutter UI event) path to the same state.
+        LE_KEY_SELECT_MODE = 21,
+        /// Switch to Edit mode (UPDATES.md item 11) - same shape as
+        /// LE_KEY_SELECT_MODE, calling Scene::set_mode(Scene::Mode::EDIT).
+        /// While in Edit mode, le_mouse_up no longer changes the current
+        /// selection - see its own doc comment.
+        LE_KEY_EDIT_MODE = 22,
     };
 
     /// @brief Mark `key_code` (an LeKeyCode value) as currently held,

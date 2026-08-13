@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:lef_editor/providers/le_provider.dart';
+import 'package:lef_editor_plugin/lef_editor_plugin.dart';
 import 'package:provider/provider.dart';
 
 class StatusBar extends StatelessWidget {
@@ -16,6 +17,9 @@ class StatusBar extends StatelessWidget {
             children: [
               SelectableText(provider.tooltipMessage),
               Spacer(),
+              SelectableText(
+                "Mode: ${provider.mode == LeMode.LE_MODE_SELECT ? 'Select' : 'Edit'}",
+              ),
               SelectableText(
                 "X: ${provider.snappedMousePosition.dx.toStringAsFixed(3)} Y: ${provider.snappedMousePosition.dy.toStringAsFixed(3)}",
               ),

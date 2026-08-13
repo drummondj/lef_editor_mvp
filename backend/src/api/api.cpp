@@ -177,13 +177,15 @@ namespace
     // over it, still scales with however many objects are in it).
     constexpr int32_t kMaxSelectAllCount = 10000;
 
-    // le_tooltip_message's own text (UPDATES.md item 7.3) - only one
-    // interaction mode (Select) exists today, so this is a single fixed
-    // string rather than a lookup keyed on some not-yet-existing mode
-    // enum; when a second mode is added, le_tooltip_message grows a
-    // branch, not this constant a sibling.
+    // le_tooltip_message's own text (UPDATES.md item 7.3), one constant
+    // per Scene::Mode (UPDATES.md item 11) - le_tooltip_message branches
+    // on the current mode rather than returning a single fixed string.
     constexpr const char *kSelectModeTooltip =
         "Left click to select. Shift for multi-select. Left click and drag for rectangle multi-select.";
+    // Placeholder - Edit mode's actual editing behavior is a later item
+    // ("Details of how objects are edited to follow"), so this text will
+    // need to change once that's defined.
+    constexpr const char *kEditModeTooltip = "Edit mode";
 
     // Maps le::PropertyValue::Type (generated/property.hpp) to the C API's
     // LePropertyType - kept as an explicit switch rather than a bare
@@ -1462,6 +1464,22 @@ extern "C"
         handle->scene.set_purpose_visible(static_cast<le::ViewLayerPurpose>(purpose), visible != 0);
     }
 
+    int32_t le_get_mode(LeHandle *handle)
+    {
+        if (!handle)
+            return LE_MODE_SELECT;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return static_cast<int32_t>(handle->scene.mode());
+    }
+
+    void le_set_mode(LeHandle *handle, int32_t mode)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.set_mode(static_cast<le::Scene::Mode>(mode));
+    }
+
     int32_t le_is_layer_name_selectable(LeHandle *handle, const char *layer_name)
     {
         if (!handle || !layer_name)
@@ -1673,6 +1691,12 @@ extern "C"
             if (handle->scene.is_key_held(LE_KEY_CTRL))
                 handle->scene.clear_selection();
             break;
+        case LE_KEY_SELECT_MODE:
+            handle->scene.set_mode(le::Scene::Mode::SELECT);
+            break;
+        case LE_KEY_EDIT_MODE:
+            handle->scene.set_mode(le::Scene::Mode::EDIT);
+            break;
         default:
             break;
         }
@@ -1745,34 +1769,43 @@ extern "C"
             return;
         }
 
-        const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
-        const bool shift = handle->scene.is_key_held(LE_KEY_SHIFT);
-
-        if (!shift)
-            handle->scene.clear_selection();
-
-        if (is_click)
+        // UPDATES.md item 11 - only Select mode changes the selection; in
+        // Edit mode a click/drag is left for editing the existing
+        // selection (behavior TBD, a later item), so this whole block -
+        // including the pipeline run it only needs for hit-testing - is
+        // skipped. end_drag() below stays unconditional so drag state
+        // always resets regardless of mode.
+        if (handle->scene.mode() == le::Scene::Mode::SELECT)
         {
-            // Computed straight from this call's own x/y, not
-            // Scene::drag_rect_dbu()/mouse_dbu_position() - those read the
-            // separately-tracked *stored* mouse position (see
-            // le_set_mouse_position), which this call has no guaranteed
-            // ordering against.
-            const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
-            if (hit)
-                handle->scene.select(hit->origin, hit->outline);
-        }
-        else
-        {
-            const le::Point start = handle->scene.pixel_to_dbu(handle->scene.drag_start_x_px(), handle->scene.drag_start_y_px());
-            const le::Point end = handle->scene.pixel_to_dbu(x, y);
-            const le::Rect drag_rect{
-                .ll = le::Point{std::min(start.x, end.x), std::min(start.y, end.y)},
-                .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
-            };
+            const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
+            const bool shift = handle->scene.is_key_held(LE_KEY_SHIFT);
 
-            for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
-                handle->scene.select(hit.origin, hit.outline);
+            if (!shift)
+                handle->scene.clear_selection();
+
+            if (is_click)
+            {
+                // Computed straight from this call's own x/y, not
+                // Scene::drag_rect_dbu()/mouse_dbu_position() - those read the
+                // separately-tracked *stored* mouse position (see
+                // le_set_mouse_position), which this call has no guaranteed
+                // ordering against.
+                const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
+                if (hit)
+                    handle->scene.select(hit->origin, hit->outline);
+            }
+            else
+            {
+                const le::Point start = handle->scene.pixel_to_dbu(handle->scene.drag_start_x_px(), handle->scene.drag_start_y_px());
+                const le::Point end = handle->scene.pixel_to_dbu(x, y);
+                const le::Rect drag_rect{
+                    .ll = le::Point{std::min(start.x, end.x), std::min(start.y, end.y)},
+                    .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
+                };
+
+                for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
+                    handle->scene.select(hit.origin, hit.outline);
+            }
         }
 
         handle->scene.end_drag();
@@ -1782,7 +1815,7 @@ extern "C"
     {
         if (!handle)
             return nullptr;
-        return kSelectModeTooltip;
+        return handle->scene.mode() == le::Scene::Mode::EDIT ? kEditModeTooltip : kSelectModeTooltip;
     }
 
     int32_t le_selection_count(LeHandle *handle)

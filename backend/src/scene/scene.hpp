@@ -355,6 +355,24 @@ namespace le
             };
         }
 
+        // --- Mode (UPDATES.md item 11) ---
+        // Select mode is the only mode where mouse interaction (le_mouse_up)
+        // changes the current selection; Edit mode restricts mouse
+        // interaction to editing whatever is already selected (behavior
+        // TBD - UPDATES.md item 11's own "Details of how objects are
+        // edited to follow"), so the selection can only change back in
+        // Select mode. No cached stage depends on this yet, so no version
+        // bump on change - matches layer selectability's own precedent,
+        // not layer visibility's (visibility_version_).
+        enum class Mode
+        {
+            SELECT,
+            EDIT,
+        };
+
+        void set_mode(Mode mode) { mode_ = mode; }
+        Mode mode() const { return mode_; }
+
         // --- Held keys (UPDATES.md 7) ---
         // A generic set of currently-held key codes, set by the frontend
         // via press_key/release_key (see le_key_down/le_key_up) on every
@@ -682,6 +700,7 @@ namespace le
         int32_t mouse_y_px_ = 0;
         bool has_mouse_position_ = false;
         uint64_t mouse_version_ = 0;
+        Mode mode_ = Mode::SELECT;
         bool dragging_ = false;
         DragKind drag_kind_ = DragKind::SELECT;
         int32_t drag_start_x_px_ = 0;

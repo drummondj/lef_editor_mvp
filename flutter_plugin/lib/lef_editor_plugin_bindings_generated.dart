@@ -256,6 +256,274 @@ class LefEditorPluginBindings {
   late final _le_set_current_design_by_id = _le_set_current_design_by_idPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, LeDesignId)>();
 
+  /// @brief Look up the Design named `name` (exact match) on this
+  /// handle - lets a caller resolve a name straight to a LeDesignId
+  /// (e.g. for le_set_current_design_by_id) without walking the flat
+  /// le_library_design_at() enumeration by hand (UPDATES.md item 17's
+  /// `open_design <name>`). Returns an invalid id (index == UINT32_MAX)
+  /// if handle or name is null, or no Design with that name is loaded
+  /// on this handle.
+  LeDesignId le_design_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_design_by_name(handle, name);
+  }
+
+  late final _le_design_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_design_by_name');
+  late final _le_design_by_name = _le_design_by_namePtr
+      .asFunction<
+        LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Look up the Library named `name` (exact match) on this
+  /// handle - same contract as le_design_by_name, one level up. Returns
+  /// an invalid id (index == UINT32_MAX) if handle or name is null, or
+  /// no Library with that name is loaded on this handle.
+  LeLibraryId le_library_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_library_by_name(handle, name);
+  }
+
+  late final _le_library_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_library_by_name');
+  late final _le_library_by_name = _le_library_by_namePtr
+      .asFunction<
+        LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The Library at `id`'s own name - a direct field accessor
+  /// (same convention as le_terminal_name), for a caller that has an id
+  /// (e.g. from le_search_result_library_at) rather than a flat index
+  /// (le_library_at's own addressing). Returned pointer is owned by the
+  /// handle's Root - valid until the next call that mutates this
+  /// handle's Library pool - copy out immediately, don't hold across
+  /// another call. Returns nullptr if handle is null or id doesn't name
+  /// a Library on this handle.
+  ffi.Pointer<ffi.Char> le_library_name(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+  ) {
+    return _le_library_name(handle, id);
+  }
+
+  late final _le_library_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
+        >
+      >('le_library_name');
+  late final _le_library_name = _le_library_namePtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
+      >();
+
+  /// @brief The Design at `id`'s own name - same contract as
+  /// le_library_name, one level down. Distinct from le_design_name
+  /// above (which is flat-index addressed, like le_library_at/
+  /// le_library_design_at's own enumeration) since this plain-C API
+  /// can't overload on parameter type.
+  ffi.Pointer<ffi.Char> le_design_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId id,
+  ) {
+    return _le_design_name_by_id(handle, id);
+  }
+
+  late final _le_design_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
+        >
+      >('le_design_name_by_id');
+  late final _le_design_name_by_id = _le_design_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
+      >();
+
+  /// @brief Search every Library on this handle - unlike
+  /// le_get_terminals/le_get_designs/le_get_abstracts, Library has no
+  /// parent type, so there is no `-of`/default-scope concept here; this
+  /// always searches every Library loaded so far. `name_expression`
+  /// (glob-matched against Library::name, Tcl `string match` semantics)
+  /// and `filter_expression` (see backend/src/database/filter.hpp) are
+  /// each optional - pass null or "" to skip that axis. Returns the
+  /// match count (0 if handle is null or nothing matched), or -1 if
+  /// filter_expression fails to parse or references an unknown
+  /// field/hop (see le_message_count/le_message_at for either error).
+  /// Read results back via le_search_result_library_at, same "valid
+  /// until the next call" convention as this API's other cached-result
+  /// accessors.
+  int le_get_libraries(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_libraries(handle, name_expression, filter_expression);
+  }
+
+  late final _le_get_librariesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_libraries');
+  late final _le_get_libraries = _le_get_librariesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief The LeLibraryId at `index` (0..le_get_libraries' last
+  /// return value - 1) from the most recent le_get_libraries call.
+  /// Returns an invalid id (index == UINT32_MAX) if handle is null or
+  /// index is out of range.
+  LeLibraryId le_search_result_library_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_library_at(handle, index);
+  }
+
+  late final _le_search_result_library_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_library_at');
+  late final _le_search_result_library_at = _le_search_result_library_atPtr
+      .asFunction<LeLibraryId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Search Designs. `of_library` scopes to one Library's own
+  /// Designs (see le_library_by_name) - pass an invalid id (e.g. a
+  /// default-constructed LeLibraryId) to use the default scope instead:
+  /// the current view's own Design's Library if a Design is currently
+  /// selected (le_set_current_design/le_set_current_design_by_id), else
+  /// every Design loaded on this handle. `name_expression`/
+  /// `filter_expression` - see le_get_libraries' own comment. Returns
+  /// the match count, or -1 on a filter parse/validation error.
+  int le_get_designs(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId of_library,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_designs(
+      handle,
+      of_library,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_designsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_designs');
+  late final _le_get_designs = _le_get_designsPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeLibraryId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief The LeDesignId at `index` from the most recent le_get_designs
+  /// call - see le_search_result_library_at's own contract.
+  LeDesignId le_search_result_design_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_design_at(handle, index);
+  }
+
+  late final _le_search_result_design_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_design_at');
+  late final _le_search_result_design_at = _le_search_result_design_atPtr
+      .asFunction<LeDesignId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Search Abstracts. `of_design` scopes to one Design's own
+  /// Abstract (today always exactly one, per Design - see
+  /// le_design_by_name) - pass an invalid id to use the default scope:
+  /// the currently selected Design's Abstract if one is selected, else
+  /// none. Abstract has no name field (LEF has no concept of naming an
+  /// Abstract independently of its Design), so there is no
+  /// `name_expression` parameter here, only `filter_expression` - see
+  /// le_get_libraries' own comment. Returns the match count, or -1 on a
+  /// filter parse/validation error.
+  int le_get_abstracts(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId of_design,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_abstracts(handle, of_design, filter_expression);
+  }
+
+  late final _le_get_abstractsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_abstracts');
+  late final _le_get_abstracts = _le_get_abstractsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeDesignId, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The LeAbstractId at `index` from the most recent
+  /// le_get_abstracts call - see le_search_result_library_at's own
+  /// contract.
+  LeAbstractId le_search_result_abstract_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_abstract_at(handle, index);
+  }
+
+  late final _le_search_result_abstract_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAbstractId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_abstract_at');
+  late final _le_search_result_abstract_at = _le_search_result_abstract_atPtr
+      .asFunction<LeAbstractId Function(ffi.Pointer<LeHandle>, int)>();
+
   /// @brief Number of layer-widget rows currently available - mirrors
   /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
   /// includes BOUNDARY and any future non-Technology-derived "extra"
@@ -411,6 +679,32 @@ class LefEditorPluginBindings {
       >('le_set_purpose_visible');
   late final _le_set_purpose_visible = _le_set_purpose_visiblePtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int, int)>();
+
+  /// @brief The current interaction mode (see LeMode). Returns
+  /// LE_MODE_SELECT if handle is null.
+  int le_get_mode(ffi.Pointer<LeHandle> handle) {
+    return _le_get_mode(handle);
+  }
+
+  late final _le_get_modePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_get_mode',
+      );
+  late final _le_get_mode = _le_get_modePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Switch the current interaction mode (see LeMode). A no-op
+  /// if handle is null.
+  void le_set_mode(ffi.Pointer<LeHandle> handle, int mode) {
+    return _le_set_mode(handle, mode);
+  }
+
+  late final _le_set_modePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_set_mode');
+  late final _le_set_mode = _le_set_modePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
 
   /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
   /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
@@ -1106,6 +1400,1786 @@ class LefEditorPluginBindings {
       >('le_render_pixel_buffer');
   late final _le_render_pixel_buffer = _le_render_pixel_bufferPtr
       .asFunction<LePixelBuffer Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Create a Terminal (a.k.a. pin) on the Abstract at
+  /// `abstract_id` (UPDATES.md item 15's `create_terminal -name IN0
+  /// -direction IN`). Only name/direction are settable here - every
+  /// other Terminal field (LEF's optional use/shape/antenna/etc.
+  /// fields) defaults to its zero value; extend this function's
+  /// parameter list if a real caller needs to set one at creation time
+  /// rather than via a later le_set_terminal_* call. `name` must be
+  /// unique among Terminals already on `abstract_id` (a TCL script
+  /// addresses a Terminal by name - UPDATES.md's Terminal-friendly-id
+  /// item - so a collision would be genuinely ambiguous, not just
+  /// unusual; enforced by a linear scan over
+  /// Root::get_abstract_terminals, not a cmg index=True lookup, since
+  /// real LEF libraries legitimately reuse pin names like VDD/IN0
+  /// across different Abstracts and index=True's generated index is
+  /// flat/global, not per-Abstract). Returns an invalid LeTerminalId
+  /// (index == UINT32_MAX) if handle or name is null, abstract_id
+  /// doesn't name an Abstract on this handle, or name collides with an
+  /// existing Terminal on it (pushes an ERROR message the same way a
+  /// filter-expression parse error does - see le_message_count/
+  /// le_message_at).
+  LeTerminalId le_create_terminal(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> name,
+    int direction,
+  ) {
+    return _le_create_terminal(handle, abstract_id, name, direction);
+  }
+
+  late final _le_create_terminalPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+          )
+        >
+      >('le_create_terminal');
+  late final _le_create_terminal = _le_create_terminalPtr
+      .asFunction<
+        LeTerminalId Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >();
+
+  /// @brief Find the Terminal named `name` (exact match) within the
+  /// currently selected Design's Abstract (see le_set_current_design/
+  /// le_set_current_design_by_id - same current-view scoping
+  /// le_get_terminals already uses). A linear scan over
+  /// Root::get_abstract_terminals, not a cmg index=True lookup - see
+  /// le_create_terminal's own comment for why. Returns an invalid
+  /// LeTerminalId (index == UINT32_MAX) if handle or name is null, no
+  /// Design is currently selected, or no Terminal in the current
+  /// Abstract has that name.
+  LeTerminalId le_terminal_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_terminal_by_name(handle, name);
+  }
+
+  late final _le_terminal_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_terminal_by_name');
+  late final _le_terminal_by_name = _le_terminal_by_namePtr
+      .asFunction<
+        LeTerminalId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The Terminal at `id`'s own name - a direct field accessor
+  /// (unlike le_terminal_property_at's stringly-typed property table),
+  /// for a caller that just wants the name itself. Returned pointer is
+  /// owned by the handle's Root - valid until the next call that
+  /// mutates this handle's Terminal pool (same convention as
+  /// le_design_name) - copy out immediately, don't hold across another
+  /// call. Returns nullptr if handle is null or id doesn't name a
+  /// Terminal on this handle.
+  ffi.Pointer<ffi.Char> le_terminal_name(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+  ) {
+    return _le_terminal_name(handle, id);
+  }
+
+  late final _le_terminal_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_terminal_name');
+  late final _le_terminal_name = _le_terminal_namePtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeTerminalId)
+      >();
+
+  /// @brief Number of property rows for the Terminal at `id` - same
+  /// name/value table shape as le_selected_object_property_at
+  /// (LeProperty), but addressed directly by id rather than by current
+  /// selection index, for a TCL `get_terminal`-style caller that isn't
+  /// working off the current GUI selection. Rows: every plain Terminal
+  /// field from cmg's generated to_properties() ("name", "direction",
+  /// ...), plus "port_count" (int, from Root's own port index -
+  /// "ports" itself isn't a stored field, same as
+  /// le_selected_object_property_at's). No "bbox_um"/"layer_name" rows
+  /// (those are piece-selection-scoped concepts, meaningless for an
+  /// arbitrary id lookup). Returns 0 if handle is null or id doesn't
+  /// name a Terminal on this handle.
+  int le_terminal_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+  ) {
+    return _le_terminal_property_count(handle, id);
+  }
+
+  late final _le_terminal_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_terminal_property_count');
+  late final _le_terminal_property_count = _le_terminal_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_terminal_property_count(id)-1) for the Terminal at `id`.
+  /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+  /// handle is null, id doesn't name a Terminal on this handle, or
+  /// index is out of range.
+  LeProperty le_terminal_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    int index,
+  ) {
+    return _le_terminal_property_at(handle, id, index);
+  }
+
+  late final _le_terminal_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Int32)
+        >
+      >('le_terminal_property_at');
+  late final _le_terminal_property_at = _le_terminal_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeTerminalId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the Terminal at
+  /// `id` (UPDATES.md item 19.2's `get_properties`/`report_properties`
+  /// dot-notation, e.g. `.name`, or chained through a hop like
+  /// `.ports.port_class`) - see `backend/src/database/filter.hpp`'s
+  /// `parse_property_path`/`resolve_property_path` for the grammar and
+  /// resolution semantics (same `match_hop`/`get_field` machinery
+  /// `-filter` expressions already use, just resolving a value instead
+  /// of evaluating a comparison). Every segment but the last must be a
+  /// hop, the last must be a leaf field - both checked against the
+  /// same allowlist `-filter` validation uses (`validate_filter_path`
+  /// in api.cpp) before resolving, so an unrecognized field/hop name
+  /// is a real error (pushed via `le_message_count`/`le_message_at`),
+  /// not silent. Returns an all-null/zero row (LeProperty::name ==
+  /// nullptr) if handle/path is null, `path` fails to parse or
+  /// validate, id doesn't name a Terminal on this handle, or the path
+  /// is structurally valid but resolves to nothing for this specific
+  /// object (e.g. a list hop with zero elements) - the latter case
+  /// pushes no message, unlike a parse/validation failure.
+  LeProperty le_terminal_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_terminal_property_path(handle, id, path);
+  }
+
+  late final _le_terminal_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_terminal_property_path');
+  late final _le_terminal_property_path = _le_terminal_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Number of property rows for the Library at `id`. Rows:
+  /// every plain Library field from cmg's generated to_properties()
+  /// ("name"). Returns 0 if handle is null or id doesn't name a Library
+  /// on this handle.
+  int le_library_property_count(ffi.Pointer<LeHandle> handle, LeLibraryId id) {
+    return _le_library_property_count(handle, id);
+  }
+
+  late final _le_library_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLibraryId)
+        >
+      >('le_library_property_count');
+  late final _le_library_property_count = _le_library_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLibraryId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_library_property_count(id)-1) for the Library at `id`.
+  /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+  /// handle is null, id doesn't name a Library on this handle, or index
+  /// is out of range.
+  LeProperty le_library_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+    int index,
+  ) {
+    return _le_library_property_at(handle, id, index);
+  }
+
+  late final _le_library_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeLibraryId, ffi.Int32)
+        >
+      >('le_library_property_at');
+  late final _le_library_property_at = _le_library_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeLibraryId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the Library at
+  /// `id` (e.g. `.name`, or chained through a hop like
+  /// `.designs.name`) - see le_terminal_property_path's own comment
+  /// for the full grammar/validation/error contract.
+  LeProperty le_library_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_library_property_path(handle, id, path);
+  }
+
+  late final _le_library_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_library_property_path');
+  late final _le_library_property_path = _le_library_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeLibraryId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Number of property rows for the Design at `id`. Rows: every
+  /// plain Design field from cmg's generated to_properties() ("name").
+  /// Returns 0 if handle is null or id doesn't name a Design on this
+  /// handle.
+  int le_design_property_count(ffi.Pointer<LeHandle> handle, LeDesignId id) {
+    return _le_design_property_count(handle, id);
+  }
+
+  late final _le_design_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeDesignId)
+        >
+      >('le_design_property_count');
+  late final _le_design_property_count = _le_design_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeDesignId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_design_property_count(id)-1) for the Design at `id`.
+  /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+  /// handle is null, id doesn't name a Design on this handle, or index
+  /// is out of range.
+  LeProperty le_design_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId id,
+    int index,
+  ) {
+    return _le_design_property_at(handle, id, index);
+  }
+
+  late final _le_design_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeDesignId, ffi.Int32)
+        >
+      >('le_design_property_at');
+  late final _le_design_property_at = _le_design_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeDesignId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the Design at
+  /// `id` (e.g. `.name`, or chained through a hop like
+  /// `.library.name`) - see le_terminal_property_path's own comment
+  /// for the full grammar/validation/error contract.
+  LeProperty le_design_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_design_property_path(handle, id, path);
+  }
+
+  late final _le_design_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_design_property_path');
+  late final _le_design_property_path = _le_design_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeDesignId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Number of property rows for the Abstract at `id`. Rows:
+  /// every plain Abstract field from cmg's generated to_properties()
+  /// ("type", "size", "origin", ..., plus its own list-field "_count"
+  /// rows like "boundary_count"). Returns 0 if handle is null or id
+  /// doesn't name an Abstract on this handle.
+  int le_abstract_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_property_count(handle, id);
+  }
+
+  late final _le_abstract_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_property_count');
+  late final _le_abstract_property_count = _le_abstract_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_abstract_property_count(id)-1) for the Abstract at `id`.
+  /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+  /// handle is null, id doesn't name an Abstract on this handle, or
+  /// index is out of range.
+  LeProperty le_abstract_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_property_at(handle, id, index);
+  }
+
+  late final _le_abstract_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Int32)
+        >
+      >('le_abstract_property_at');
+  late final _le_abstract_property_at = _le_abstract_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeAbstractId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the Abstract at
+  /// `id` (e.g. `.type`, or chained through a hop like
+  /// `.design.name`) - see le_terminal_property_path's own comment
+  /// for the full grammar/validation/error contract.
+  LeProperty le_abstract_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_abstract_property_path(handle, id, path);
+  }
+
+  late final _le_abstract_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_abstract_property_path');
+  late final _le_abstract_property_path = _le_abstract_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
+  /// `update_terminal_port -name ...` pattern, applied to Terminal
+  /// itself) - `name` isn't index=True so this is a direct field
+  /// mutation, not a generated Root::set_terminal_name (see
+  /// TCL_EXPLORATION.md's "cmg codegen design" for why only
+  /// indexed/parent fields get a generated setter). Same uniqueness
+  /// enforcement as le_create_terminal, scoped to the Terminal's own
+  /// Abstract - renaming to the Terminal's own current name is a no-op
+  /// success, not a self-collision. Returns 0 on success, nonzero if
+  /// handle or name is null, id doesn't name a Terminal on this handle,
+  /// or name collides with a different Terminal already on the same
+  /// Abstract (pushes an ERROR message, same convention as
+  /// le_create_terminal).
+  int le_set_terminal_name(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_set_terminal_name(handle, id, name);
+  }
+
+  late final _le_set_terminal_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_set_terminal_name');
+  late final _le_set_terminal_name = _le_set_terminal_namePtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Change the Terminal at `id`'s signal direction. Returns 0
+  /// on success, nonzero if handle is null or id doesn't name a
+  /// Terminal on this handle.
+  int le_set_terminal_direction(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    int direction,
+  ) {
+    return _le_set_terminal_direction(handle, id, direction);
+  }
+
+  late final _le_set_terminal_directionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Int32)
+        >
+      >('le_set_terminal_direction');
+  late final _le_set_terminal_direction = _le_set_terminal_directionPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId, int)>();
+
+  /// @brief Delete the Terminal at `id`, cascading to every
+  /// TerminalPort it owns first - unlike Root::delete_terminal's own
+  /// no-cascade default (see its doc comment), a orphaned port here
+  /// would be permanently unreachable garbage (TerminalPorts are only
+  /// ever enumerated through their parent Terminal's own port list, no
+  /// top-level "every TerminalPort" API exists), not just a stale
+  /// reference that degrades gracefully elsewhere - a deliberate,
+  /// domain-specific exception at this API layer, not a generic Root
+  /// behavior. Returns 0 on success, nonzero if handle is null or id
+  /// doesn't name a Terminal on this handle.
+  int le_delete_terminal(ffi.Pointer<LeHandle> handle, LeTerminalId id) {
+    return _le_delete_terminal(handle, id);
+  }
+
+  late final _le_delete_terminalPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_delete_terminal');
+  late final _le_delete_terminal = _le_delete_terminalPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId)>();
+
+  /// @brief Search every Terminal on this handle for
+  /// `filter_expression` (UPDATES.md item 15's `-filter {...}`, e.g.
+  /// ".name =~ IN*" - see backend/src/database/filter.hpp for the full
+  /// grammar). Returns the number of matches (0 if handle or
+  /// filter_expression is null, or if nothing matched), or -1 if
+  /// filter_expression fails to parse (see le_message_count/
+  /// le_message_at for the parse error, pushed the same way
+  /// le_read_lef's own errors are). Results are cached on the handle
+  /// until the next le_search_terminal call - read them via
+  /// le_search_result_terminal_at, same "valid until the next call"
+  /// convention as this API's other cached-result accessors
+  /// (le_selected_object_property_at et al).
+  int le_search_terminal(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_search_terminal(handle, filter_expression);
+  }
+
+  late final _le_search_terminalPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_search_terminal');
+  late final _le_search_terminal = _le_search_terminalPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  /// @brief The LeTerminalId at `index` (0..le_search_terminal's last
+  /// return value - 1) from the most recent le_search_terminal call on
+  /// this handle. Returns an invalid id (index == UINT32_MAX) if
+  /// handle is null or index is out of range.
+  LeTerminalId le_search_result_terminal_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_terminal_at(handle, index);
+  }
+
+  late final _le_search_result_terminal_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_terminal_at');
+  late final _le_search_result_terminal_at = _le_search_result_terminal_atPtr
+      .asFunction<LeTerminalId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Search Terminals (UPDATES.md item 19.1 - supersedes item
+  /// 17's own single-filter-string `le_get_terminals`, this is the
+  /// general contract every other le_get_* function in this API
+  /// follows too). Three independent, each-optional axes:
+  /// - `of_abstract` scopes to one Abstract's own Terminals (see
+  /// le_get_abstracts) - pass an invalid id (e.g. a
+  /// default-constructed LeAbstractId) to use the default scope
+  /// instead: the currently selected Design's Abstract (item 17's
+  /// "current view" - le_set_current_design/
+  /// le_set_current_design_by_id), or none if no Design is
+  /// selected.
+  /// - `name_expression` glob-matches Terminal::name (Tcl `string
+  /// match` semantics, e.g. "IN*") - pass null or "" to skip this
+  /// axis (match every name).
+  /// - `filter_expression` (see backend/src/database/filter.hpp) -
+  /// pass null or "" to skip this axis. Only field/hop names this
+  /// API recognizes as valid for Terminal are accepted - an
+  /// unrecognized one is a validation error (item 19.1's own
+  /// error-checking requirement), not silent no-match.
+  /// A Terminal matches iff it satisfies every given axis. Shares
+  /// le_search_terminal's result buffer - read results back via
+  /// le_search_result_terminal_at. Returns the match count (0 if handle
+  /// is null or nothing matched), or -1 if filter_expression fails to
+  /// parse or references an unknown field/hop (see le_message_count/
+  /// le_message_at for either error).
+  int le_get_terminals(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId of_abstract,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_terminals(
+      handle,
+      of_abstract,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_terminalsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_terminals');
+  late final _le_get_terminals = _le_get_terminalsPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Create an empty TerminalPort owned by the Terminal at
+  /// `terminal_id` - no shapes yet, see le_create_terminal_port_shape.
+  /// Returns an invalid LeTerminalPortId (index == UINT32_MAX) if
+  /// handle is null, or terminal_id doesn't name a Terminal on this
+  /// handle.
+  LeTerminalPortId le_create_terminal_port(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId terminal_id,
+  ) {
+    return _le_create_terminal_port(handle, terminal_id);
+  }
+
+  late final _le_create_terminal_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalPortId Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_create_terminal_port');
+  late final _le_create_terminal_port = _le_create_terminal_portPtr
+      .asFunction<
+        LeTerminalPortId Function(ffi.Pointer<LeHandle>, LeTerminalId)
+      >();
+
+  /// @brief Number of property rows for the TerminalPort at `id` - same
+  /// by-id (not selection-scoped) shape as le_terminal_property_count.
+  /// Rows: "shapes_count" (int), "port_class" (string) - cmg's
+  /// generated to_properties() output for TerminalPortData, unchanged.
+  /// Returns 0 if handle is null or id doesn't name a TerminalPort on
+  /// this handle.
+  int le_terminal_port_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+  ) {
+    return _le_terminal_port_property_count(handle, id);
+  }
+
+  late final _le_terminal_port_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalPortId)
+        >
+      >('le_terminal_port_property_count');
+  late final _le_terminal_port_property_count =
+      _le_terminal_port_property_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalPortId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_terminal_port_property_count(id)-1) for the TerminalPort at
+  /// `id`. Returns an all-null/zero row (LeProperty::name == nullptr)
+  /// if handle is null, id doesn't name a TerminalPort on this handle,
+  /// or index is out of range.
+  LeProperty le_terminal_port_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+    int index,
+  ) {
+    return _le_terminal_port_property_at(handle, id, index);
+  }
+
+  late final _le_terminal_port_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            ffi.Int32,
+          )
+        >
+      >('le_terminal_port_property_at');
+  late final _le_terminal_port_property_at = _le_terminal_port_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeTerminalPortId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the TerminalPort at
+  /// `id` (e.g. `.port_class`, or chained through a hop like
+  /// `.terminal.name`) - see le_terminal_property_path's own comment
+  /// for the full grammar/validation/error contract.
+  LeProperty le_terminal_port_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_terminal_port_property_path(handle, id, path);
+  }
+
+  late final _le_terminal_port_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_terminal_port_property_path');
+  late final _le_terminal_port_property_path =
+      _le_terminal_port_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeTerminalPortId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  /// @brief Delete the TerminalPort at `id`, cascading to every Shape
+  /// it owns first - same reasoning as le_delete_terminal's own cascade
+  /// to TerminalPorts (see its doc comment): a Shape is pooled
+  /// (TCL_EXPLORATION.md Phase 3) and only ever reachable through its
+  /// parent's shape list, so leaving it behind would be permanently
+  /// unreachable garbage, not just a dangling reference. Returns 0 on
+  /// success, nonzero if handle is null or id doesn't name a
+  /// TerminalPort on this handle.
+  int le_delete_terminal_port(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+  ) {
+    return _le_delete_terminal_port(handle, id);
+  }
+
+  late final _le_delete_terminal_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeTerminalPortId)
+        >
+      >('le_delete_terminal_port');
+  late final _le_delete_terminal_port = _le_delete_terminal_portPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalPortId)>();
+
+  /// @brief Search every TerminalPort on this handle for
+  /// `filter_expression` - see le_search_terminal's own comment for the
+  /// full contract (grammar, error/caching behavior); identical here,
+  /// just scoped to TerminalPort (e.g. ".terminal.name =~ IN*" or
+  /// ".shapes.layer_name == M4", both straight from UPDATES.md item
+  /// 15's own example). Returns the match count, or -1 on a parse
+  /// error.
+  int le_search_terminal_port(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_search_terminal_port(handle, filter_expression);
+  }
+
+  late final _le_search_terminal_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_search_terminal_port');
+  late final _le_search_terminal_port = _le_search_terminal_portPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  /// @brief The LeTerminalPortId at `index` from the most recent
+  /// le_search_terminal_port call - see le_search_result_terminal_at's
+  /// own comment for the general contract.
+  LeTerminalPortId le_search_result_terminal_port_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_terminal_port_at(handle, index);
+  }
+
+  late final _le_search_result_terminal_port_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalPortId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_terminal_port_at');
+  late final _le_search_result_terminal_port_at =
+      _le_search_result_terminal_port_atPtr
+          .asFunction<LeTerminalPortId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Search TerminalPorts - see le_get_terminals' own comment
+  /// for the general contract. `of_terminal` scopes to one Terminal's
+  /// own Ports (see le_terminal_by_name) - pass an invalid id to use
+  /// the default scope: every TerminalPort under every Terminal of the
+  /// currently selected Abstract (a 2-hop current-view default).
+  /// TerminalPort has no name field, so there is no `name_expression`
+  /// parameter, only `filter_expression`. Returns the match count, or
+  /// -1 on a filter parse/validation error.
+  int le_get_terminal_ports(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId of_terminal,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_terminal_ports(handle, of_terminal, filter_expression);
+  }
+
+  late final _le_get_terminal_portsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_terminal_ports');
+  late final _le_get_terminal_ports = _le_get_terminal_portsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Create an empty Obstruction on the Abstract at
+  /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
+  /// Returns an invalid LeObstructionId (index == UINT32_MAX) if
+  /// handle is null, or abstract_id doesn't name an Abstract on this
+  /// handle.
+  LeObstructionId le_create_obstruction(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+  ) {
+    return _le_create_obstruction(handle, abstract_id);
+  }
+
+  late final _le_create_obstructionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_create_obstruction');
+  late final _le_create_obstruction = _le_create_obstructionPtr
+      .asFunction<
+        LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
+      >();
+
+  /// @brief Number of property rows for the Obstruction at `id` - same
+  /// by-id shape as le_terminal_property_count. Rows: "shapes_count"
+  /// (int) - cmg's generated to_properties() output for
+  /// ObstructionData, unchanged. Returns 0 if handle is null or id
+  /// doesn't name an Obstruction on this handle.
+  int le_obstruction_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+  ) {
+    return _le_obstruction_property_count(handle, id);
+  }
+
+  late final _le_obstruction_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeObstructionId)
+        >
+      >('le_obstruction_property_count');
+  late final _le_obstruction_property_count = _le_obstruction_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeObstructionId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_obstruction_property_count(id)-1) for the Obstruction at
+  /// `id`. Returns an all-null/zero row (LeProperty::name == nullptr)
+  /// if handle is null, id doesn't name an Obstruction on this handle,
+  /// or index is out of range.
+  LeProperty le_obstruction_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+    int index,
+  ) {
+    return _le_obstruction_property_at(handle, id, index);
+  }
+
+  late final _le_obstruction_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeObstructionId, ffi.Int32)
+        >
+      >('le_obstruction_property_at');
+  late final _le_obstruction_property_at = _le_obstruction_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeObstructionId, int)
+      >();
+
+  /// @brief Resolve a dotted property path against the Obstruction at
+  /// `id` - Obstruction itself has no leaf scalar fields (see
+  /// api.cpp's filter_field_tables), so every valid path here is
+  /// chained through a hop, e.g. `.shapes.layer_name`. See
+  /// le_terminal_property_path's own comment for the full grammar/
+  /// validation/error contract.
+  LeProperty le_obstruction_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_obstruction_property_path(handle, id, path);
+  }
+
+  late final _le_obstruction_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeObstructionId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_obstruction_property_path');
+  late final _le_obstruction_property_path = _le_obstruction_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeObstructionId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Delete the Obstruction at `id`, cascading to every Shape it
+  /// owns first - same reasoning as le_delete_terminal_port. Returns 0
+  /// on success, nonzero if handle is null or id doesn't name an
+  /// Obstruction on this handle.
+  int le_delete_obstruction(ffi.Pointer<LeHandle> handle, LeObstructionId id) {
+    return _le_delete_obstruction(handle, id);
+  }
+
+  late final _le_delete_obstructionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeObstructionId)
+        >
+      >('le_delete_obstruction');
+  late final _le_delete_obstruction = _le_delete_obstructionPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeObstructionId)>();
+
+  /// @brief Search every Obstruction on this handle for
+  /// `filter_expression` - see le_search_terminal's own comment for the
+  /// full contract. Returns the match count, or -1 on a parse error.
+  int le_search_obstruction(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_search_obstruction(handle, filter_expression);
+  }
+
+  late final _le_search_obstructionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_search_obstruction');
+  late final _le_search_obstruction = _le_search_obstructionPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  /// @brief The LeObstructionId at `index` from the most recent
+  /// le_search_obstruction call - see le_search_result_terminal_at's
+  /// own comment for the general contract.
+  LeObstructionId le_search_result_obstruction_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_obstruction_at(handle, index);
+  }
+
+  late final _le_search_result_obstruction_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeObstructionId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_obstruction_at');
+  late final _le_search_result_obstruction_at =
+      _le_search_result_obstruction_atPtr
+          .asFunction<LeObstructionId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Search Obstructions - see le_get_terminals' own comment
+  /// for the general contract. `of_abstract` scopes to one Abstract's
+  /// own Obstructions - pass an invalid id to use the default scope:
+  /// the currently selected Abstract. Obstruction has no name field,
+  /// so there is no `name_expression` parameter, only
+  /// `filter_expression`. Returns the match count, or -1 on a filter
+  /// parse/validation error.
+  int le_get_obstructions(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId of_abstract,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_obstructions(handle, of_abstract, filter_expression);
+  }
+
+  late final _le_get_obstructionsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_obstructions');
+  late final _le_get_obstructions = _le_get_obstructionsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Replace the Abstract at `id`'s boundary outline wholesale
+  /// with a single polygon built from `coords_um` (UPDATES.md item
+  /// 15's `update_abstract -boundary {x y x y ...}`) - a flat array of
+  /// microns, alternating x/y, `coord_count` must be a positive even
+  /// number (at least 3 points, i.e. coord_count >= 6, to be a real
+  /// polygon - a smaller count is rejected). No standalone Boundary
+  /// object exists (see TCL_EXPLORATION.md's round-2 decision) -
+  /// `Abstract.boundary` is a plain field, so this is a direct
+  /// mutation through le::Root::get_abstract(), not a generated
+  /// Root::set_abstract_boundary. Returns 0 on success, nonzero if
+  /// handle or coords_um is null, id doesn't name an Abstract on this
+  /// handle, coord_count is invalid, or no Technology has been read
+  /// yet (needed for the micron-to-dbu conversion).
+  int le_update_abstract_boundary(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    ffi.Pointer<ffi.Double> coords_um,
+    int coord_count,
+  ) {
+    return _le_update_abstract_boundary(handle, id, coords_um, coord_count);
+  }
+
+  late final _le_update_abstract_boundaryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+          )
+        >
+      >('le_update_abstract_boundary');
+  late final _le_update_abstract_boundary = _le_update_abstract_boundaryPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Double>,
+          int,
+        )
+      >();
+
+  /// @brief Create an empty Shape (just `layer_name`, no geometry yet)
+  /// owned by the TerminalPort at `port_id`. Returns an invalid
+  /// LeShapeId (index == UINT32_MAX) if handle or layer_name is null,
+  /// or port_id doesn't name a TerminalPort on this handle.
+  LeShapeId le_create_terminal_port_shape(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId port_id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_create_terminal_port_shape(handle, port_id, layer_name);
+  }
+
+  late final _le_create_terminal_port_shapePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_terminal_port_shape');
+  late final _le_create_terminal_port_shape = _le_create_terminal_port_shapePtr
+      .asFunction<
+        LeShapeId Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalPortId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Create an empty Shape owned by the Obstruction at
+  /// `obstruction_id` - see le_create_terminal_port_shape's own
+  /// comment for the general contract. Returns an invalid LeShapeId if
+  /// handle or layer_name is null, or obstruction_id doesn't name an
+  /// Obstruction on this handle.
+  LeShapeId le_create_obstruction_shape(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId obstruction_id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_create_obstruction_shape(handle, obstruction_id, layer_name);
+  }
+
+  late final _le_create_obstruction_shapePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(
+            ffi.Pointer<LeHandle>,
+            LeObstructionId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_obstruction_shape');
+  late final _le_create_obstruction_shape = _le_create_obstruction_shapePtr
+      .asFunction<
+        LeShapeId Function(
+          ffi.Pointer<LeHandle>,
+          LeObstructionId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Search Shapes (UPDATES.md item 19.1) - `of_terminal_port`/
+  /// `of_obstruction` each independently scope to one TerminalPort's or
+  /// one Obstruction's own Shapes (a Shape has exactly one real parent,
+  /// never both - see ShapeData's own comment - but both parameters are
+  /// accepted so a caller doesn't need to know which kind it has;
+  /// pass an invalid id for whichever doesn't apply). If **both** are
+  /// invalid, the default scope is every Shape reachable from the
+  /// current view: every Shape under the currently selected Design's
+  /// Abstract's Terminals' Ports, unioned with every Shape under that
+  /// Abstract's own Obstructions (the same current-view concept
+  /// le_get_terminal_ports already uses, extended one hop further).
+  /// Shape has no name field, only `layer_name` (a property, not an
+  /// identity), so there is no `name_expression` parameter - only
+  /// `filter_expression`, see le_get_libraries' own comment. Returns
+  /// the match count, or -1 on a filter parse/validation error.
+  int le_get_shapes(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId of_terminal_port,
+    LeObstructionId of_obstruction,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_shapes(
+      handle,
+      of_terminal_port,
+      of_obstruction,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_shapesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            LeObstructionId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_shapes');
+  late final _le_get_shapes = _le_get_shapesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalPortId,
+          LeObstructionId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief The LeShapeId at `index` from the most recent le_get_shapes
+  /// call - see le_search_result_library_at's own contract.
+  LeShapeId le_search_result_shape_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_search_result_shape_at(handle, index);
+  }
+
+  late final _le_search_result_shape_atPtr =
+      _lookup<
+        ffi.NativeFunction<LeShapeId Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_search_result_shape_at');
+  late final _le_search_result_shape_at = _le_search_result_shape_atPtr
+      .asFunction<LeShapeId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Number of property rows for the Shape at `id` (UPDATES.md
+  /// item 19.2 - same by-id shape as le_terminal_property_count/_at and
+  /// its Library/Design/Abstract siblings above). Rows: every plain
+  /// Shape field from cmg's generated to_properties() ("layer_name",
+  /// "spacing", ..., plus its own list-field "_count" rows like
+  /// "rects_count"). Shape has no children (the leaf of the
+  /// Library->Design->Abstract->{Terminal->TerminalPort,Obstruction}->
+  /// Shape hierarchy), so unlike TerminalPort/Obstruction there's no
+  /// derived child-pool "_count" row this function could even add.
+  /// Returns 0 if handle is null or id doesn't name a Shape on this
+  /// handle.
+  int le_shape_property_count(ffi.Pointer<LeHandle> handle, LeShapeId id) {
+    return _le_shape_property_count(handle, id);
+  }
+
+  late final _le_shape_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId)>
+      >('le_shape_property_count');
+  late final _le_shape_property_count = _le_shape_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId)>();
+
+  /// @brief The property row at `index`
+  /// (0..le_shape_property_count(id)-1) for the Shape at `id`. Returns
+  /// an all-null/zero row (LeProperty::name == nullptr) if handle is
+  /// null, id doesn't name a Shape on this handle, or index is out of
+  /// range.
+  LeProperty le_shape_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int index,
+  ) {
+    return _le_shape_property_at(handle, id, index);
+  }
+
+  late final _le_shape_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_shape_property_at');
+  late final _le_shape_property_at = _le_shape_property_atPtr
+      .asFunction<LeProperty Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief Resolve a dotted property path against the Shape at `id`
+  /// (e.g. `.layer_name`, or chained through a hop like
+  /// `.terminal_port.terminal.name`) - see le_terminal_property_path's
+  /// own comment for the full grammar/validation/error contract.
+  LeProperty le_shape_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_shape_property_path(handle, id, path);
+  }
+
+  late final _le_shape_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_shape_property_path');
+  late final _le_shape_property_path = _le_shape_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeShapeId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief Number of shapes owned by the TerminalPort at `id` -
+  /// indexes `le_terminal_port_shape_at`'s own `index` parameter,
+  /// 0..this-1. Returns 0 if handle is null or id doesn't name a
+  /// TerminalPort on this handle.
+  int le_terminal_port_shape_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+  ) {
+    return _le_terminal_port_shape_count(handle, id);
+  }
+
+  late final _le_terminal_port_shape_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalPortId)
+        >
+      >('le_terminal_port_shape_count');
+  late final _le_terminal_port_shape_count = _le_terminal_port_shape_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalPortId)>();
+
+  /// @brief The LeShapeId at `index` (0..le_terminal_port_shape_count(id)-1)
+  /// owned by the TerminalPort at `id`. Returns an invalid LeShapeId
+  /// (index == UINT32_MAX) if handle is null, id doesn't name a
+  /// TerminalPort on this handle, or index is out of range.
+  LeShapeId le_terminal_port_shape_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+    int index,
+  ) {
+    return _le_terminal_port_shape_at(handle, id, index);
+  }
+
+  late final _le_terminal_port_shape_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(ffi.Pointer<LeHandle>, LeTerminalPortId, ffi.Int32)
+        >
+      >('le_terminal_port_shape_at');
+  late final _le_terminal_port_shape_at = _le_terminal_port_shape_atPtr
+      .asFunction<
+        LeShapeId Function(ffi.Pointer<LeHandle>, LeTerminalPortId, int)
+      >();
+
+  /// @brief Number of shapes owned by the Obstruction at `id` - see
+  /// le_terminal_port_shape_count's own comment for the general
+  /// contract. Returns 0 if handle is null or id doesn't name an
+  /// Obstruction on this handle.
+  int le_obstruction_shape_count(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+  ) {
+    return _le_obstruction_shape_count(handle, id);
+  }
+
+  late final _le_obstruction_shape_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeObstructionId)
+        >
+      >('le_obstruction_shape_count');
+  late final _le_obstruction_shape_count = _le_obstruction_shape_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeObstructionId)>();
+
+  /// @brief The LeShapeId at `index` owned by the Obstruction at `id` -
+  /// see le_terminal_port_shape_at's own comment for the general
+  /// contract. Returns an invalid LeShapeId if handle is null, id
+  /// doesn't name an Obstruction on this handle, or index is out of
+  /// range.
+  LeShapeId le_obstruction_shape_at(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+    int index,
+  ) {
+    return _le_obstruction_shape_at(handle, id, index);
+  }
+
+  late final _le_obstruction_shape_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(ffi.Pointer<LeHandle>, LeObstructionId, ffi.Int32)
+        >
+      >('le_obstruction_shape_at');
+  late final _le_obstruction_shape_at = _le_obstruction_shape_atPtr
+      .asFunction<
+        LeShapeId Function(ffi.Pointer<LeHandle>, LeObstructionId, int)
+      >();
+
+  /// @brief The layer name of the Shape at `id`. Owned by the handle's
+  /// Root - valid until the handle is destroyed, this shape is
+  /// deleted, or le_set_shape_layer_name changes it, never owned by
+  /// the caller. Returns null if handle is null or id doesn't name a
+  /// Shape on this handle.
+  ffi.Pointer<ffi.Char> le_shape_layer_name(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+  ) {
+    return _le_shape_layer_name(handle, id);
+  }
+
+  late final _le_shape_layer_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeShapeId)
+        >
+      >('le_shape_layer_name');
+  late final _le_shape_layer_name = _le_shape_layer_namePtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeShapeId)
+      >();
+
+  /// @brief Rename the Shape at `id`'s layer. Returns 0 on success,
+  /// nonzero if handle or layer_name is null, or id doesn't name a
+  /// Shape on this handle.
+  int le_set_shape_layer_name(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_set_shape_layer_name(handle, id, layer_name);
+  }
+
+  late final _le_set_shape_layer_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_set_shape_layer_name');
+  late final _le_set_shape_layer_name = _le_set_shape_layer_namePtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Delete the Shape at `id`. Its parent (TerminalPort or
+  /// Obstruction) is untouched - le_terminal_port_shape_count/
+  /// le_obstruction_shape_count on it simply reports one fewer
+  /// afterward. Returns 0 on success, nonzero if handle is null or id
+  /// doesn't name a Shape on this handle.
+  int le_delete_shape(ffi.Pointer<LeHandle> handle, LeShapeId id) {
+    return _le_delete_shape(handle, id);
+  }
+
+  late final _le_delete_shapePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Pointer<LeHandle>, LeShapeId)>
+      >('le_delete_shape');
+  late final _le_delete_shape = _le_delete_shapePtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId)>();
+
+  /// @brief Number of rects on the Shape at `id` - indexes
+  /// `le_shape_rect_at`'s own `index` parameter, 0..this-1. Returns 0
+  /// if handle is null or id doesn't name a Shape on this handle.
+  int le_shape_rect_count(ffi.Pointer<LeHandle> handle, LeShapeId id) {
+    return _le_shape_rect_count(handle, id);
+  }
+
+  late final _le_shape_rect_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId)>
+      >('le_shape_rect_count');
+  late final _le_shape_rect_count = _le_shape_rect_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId)>();
+
+  /// @brief The rect at `index` (0..le_shape_rect_count(id)-1) on the
+  /// Shape at `id`, in microns. Returns an all-zero LeRectUm if handle
+  /// is null, id doesn't name a Shape on this handle, index is out of
+  /// range, or no Technology has been read yet (needed for the
+  /// dbu-to-micron conversion) - the same "can't distinguish a real
+  /// zero-sized rect from a degrade-gracefully zero" tradeoff
+  /// le_snapped_mouse_position's own comment already accepts for this
+  /// API, not a new one.
+  LeRectUm le_shape_rect_at(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int index,
+  ) {
+    return _le_shape_rect_at(handle, id, index);
+  }
+
+  late final _le_shape_rect_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeRectUm Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_shape_rect_at');
+  late final _le_shape_rect_at = _le_shape_rect_atPtr
+      .asFunction<LeRectUm Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief Append one rect to the Shape at `id`. Returns 0 on
+  /// success, nonzero if handle is null, id doesn't name a Shape on
+  /// this handle, or no Technology has been read yet.
+  int le_add_shape_rect(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    double ll_x_um,
+    double ll_y_um,
+    double ur_x_um,
+    double ur_y_um,
+  ) {
+    return _le_add_shape_rect(handle, id, ll_x_um, ll_y_um, ur_x_um, ur_y_um);
+  }
+
+  late final _le_add_shape_rectPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_add_shape_rect');
+  late final _le_add_shape_rect = _le_add_shape_rectPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeShapeId,
+          double,
+          double,
+          double,
+          double,
+        )
+      >();
+
+  /// @brief Remove the rect at `index` (0..le_shape_rect_count(id)-1)
+  /// from the Shape at `id`, shifting every later rect's index down by
+  /// one (matching le_shape_rect_at's own 0-based-position addressing
+  /// - not a stable id, see this section's own comment for why that's
+  /// fine here). Returns 0 on success, nonzero if handle is null, id
+  /// doesn't name a Shape on this handle, or index is out of range.
+  int le_remove_shape_rect(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int index,
+  ) {
+    return _le_remove_shape_rect(handle, id, index);
+  }
+
+  late final _le_remove_shape_rectPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_remove_shape_rect');
+  late final _le_remove_shape_rect = _le_remove_shape_rectPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief Number of polygons on the Shape at `id` - indexes
+  /// `le_shape_polygon_point_count`/`le_shape_polygon_point_at`'s own
+  /// `polygon_index` parameter, 0..this-1. Returns 0 if handle is null
+  /// or id doesn't name a Shape on this handle.
+  int le_shape_polygon_count(ffi.Pointer<LeHandle> handle, LeShapeId id) {
+    return _le_shape_polygon_count(handle, id);
+  }
+
+  late final _le_shape_polygon_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId)>
+      >('le_shape_polygon_count');
+  late final _le_shape_polygon_count = _le_shape_polygon_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId)>();
+
+  /// @brief Number of points in the polygon at `polygon_index`
+  /// (0..le_shape_polygon_count(id)-1) on the Shape at `id` - indexes
+  /// `le_shape_polygon_point_at`'s own `point_index` parameter,
+  /// 0..this-1. Returns 0 if handle is null, id doesn't name a Shape
+  /// on this handle, or polygon_index is out of range.
+  int le_shape_polygon_point_count(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int polygon_index,
+  ) {
+    return _le_shape_polygon_point_count(handle, id, polygon_index);
+  }
+
+  late final _le_shape_polygon_point_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_shape_polygon_point_count');
+  late final _le_shape_polygon_point_count = _le_shape_polygon_point_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief The point at `point_index` in the polygon at
+  /// `polygon_index` on the Shape at `id`, in microns. Returns an
+  /// all-zero LePointUm if handle is null, id doesn't name a Shape on
+  /// this handle, either index is out of range, or no Technology has
+  /// been read yet.
+  LePointUm le_shape_polygon_point_at(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int polygon_index,
+    int point_index,
+  ) {
+    return _le_shape_polygon_point_at(handle, id, polygon_index, point_index);
+  }
+
+  late final _le_shape_polygon_point_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePointUm Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_shape_polygon_point_at');
+  late final _le_shape_polygon_point_at = _le_shape_polygon_point_atPtr
+      .asFunction<
+        LePointUm Function(ffi.Pointer<LeHandle>, LeShapeId, int, int)
+      >();
+
+  /// @brief Append one polygon to the Shape at `id`, built from
+  /// `points_um` (a flat array of microns, alternating x/y -
+  /// `point_coord_count` must be a positive even number, at least 6 -
+  /// i.e. at least 3 points - to be a real polygon). Returns 0 on
+  /// success, nonzero if handle or points_um is null; id doesn't name
+  /// a Shape on this handle; point_coord_count is invalid; or no
+  /// Technology has been read yet.
+  int le_add_shape_polygon(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    ffi.Pointer<ffi.Double> points_um,
+    int point_coord_count,
+  ) {
+    return _le_add_shape_polygon(handle, id, points_um, point_coord_count);
+  }
+
+  late final _le_add_shape_polygonPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+          )
+        >
+      >('le_add_shape_polygon');
+  late final _le_add_shape_polygon = _le_add_shape_polygonPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeShapeId,
+          ffi.Pointer<ffi.Double>,
+          int,
+        )
+      >();
+
+  /// @brief Remove the polygon at `polygon_index`
+  /// (0..le_shape_polygon_count(id)-1) from the Shape at `id` - same
+  /// position-shifts-down semantics as le_remove_shape_rect. Returns 0
+  /// on success, nonzero if handle is null, id doesn't name a Shape on
+  /// this handle, or polygon_index is out of range.
+  int le_remove_shape_polygon(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int polygon_index,
+  ) {
+    return _le_remove_shape_polygon(handle, id, polygon_index);
+  }
+
+  late final _le_remove_shape_polygonPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_remove_shape_polygon');
+  late final _le_remove_shape_polygon = _le_remove_shape_polygonPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief Number of paths on the Shape at `id` - indexes
+  /// `le_shape_path_width_um`/`le_shape_path_point_count`/
+  /// `le_shape_path_point_at`'s own `path_index` parameter, 0..this-1.
+  /// Returns 0 if handle is null or id doesn't name a Shape on this
+  /// handle.
+  int le_shape_path_count(ffi.Pointer<LeHandle> handle, LeShapeId id) {
+    return _le_shape_path_count(handle, id);
+  }
+
+  late final _le_shape_path_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId)>
+      >('le_shape_path_count');
+  late final _le_shape_path_count = _le_shape_path_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId)>();
+
+  /// @brief The width, in microns, of the path at `path_index`
+  /// (0..le_shape_path_count(id)-1) on the Shape at `id`. Returns 0 if
+  /// handle is null, id doesn't name a Shape on this handle,
+  /// path_index is out of range, or no Technology has been read yet.
+  double le_shape_path_width_um(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int path_index,
+  ) {
+    return _le_shape_path_width_um(handle, id, path_index);
+  }
+
+  late final _le_shape_path_width_umPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Double Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_shape_path_width_um');
+  late final _le_shape_path_width_um = _le_shape_path_width_umPtr
+      .asFunction<double Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief Number of points in the centerline of the path at
+  /// `path_index` on the Shape at `id` - indexes
+  /// `le_shape_path_point_at`'s own `point_index` parameter,
+  /// 0..this-1. Returns 0 if handle is null, id doesn't name a Shape
+  /// on this handle, or path_index is out of range.
+  int le_shape_path_point_count(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int path_index,
+  ) {
+    return _le_shape_path_point_count(handle, id, path_index);
+  }
+
+  late final _le_shape_path_point_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_shape_path_point_count');
+  late final _le_shape_path_point_count = _le_shape_path_point_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief The point at `point_index` on the centerline of the path
+  /// at `path_index` on the Shape at `id`, in microns. Returns an
+  /// all-zero LePointUm if handle is null, id doesn't name a Shape on
+  /// this handle, either index is out of range, or no Technology has
+  /// been read yet.
+  LePointUm le_shape_path_point_at(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int path_index,
+    int point_index,
+  ) {
+    return _le_shape_path_point_at(handle, id, path_index, point_index);
+  }
+
+  late final _le_shape_path_point_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePointUm Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_shape_path_point_at');
+  late final _le_shape_path_point_at = _le_shape_path_point_atPtr
+      .asFunction<
+        LePointUm Function(ffi.Pointer<LeHandle>, LeShapeId, int, int)
+      >();
+
+  /// @brief Append one path to the Shape at `id`: `width_um` (the
+  /// path's stroke width) and `points_um`/`point_coord_count` (its
+  /// centerline, same flat-microns-array convention as
+  /// le_add_shape_polygon, but only at least 2 points - i.e.
+  /// point_coord_count >= 4 - are required, since a path's centerline
+  /// doesn't need to close into a loop). Returns 0 on success, nonzero
+  /// if handle or points_um is null; id doesn't name a Shape on this
+  /// handle; point_coord_count is invalid; or no Technology has been
+  /// read yet.
+  int le_add_shape_path(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    double width_um,
+    ffi.Pointer<ffi.Double> points_um,
+    int point_coord_count,
+  ) {
+    return _le_add_shape_path(
+      handle,
+      id,
+      width_um,
+      points_um,
+      point_coord_count,
+    );
+  }
+
+  late final _le_add_shape_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Double,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+          )
+        >
+      >('le_add_shape_path');
+  late final _le_add_shape_path = _le_add_shape_pathPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeShapeId,
+          double,
+          ffi.Pointer<ffi.Double>,
+          int,
+        )
+      >();
+
+  /// @brief Remove the path at `path_index`
+  /// (0..le_shape_path_count(id)-1) from the Shape at `id` - same
+  /// position-shifts-down semantics as le_remove_shape_rect. Returns 0
+  /// on success, nonzero if handle is null, id doesn't name a Shape on
+  /// this handle, or path_index is out of range.
+  int le_remove_shape_path(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    int path_index,
+  ) {
+    return _le_remove_shape_path(handle, id, path_index);
+  }
+
+  late final _le_remove_shape_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Int32)
+        >
+      >('le_remove_shape_path');
+  late final _le_remove_shape_path = _le_remove_shape_pathPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
 }
 
 /// 7.18.1.2 Minimum-width integer types
@@ -1478,6 +3552,27 @@ final class LeSnappedMousePosition extends ffi.Struct {
   external int has_position;
 }
 
+/// @brief The current interaction mode (UPDATES.md item 11). Select
+/// is the only mode where le_mouse_up's mouse clicks/drags change the
+/// current selection - Edit mode restricts mouse interaction to
+/// editing whatever is already selected (behavior TBD, a later item).
+/// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (keyboard)
+/// or le_set_mode (a Flutter UI event) - both paths converge on the
+/// same Scene::Mode state.
+enum LeMode {
+  LE_MODE_SELECT(0),
+  LE_MODE_EDIT(1);
+
+  final int value;
+  const LeMode(this.value);
+
+  static LeMode fromValue(int value) => switch (value) {
+    0 => LE_MODE_SELECT,
+    1 => LE_MODE_EDIT,
+    _ => throw ArgumentError('Unknown value for LeMode: $value'),
+  };
+}
+
 /// @brief Named logical keys this API tracks the held/released state
 /// of via le_key_down()/le_key_up() - stable across platforms, so
 /// this API's meaning doesn't depend on OS/Flutter scan codes; the
@@ -1552,7 +3647,21 @@ enum LeKeyCode {
   /// branch, since "0" has no bare-digit slot left below it to
   /// double up on (LE_KEY_1..LE_KEY_9 already cover the first
   /// nine). Same VIA-pairing behavior as LE_KEY_1..LE_KEY_9.
-  LE_KEY_0(20);
+  LE_KEY_0(20),
+
+  /// Switch to Select mode (UPDATES.md item 11) - not Ctrl-gated,
+  /// an "action" code like LE_KEY_ZOOM/LE_KEY_FIT: le_key_down()
+  /// calls Scene::set_mode(Scene::Mode::SELECT) immediately, every
+  /// call (including key-repeat - idempotent, so no special
+  /// one-shot handling is needed). See le_get_mode/le_set_mode for
+  /// the non-keyboard (Flutter UI event) path to the same state.
+  LE_KEY_SELECT_MODE(21),
+
+  /// Switch to Edit mode (UPDATES.md item 11) - same shape as
+  /// LE_KEY_SELECT_MODE, calling Scene::set_mode(Scene::Mode::EDIT).
+  /// While in Edit mode, le_mouse_up no longer changes the current
+  /// selection - see its own doc comment.
+  LE_KEY_EDIT_MODE(22);
 
   final int value;
   const LeKeyCode(this.value);
@@ -1578,6 +3687,8 @@ enum LeKeyCode {
     18 => LE_KEY_9,
     19 => LE_KEY_DESELECT_ALL,
     20 => LE_KEY_0,
+    21 => LE_KEY_SELECT_MODE,
+    22 => LE_KEY_EDIT_MODE,
     _ => throw ArgumentError('Unknown value for LeKeyCode: $value'),
   };
 }
@@ -1645,4 +3756,96 @@ final class LeProperty extends ffi.Struct {
 
   @ffi.Double()
   external double double_value;
+}
+
+/// @brief Mirrors the database's TerminalId handle - see LeLibraryId's
+/// comment for the general contract.
+final class LeTerminalId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's TerminalPortId handle - see
+/// LeLibraryId's comment for the general contract.
+final class LeTerminalPortId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ObstructionId handle - see
+/// LeLibraryId's comment for the general contract.
+final class LeObstructionId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors le::SignalDirection (generated/signal_direction.hpp)
+/// field-for-field - kept as an explicit enum (not a bare int) so a
+/// future reordering of either fails to compile instead of silently
+/// mismatching, same reasoning as LePropertyType/LeSelectionKind.
+enum LeSignalDirection {
+  LE_SIGNAL_DIRECTION_INPUT(0),
+  LE_SIGNAL_DIRECTION_OUTPUT(1),
+  LE_SIGNAL_DIRECTION_INOUT(2),
+  LE_SIGNAL_DIRECTION_NONE(3),
+  LE_SIGNAL_DIRECTION_OUTPUT_TRISTATE(4),
+  LE_SIGNAL_DIRECTION_FEEDTHRU(5);
+
+  final int value;
+  const LeSignalDirection(this.value);
+
+  static LeSignalDirection fromValue(int value) => switch (value) {
+    0 => LE_SIGNAL_DIRECTION_INPUT,
+    1 => LE_SIGNAL_DIRECTION_OUTPUT,
+    2 => LE_SIGNAL_DIRECTION_INOUT,
+    3 => LE_SIGNAL_DIRECTION_NONE,
+    4 => LE_SIGNAL_DIRECTION_OUTPUT_TRISTATE,
+    5 => LE_SIGNAL_DIRECTION_FEEDTHRU,
+    _ => throw ArgumentError('Unknown value for LeSignalDirection: $value'),
+  };
+}
+
+/// @brief Mirrors the database's ShapeId handle - see LeLibraryId's
+/// comment for the general contract.
+final class LeShapeId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief One point, in microns - `le_shape_polygon_point_at`'s and
+/// `le_shape_path_point_at`'s return type.
+final class LePointUm extends ffi.Struct {
+  @ffi.Double()
+  external double x_um;
+
+  @ffi.Double()
+  external double y_um;
+}
+
+/// @brief One rect's corners, in microns - `le_shape_rect_at`'s
+/// return type.
+final class LeRectUm extends ffi.Struct {
+  @ffi.Double()
+  external double ll_x_um;
+
+  @ffi.Double()
+  external double ll_y_um;
+
+  @ffi.Double()
+  external double ur_x_um;
+
+  @ffi.Double()
+  external double ur_y_um;
 }

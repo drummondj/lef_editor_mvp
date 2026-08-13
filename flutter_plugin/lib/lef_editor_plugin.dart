@@ -19,6 +19,9 @@ export 'lef_editor_plugin_bindings_generated.dart' show LeKeyCode;
 export 'lef_editor_plugin_bindings_generated.dart'
     show LeSelectionKind, LePropertyType;
 
+/// Re-exported for the same reason as [LeKeyCode] - see [LeEditor.mode].
+export 'lef_editor_plugin_bindings_generated.dart' show LeMode;
+
 /// Re-exported so callers get the pointer/key convenience layer
 /// (handlePointerEvent/handleKeyEvent) from the same import used for
 /// LeEditor itself - see lef_editor_input.dart.
@@ -444,6 +447,23 @@ class LeEditor {
   void setPurposeVisible(LeLayerPurpose purpose, bool visible) {
     _checkNotDisposed();
     _bindings.le_set_purpose_visible(_handle, purpose.index, visible ? 1 : 0);
+  }
+
+  /// The current interaction mode (UPDATES.md item 11). Select is the
+  /// only mode where mouse clicks/drags ([mouseDown]/[mouseUp]) change
+  /// the current selection - Edit mode restricts mouse interaction to
+  /// editing whatever is already selected (behavior TBD, a later item).
+  LeMode get mode {
+    _checkNotDisposed();
+    return LeMode.fromValue(_bindings.le_get_mode(_handle));
+  }
+
+  /// Switches the current interaction mode - see [mode]. Also reachable
+  /// via [LeEditorInput.handleKeyEvent]'s 's'/'e' shortcuts
+  /// (LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE).
+  void setMode(LeMode mode) {
+    _checkNotDisposed();
+    _bindings.le_set_mode(_handle, mode.value);
   }
 
   /// Whether every ViewLayer named [layerName] is currently selectable -

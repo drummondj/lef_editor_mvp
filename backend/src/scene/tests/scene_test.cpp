@@ -807,6 +807,22 @@ TEST(Scene, SetLayerNameSelectableAndSetPurposeSelectableDoNotBumpVisibilityVers
     EXPECT_EQ(scene.visibility_version(), 0u);
 }
 
+TEST(Scene, ModeDefaultsToSelect)
+{
+    Scene scene;
+    EXPECT_EQ(scene.mode(), Scene::Mode::SELECT);
+}
+
+TEST(Scene, SetModeChangesMode)
+{
+    Scene scene;
+    scene.set_mode(Scene::Mode::EDIT);
+    EXPECT_EQ(scene.mode(), Scene::Mode::EDIT);
+
+    scene.set_mode(Scene::Mode::SELECT);
+    EXPECT_EQ(scene.mode(), Scene::Mode::SELECT);
+}
+
 TEST(Scene, SelectDeselectAndClear)
 {
     Scene scene;
