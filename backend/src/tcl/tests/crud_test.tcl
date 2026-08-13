@@ -263,6 +263,70 @@ check "get_shapes default scope finds every Shape in the current view" {shape:0 
 
 check "get_properties on a shape token" M1 [dict get [get_properties $shape] layer_name]
 
+# --- get_properties on non-pooled object-list fields (rects/polygons/
+# paths/...) returns the full list with all coordinates, not a bare
+# "<field>_count". Shape's own rects/polygons/paths get a further,
+# hand-written override (build_shape_properties/
+# replace_shape_geometry_properties in api.cpp) on top of the generic
+# cmg-generator behavior: clean micron-converted coordinates
+# ("{{ll_x ll_y} {ur_x ur_y}}" per rect, not raw-dbu
+# "Rect{ll=Point{x=.. y=..} ..}") - the generic codegen has no
+# Technology/dbu_per_um access to do that conversion itself, so it can
+# only happen here, same as le_shape_rect_at's own dedicated accessor. ---
+
+set shape_props [get_properties $shape]
+check "get_properties rects is a clean micron-converted list, not a count" \
+    {{{2 2} {8 8}}} \
+    [dict get $shape_props rects]
+check "get_properties polygons is a clean micron-converted point list" \
+    {{{0 0} {5 0} {5 5} {0 5}}} \
+    [dict get $shape_props polygons]
+check "get_properties paths is a clean micron-converted point list plus width" \
+    {{{0 0} {10 10} {20 0} 0.500}} \
+    [dict get $shape_props paths]
+check_true "rects_count is no longer a property (removed, confusing once the list itself is available)" \
+    [expr {![dict exists $shape_props rects_count]}]
+check_true "polygons_count is no longer a property" [expr {![dict exists $shape_props polygons_count]}]
+check_true "paths_count is no longer a property" [expr {![dict exists $shape_props paths_count]}]
+# A list of a plain scalar (not an embedded Klass) is untouched - still a
+# count, since there's no per-element to_property_string() to expand into.
+check "rect_masks_count is unaffected (list of a plain int, not an object)" \
+    0 [dict get $shape_props rect_masks_count]
+
+# Two rects stay unambiguously grouped (not flattened into one 4-point
+# list) - add a second rect, then remove it again so the rest of this
+# test still sees exactly the one rect it expects below.
+check "add second shape rect return code" 0 [add_shape_rect -shape $shape -rect {10 10 20 20}]
+set two_rects [dict get [get_properties $shape] rects]
+check "get_properties rects keeps each rect as its own list element" 2 [llength $two_rects]
+check "get_properties rects first element" {{2 2} {8 8}} [lindex $two_rects 0]
+check "get_properties rects second element" {{10 10} {20 20}} [lindex $two_rects 1]
+check "remove second shape rect return code" 0 [remove_shape_rect $shape 1]
+
+# --- get_properties single-segment dot-path lookup on rects/polygons/
+# paths (get_properties $shape .rects) - a regression check for a real
+# dangling-pointer bug: le_X_property_path used to build its LeProperty
+# result from a std::optional<PropertyValue>/vector local to the
+# function, whose .c_str() pointers went stale the instant the function
+# returned. A short value ("IN0") happened to keep "working" by sheer
+# luck (still-intact bytes in the just-freed stack slot, small enough for
+# std::string's small-string optimization), which is exactly why this
+# went unnoticed until a long, heap-allocated value (a formatted rects/
+# polygons/paths coordinate list) came back corrupted instead. Fixed by
+# routing every le_X_property_path result through a handle-owned cache
+# slot (same "valid until the next call" convention every other
+# LeProperty-returning accessor here already relies on). ---
+
+check "get_properties single-segment .rects (not just the bare-token dict form)" \
+    {{{2 2} {8 8}}} [get_properties $shape .rects]
+check "get_properties single-segment .polygons" \
+    {{{0 0} {5 0} {5 5} {0 5}}} [get_properties $shape .polygons]
+check "get_properties single-segment .paths" \
+    {{{0 0} {10 10} {20 0} 0.500}} [get_properties $shape .paths]
+check "get_properties many single-segment object-list names together" \
+    [list {{{2 2} {8 8}}} {{{0 0} {5 0} {5 5} {0 5}}} {{{0 0} {10 10} {20 0} 0.500}} M1] \
+    [get_properties $shape {.rects .polygons .paths .layer_name}]
+
 check "remove_shape_rect return code" 0 [remove_shape_rect $shape 0]
 check "shape_rects after remove" {} [shape_rects $shape]
 

@@ -103,6 +103,24 @@ struct LeHandle
     le::ShapeId cached_shape_property_id{};
     std::vector<le::PropertyValue> cached_shape_properties;
 
+    // Backs every le_X_property_path function (UPDATES.md item 19.2's
+    // dot-notation/chaining follow-up). le::PropertyValue owns its own
+    // std::string storage, and the LeProperty handed back to the caller
+    // is just raw c_str() pointers into that storage (same convention as
+    // every to_c(PropertyValue) call in this file) - those pointers must
+    // point somewhere that outlives the function call, not a local
+    // std::optional<PropertyValue>/vector that gets destroyed the moment
+    // le_X_property_path returns. This single slot is that backing
+    // store, "valid until the next call" like every other single-slot
+    // cache above - confirmed the hard way: a resolved value short
+    // enough for std::string's small-string optimization ("IN0") kept
+    // "working" by accident (its bytes were still sitting, unclobbered,
+    // in the just-freed stack slot), while a longer one (a formatted
+    // rects/polygons/paths coordinate list, heap-allocated) came back
+    // corrupted, since libc++ actually reused/overwrote that freed heap
+    // block before the caller read it.
+    le::PropertyValue cached_property_path_value;
+
     // Backs le_message_count/le_message_at (UPDATES.md item 3) - every
     // error/warning/info message produced by this handle's backend
     // operations so far (currently just le_read_lef), in order, never
@@ -387,6 +405,20 @@ namespace
         return formatted.substr(0, end);
     }
 
+    // Rounds to the nearest dbu rather than truncating - a caller passing
+    // e.g. 0.1um at 1000 dbu/um should get exactly 100 dbu, not silently
+    // lose precision to a fractional-dbu rounding direction they didn't
+    // choose.
+    int64_t to_dbu(double value_um, double dbu_per_um)
+    {
+        return static_cast<int64_t>(std::llround(value_um * dbu_per_um));
+    }
+
+    double to_um(int64_t value_dbu, double dbu_per_um)
+    {
+        return static_cast<double>(value_dbu) / dbu_per_um;
+    }
+
     // Appends a single "bbox_um" row ("ll_x ll_y ur_x ur_y", space-
     // separated, matching how e.g. a LEF RECT statement itself lists four
     // coordinates) if `bbox` and `dbu_per_um` are both present - silently
@@ -490,6 +522,25 @@ namespace
         return properties;
     }
 
+    // Looks up `name` among an object's already-built to_properties()-
+    // style rows - the same rows a bare `get_properties $token` (no
+    // property name) already shows. Used by every le_X_property_path for
+    // a single-segment (non-chained) path, so a name like Shape's "rects"
+    // resolves the same way there - the -filter DSL's get_field() (what
+    // resolve_property_path() uses for everything else) only recognizes
+    // scalar leaf fields, not list-of-object fields like rects/polygons/
+    // paths, so a bare `.rects` used to fail with "unknown field" even
+    // though `get_properties $token` (no name) happily showed it.
+    std::optional<le::PropertyValue> find_property_by_name(const std::vector<le::PropertyValue> &properties, std::string_view name)
+    {
+        for (const le::PropertyValue &property : properties)
+        {
+            if (property.name == name)
+                return property;
+        }
+        return std::nullopt;
+    }
+
     // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface) -
     // unlike build_selected_object_properties above, not piece-scoped
     // (there's no click-selection concept for an arbitrary id lookup), so
@@ -565,26 +616,90 @@ namespace
         return le::to_properties(*abstract);
     }
 
+    std::string format_point_um(const le::Point &point, double dbu_per_um)
+    {
+        return format_coordinate_um(to_um(point.x, dbu_per_um)) + " " + format_coordinate_um(to_um(point.y, dbu_per_um));
+    }
+
+    std::string format_points_um(const std::vector<le::Point> &points, double dbu_per_um)
+    {
+        std::string joined;
+        for (size_t i = 0; i < points.size(); ++i)
+        {
+            if (i != 0)
+                joined += " ";
+            joined += "{" + format_point_um(points[i], dbu_per_um) + "}";
+        }
+        return joined;
+    }
+
+    // Overrides the "rects"/"polygons"/"paths" rows cmg's generically
+    // generated to_properties(ShapeData) already produced (in raw
+    // database units, via to_property_string()'s recursive
+    // "Rect{ll=Point{x=... y=...} ...}" - see UPDATES.md item 19.2's
+    // list-of-object-fields follow-up) with a clean, micron-converted
+    // coordinate listing - the generic codegen has no access to
+    // Technology's dbu_per_um (to_properties() only ever sees the bare
+    // ShapeData struct, not Root), so that conversion can only happen
+    // here, same as le_shape_rect_at/le_shape_polygon_point_at already
+    // do for their own dedicated accessors. Each element keeps its own
+    // brace grouping (one rect/polygon/path per Tcl-list element),
+    // matching the generic list-of-object convention it's replacing -
+    // only the per-element formatting changes, from
+    // "Rect{ll=Point{x=.. y=..} ur=Point{x=.. y=..} }" to
+    // "{{ll_x ll_y} {ur_x ur_y}}".
+    void replace_shape_geometry_properties(std::vector<le::PropertyValue> &properties, const le::ShapeData &shape, double dbu_per_um)
+    {
+        for (le::PropertyValue &property : properties)
+        {
+            if (property.name == "rects")
+            {
+                std::string joined;
+                for (size_t i = 0; i < shape.rects.size(); ++i)
+                {
+                    if (i != 0)
+                        joined += " ";
+                    const le::Rect &rect = shape.rects[i];
+                    joined += "{{" + format_point_um(rect.ll, dbu_per_um) + "} {" + format_point_um(rect.ur, dbu_per_um) + "}}";
+                }
+                property = le::PropertyValue::make_string("rects", joined);
+            }
+            else if (property.name == "polygons")
+            {
+                std::string joined;
+                for (size_t i = 0; i < shape.polygons.size(); ++i)
+                {
+                    if (i != 0)
+                        joined += " ";
+                    joined += "{" + format_points_um(shape.polygons[i].points, dbu_per_um) + "}";
+                }
+                property = le::PropertyValue::make_string("polygons", joined);
+            }
+            else if (property.name == "paths")
+            {
+                std::string joined;
+                for (size_t i = 0; i < shape.paths.size(); ++i)
+                {
+                    if (i != 0)
+                        joined += " ";
+                    const le::Path &path = shape.paths[i];
+                    joined += "{" + format_points_um(path.polygon.points, dbu_per_um) + " " +
+                              format_coordinate_um(to_um(static_cast<int64_t>(path.width), dbu_per_um)) + "}";
+                }
+                property = le::PropertyValue::make_string("paths", joined);
+            }
+        }
+    }
+
     std::vector<le::PropertyValue> build_shape_properties(const le::Root &root, le::ShapeId id)
     {
         const le::ShapeData *shape = root.get_shape(id);
         if (!shape)
             return {};
-        return le::to_properties(*shape);
-    }
-
-    // Rounds to the nearest dbu rather than truncating - a caller passing
-    // e.g. 0.1um at 1000 dbu/um should get exactly 100 dbu, not silently
-    // lose precision to a fractional-dbu rounding direction they didn't
-    // choose.
-    int64_t to_dbu(double value_um, double dbu_per_um)
-    {
-        return static_cast<int64_t>(std::llround(value_um * dbu_per_um));
-    }
-
-    double to_um(int64_t value_dbu, double dbu_per_um)
-    {
-        return static_cast<double>(value_dbu) / dbu_per_um;
+        std::vector<le::PropertyValue> properties = le::to_properties(*shape);
+        if (const std::optional<double> dbu_per_um = database_units_microns(root))
+            replace_shape_geometry_properties(properties, *shape, *dbu_per_um);
+        return properties;
     }
 
     // Shared by le_add_shape_polygon/le_add_shape_path - builds a Polygon
@@ -1844,21 +1959,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Terminal", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::TerminalId terminal_id = from_c(id);
         const le::TerminalData *data = handle->root.get_terminal(terminal_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_terminal_properties(handle->root, terminal_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: unknown field '{}' on Terminal", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Terminal", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, terminal_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int32_t le_library_property_count(LeHandle *handle, LeLibraryId id)
@@ -1905,21 +2033,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_library_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Library", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::LibraryId library_id = from_c(id);
         const le::LibraryData *data = handle->root.get_library(library_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_library_properties(handle->root, library_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: unknown field '{}' on Library", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Library", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, library_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int32_t le_design_property_count(LeHandle *handle, LeDesignId id)
@@ -1966,21 +2107,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_design_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Design", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::DesignId design_id = from_c(id);
         const le::DesignData *data = handle->root.get_design(design_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_design_properties(handle->root, design_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: unknown field '{}' on Design", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Design", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, design_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int32_t le_abstract_property_count(LeHandle *handle, LeAbstractId id)
@@ -2027,21 +2181,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Abstract", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::AbstractId abstract_id = from_c(id);
         const le::AbstractData *data = handle->root.get_abstract(abstract_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_abstract_properties(handle->root, abstract_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: unknown field '{}' on Abstract", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Abstract", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, abstract_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int32_t le_shape_property_count(LeHandle *handle, LeShapeId id)
@@ -2088,21 +2255,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Shape", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::ShapeId shape_id = from_c(id);
         const le::ShapeData *data = handle->root.get_shape(shape_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_shape_properties(handle->root, shape_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: unknown field '{}' on Shape", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Shape", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, shape_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name)
@@ -2288,21 +2468,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("TerminalPort", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::TerminalPortId port_id = from_c(id);
         const le::TerminalPortData *data = handle->root.get_terminal_port(port_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_terminal_port_properties(handle->root, port_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: unknown field '{}' on TerminalPort", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("TerminalPort", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, port_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id)
@@ -2461,21 +2654,34 @@ extern "C"
             handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: {}", parsed.error()));
             return invalid;
         }
-        if (auto error = validate_filter_path("Obstruction", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: {}", *error));
-            return invalid;
-        }
 
         const le::ObstructionId obstruction_id = from_c(id);
         const le::ObstructionData *data = handle->root.get_obstruction(obstruction_id);
         if (!data)
             return invalid;
 
+        if (parsed->size() == 1)
+        {
+            if (auto found = find_property_by_name(build_obstruction_properties(handle->root, obstruction_id), (*parsed)[0]))
+            {
+                handle->cached_property_path_value = std::move(*found);
+                return to_c(handle->cached_property_path_value);
+            }
+            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: unknown field '{}' on Obstruction", (*parsed)[0]));
+            return invalid;
+        }
+
+        if (auto error = validate_filter_path("Obstruction", *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: {}", *error));
+            return invalid;
+        }
+
         auto value = le::resolve_property_path(handle->root, obstruction_id, *data, *parsed);
         if (!value)
             return invalid;
-        return to_c(*value);
+        handle->cached_property_path_value = std::move(*value);
+        return to_c(handle->cached_property_path_value);
     }
 
     int le_delete_obstruction(LeHandle *handle, LeObstructionId id)
