@@ -169,6 +169,29 @@ namespace
         };
     }
 
+    // le_create_terminal/le_set_terminal_name's uniqueness enforcement -
+    // a plain O(n) linear scan over the already Abstract-scoped
+    // Root::get_abstract_terminals, not a cmg index=True lookup: a
+    // generated index=True index is flat/global (see design_by_name/
+    // library_by_name), which would be wrong here since real LEF
+    // libraries legitimately reuse pin names like VDD/IN0 across many
+    // different Abstracts - uniqueness only ever needs to hold within
+    // one Abstract. `exclude` lets le_set_terminal_name skip the
+    // Terminal being renamed itself, so renaming to its own current name
+    // is a no-op success, not a self-collision.
+    bool terminal_name_taken(const le::Root &root, le::AbstractId abstract, const std::string &name, le::TerminalId exclude = {})
+    {
+        for (const le::TerminalId id : root.get_abstract_terminals(abstract))
+        {
+            if (id == exclude)
+                continue;
+            const le::TerminalData *terminal = root.get_terminal(id);
+            if (terminal && terminal->name == name)
+                return true;
+        }
+        return false;
+    }
+
     // Single shared/global Technology, same assumption
     // le_snapped_mouse_position's own lookup makes - nullopt if none has
     // been read yet (le_read_lef) or it has no usable scale.
@@ -1370,6 +1393,12 @@ extern "C"
         if (!handle->root.get_abstract(abstract))
             return invalid;
 
+        if (terminal_name_taken(handle->root, abstract, name))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_create_terminal: a Terminal named '{}' already exists on this Abstract", name));
+            return invalid;
+        }
+
         const LeTerminalId result = to_c(handle->root.create_terminal(le::TerminalData{
             .abstract = abstract,
             .name = name,
@@ -1377,6 +1406,32 @@ extern "C"
         }));
         handle->root.bump_mutation_version();
         return result;
+    }
+
+    LeTerminalId le_terminal_by_name(LeHandle *handle, const char *name)
+    {
+        const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        for (const le::TerminalId id : handle->root.get_abstract_terminals(handle->scene.current_abstract()))
+        {
+            const le::TerminalData *terminal = handle->root.get_terminal(id);
+            if (terminal && terminal->name == name)
+                return to_c(id);
+        }
+        return invalid;
+    }
+
+    const char *le_terminal_name(LeHandle *handle, LeTerminalId id)
+    {
+        if (!handle)
+            return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::TerminalData *terminal = handle->root.get_terminal(from_c(id));
+        return terminal ? terminal->name.c_str() : nullptr;
     }
 
     int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id)
@@ -1416,9 +1471,17 @@ extern "C"
             return 1;
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
-        le::TerminalData *terminal = handle->root.get_terminal(from_c(id));
+        const le::TerminalId terminal_id = from_c(id);
+        le::TerminalData *terminal = handle->root.get_terminal(terminal_id);
         if (!terminal)
             return 1;
+
+        if (terminal_name_taken(handle->root, terminal->abstract, name, terminal_id))
+        {
+            handle->messages.push_back(fmt::format("ERROR: le_set_terminal_name: a Terminal named '{}' already exists on this Abstract", name));
+            return 1;
+        }
+
         terminal->name = name;
         handle->root.bump_mutation_version();
         return 0;

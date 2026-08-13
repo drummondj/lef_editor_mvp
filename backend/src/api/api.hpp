@@ -851,10 +851,42 @@ extern "C"
     /// other Terminal field (LEF's optional use/shape/antenna/etc.
     /// fields) defaults to its zero value; extend this function's
     /// parameter list if a real caller needs to set one at creation time
-    /// rather than via a later le_set_terminal_* call. Returns an invalid
-    /// LeTerminalId (index == UINT32_MAX) if handle or name is null, or
-    /// abstract_id doesn't name an Abstract on this handle.
+    /// rather than via a later le_set_terminal_* call. `name` must be
+    /// unique among Terminals already on `abstract_id` (a TCL script
+    /// addresses a Terminal by name - UPDATES.md's Terminal-friendly-id
+    /// item - so a collision would be genuinely ambiguous, not just
+    /// unusual; enforced by a linear scan over
+    /// Root::get_abstract_terminals, not a cmg index=True lookup, since
+    /// real LEF libraries legitimately reuse pin names like VDD/IN0
+    /// across different Abstracts and index=True's generated index is
+    /// flat/global, not per-Abstract). Returns an invalid LeTerminalId
+    /// (index == UINT32_MAX) if handle or name is null, abstract_id
+    /// doesn't name an Abstract on this handle, or name collides with an
+    /// existing Terminal on it (pushes an ERROR message the same way a
+    /// filter-expression parse error does - see le_message_count/
+    /// le_message_at).
     LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction);
+
+    /// @brief Find the Terminal named `name` (exact match) within the
+    /// currently selected Design's Abstract (see le_set_current_design/
+    /// le_set_current_design_by_id - same current-view scoping
+    /// le_get_terminals already uses). A linear scan over
+    /// Root::get_abstract_terminals, not a cmg index=True lookup - see
+    /// le_create_terminal's own comment for why. Returns an invalid
+    /// LeTerminalId (index == UINT32_MAX) if handle or name is null, no
+    /// Design is currently selected, or no Terminal in the current
+    /// Abstract has that name.
+    LeTerminalId le_terminal_by_name(LeHandle *handle, const char *name);
+
+    /// @brief The Terminal at `id`'s own name - a direct field accessor
+    /// (unlike le_terminal_property_at's stringly-typed property table),
+    /// for a caller that just wants the name itself. Returned pointer is
+    /// owned by the handle's Root - valid until the next call that
+    /// mutates this handle's Terminal pool (same convention as
+    /// le_design_name) - copy out immediately, don't hold across another
+    /// call. Returns nullptr if handle is null or id doesn't name a
+    /// Terminal on this handle.
+    const char *le_terminal_name(LeHandle *handle, LeTerminalId id);
 
     /// @brief Number of property rows for the Terminal at `id` - same
     /// name/value table shape as le_selected_object_property_at
@@ -882,9 +914,14 @@ extern "C"
     /// itself) - `name` isn't index=True so this is a direct field
     /// mutation, not a generated Root::set_terminal_name (see
     /// TCL_EXPLORATION.md's "cmg codegen design" for why only
-    /// indexed/parent fields get a generated setter). Returns 0 on
-    /// success, nonzero if handle or name is null or id doesn't name a
-    /// Terminal on this handle.
+    /// indexed/parent fields get a generated setter). Same uniqueness
+    /// enforcement as le_create_terminal, scoped to the Terminal's own
+    /// Abstract - renaming to the Terminal's own current name is a no-op
+    /// success, not a self-collision. Returns 0 on success, nonzero if
+    /// handle or name is null, id doesn't name a Terminal on this handle,
+    /// or name collides with a different Terminal already on the same
+    /// Abstract (pushes an ERROR message, same convention as
+    /// le_create_terminal).
     int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name);
 
     /// @brief Change the Terminal at `id`'s signal direction. Returns 0

@@ -60,18 +60,42 @@ if {[catch {open_design DOES_NOT_EXIST} err]} {
 # --- Terminal ---
 
 set in0 [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
-check_true "create_terminal returned a valid id" [expr {$in0 != $kInvalidId}]
+check_true "create_terminal returned a valid friendly id" [expr {$in0 ne {}}]
+check "create_terminal friendly id is name-based" terminal:IN0 $in0
 
 set out0 [create_terminal -abstract $abstract_id -name OUT0 -direction OUTPUT]
-check_true "second create_terminal returned a valid id" [expr {$out0 != $kInvalidId}]
+check_true "second create_terminal returned a valid friendly id" [expr {$out0 ne {}}]
+
+# --- Terminal-name uniqueness enforcement (UPDATES.md's friendly-id item) ---
+
+set messages_before_duplicate [message_count]
+check "create_terminal with a colliding name returns an empty id" {} \
+    [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
+check_true "create_terminal name collision pushed an error message" \
+    [expr {[message_count] > $messages_before_duplicate}]
+
+set messages_before_rename_collision [message_count]
+check "set_terminal_name to a colliding name fails" 1 [set_terminal_name $out0 IN0]
+check_true "set_terminal_name name collision pushed an error message" \
+    [expr {[message_count] > $messages_before_rename_collision}]
+check "set_terminal_name failure left OUT0 untouched" OUT0 [dict get [terminal_properties $out0] name]
 
 set props [terminal_properties $in0]
 check "terminal_properties name" IN0 [dict get $props name]
 check "terminal_properties direction" INPUT [dict get $props direction]
 
+# Renaming changes what the friendly id refers to (it *is* the name) -
+# $in0 ("terminal:IN0") goes stale the instant this succeeds; re-derive
+# it from the new name rather than assuming the old string still
+# resolves (see le_tcl_shim.hpp's own comment on set_terminal_name).
 check "set_terminal_name return code" 0 [set_terminal_name $in0 IN0_RENAMED]
+set in0 [get_terminals ".name == IN0_RENAMED"]
+check "renamed terminal is findable via its new friendly id" terminal:IN0_RENAMED $in0
 check "renamed terminal_properties name" IN0_RENAMED [dict get [terminal_properties $in0] name]
+
 check "set_terminal_name restore return code" 0 [set_terminal_name $in0 IN0]
+set in0 [get_terminals ".name == IN0"]
+check "restored terminal is findable via its restored friendly id" terminal:IN0 $in0
 
 check "set_terminal_direction return code" 0 [set_terminal_direction $in0 INOUT]
 check "changed terminal_properties direction" INOUT [dict get [terminal_properties $in0] direction]
@@ -96,10 +120,10 @@ if {[catch {get_terminals "not a filter expression"} bad_result]} {
 # --- TerminalPort + Shape (rect/polygon/path via the coordinate typemap) ---
 
 set port [create_terminal_port -terminal $in0]
-check_true "create_terminal_port returned a valid id" [expr {$port != $kInvalidId}]
+check_true "create_terminal_port returned a valid friendly id" [expr {$port ne {}}]
 
 set shape [create_terminal_port_shape -port $port -layer M1]
-check_true "create_terminal_port_shape returned a valid id" [expr {$shape != $kInvalidId}]
+check_true "create_terminal_port_shape returned a valid friendly id" [expr {$shape ne {}}]
 
 check "shape_layer_name" M1 [shape_layer_name $shape]
 check "set_shape_layer_name return code" 0 [set_shape_layer_name $shape M1]
@@ -133,7 +157,7 @@ check "shape_rects after remove" {} [shape_rects $shape]
 # --- Obstruction ---
 
 set obstruction [create_obstruction -abstract $abstract_id]
-check_true "create_obstruction returned a valid id" [expr {$obstruction != $kInvalidId}]
+check_true "create_obstruction returned a valid friendly id" [expr {$obstruction ne {}}]
 
 set obstruction_shape [create_obstruction_shape -obstruction $obstruction -layer M1]
 check "add rect to obstruction shape" 0 [add_shape_rect -shape $obstruction_shape -rect {0 0 1 1}]

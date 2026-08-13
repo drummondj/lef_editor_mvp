@@ -20,6 +20,7 @@ class _HomeState extends State<Home> {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -27,26 +28,26 @@ class _HomeState extends State<Home> {
           child: Stack(
             children: [
               Positioned(
-                top: 10,
-                left: 10,
+                left: leftWidth,
                 right: 10,
+                top: size.height - 300,
                 bottom: 10,
-                child: Terminal(),
+                child: WidgetCard(child: Terminal()),
               ),
-              // Positioned(
-              //   top: 10,
-              //   left: 10,
-              //   right: rightWidth,
-              //   bottom: 50,
-              //   child: LayoutEditor(),
-              // ),
-              // Positioned(
-              //   top: 0,
-              //   left: 0,
-              //   bottom: 0,
-              //   width: leftWidth,
-              //   child: WidgetCard(child: MainMenu()),
-              // ),
+              Positioned(
+                top: 10,
+                left: leftWidth,
+                right: 10,
+                bottom: 300,
+                child: LayoutEditor(),
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                bottom: 0,
+                width: leftWidth,
+                child: WidgetCard(child: MainMenu()),
+              ),
               // Positioned(
               //   bottom: 0,
               //   left: leftWidth,

@@ -624,19 +624,33 @@ path op literal` — `&&` binds tighter than `||`, parens override it.
    Abstract boundary — following the same shim-plus-`*_cmd`-plus-
    `le_tcl_procs.tcl` shape Phase 0 proved out.
    - **Ids cross the shim packed into a plain `long long`, not as a
-     wrapped C struct.** Every `LeXxxId` in `api.hpp` is `{uint32_t
-index, generation}` — wrapping each of the seven distinct id types
-     (`LeAbstractId`/`LeTerminalId`/`LeTerminalPortId`/`LeObstructionId`/
-     `LeShapeId`/...) would mean seven custom SWIG struct typemap pairs
-     (in + out each). Instead `le_tcl_shim.cpp` has one generic
-     `pack<IdT>`/`unpack<IdT>` pair (`generation << 32 | index`) and every
-     shim function takes/returns `long long` — a fundamental type SWIG
-     already marshals to/from a plain Tcl integer via `%include
+     wrapped C struct — for `AbstractId`/`DesignId`. Terminal/
+     TerminalPort/Obstruction/Shape were later changed to type-prefixed
+     friendly strings (see UPDATES.md's Terminal-friendly-id item,
+     below the Phase 6 section) — this bullet describes the original,
+     still-accurate-for-two-types convention.** Every `LeXxxId` in
+     `api.hpp` is `{uint32_t
+index, generation}` — wrapping each of the
+     distinct id types (`LeAbstractId`/`LeTerminalId`/`LeTerminalPortId`/
+     `LeObstructionId`/`LeShapeId`/...) would mean a custom SWIG struct
+     typemap pair (in + out each) per type. Instead `le_tcl_shim.cpp` has
+     one generic `pack<IdT>`/`unpack<IdT>` pair (`generation << 32 |
+     index`) and `design_abstract_id`/`design_by_name`/
+     `set_current_design_cmd`/`update_abstract_boundary_cmd`'s
+     `abstract_id` argument still take/return `long long` — a fundamental
+     type SWIG already marshals to/from a plain Tcl integer via `%include
 <stdint.i>`, zero custom typemap code needed. `kInvalidId`
      (`0xFFFFFFFF`, _not_ `-1`) is a plain Tcl variable set in
      `le_tcl_procs.tcl`, matching what `pack()` produces for every
      api.hpp failure path (`index == UINT32_MAX`, `generation == 0`,
-     never left uninitialized — see the "zero-init bug" note above).
+     never left uninitialized — see the "zero-init bug" note above) - now
+     only meaningful for these two types, since Terminal/TerminalPort/
+     Obstruction/Shape use an empty string `""` as their own invalid
+     sentinel instead (`pack`/`unpack` are still used *internally* for
+     TerminalPort/Obstruction/Shape's own numeric friendly-id suffix, just
+     no longer surfaced to Tcl directly as a bare integer - see
+     `le_tcl_shim.hpp`'s own "IDs" comment for the current, full
+     contract).
    - **The one real typemap this phase exists for**: a `%typemap(in)`
      in `le_api.i` converting a Tcl list of doubles directly into the
      `(const double *points_um, int32_t point_coord_count)` pairs
@@ -654,10 +668,18 @@ index, generation}` — wrapping each of the seven distinct id types
    - **Property tables and search-result lists are built in Tcl, not
      C++.** `le_tcl_shim.cpp` only exposes plain `count`+by-index
      accessors (`terminal_property_count`/`_name`/`_value`, mirroring
-     `api.hpp`'s own shape exactly) and, for search results and
-     parent→children shape lists, a space-joined string of packed ids
-     (already a well-formed Tcl list — packed ids are plain integers,
-     never containing whitespace/braces, so no escaping is needed).
+     `api.hpp`'s own shape exactly) and, for most search results and
+     parent→children shape lists, a space-joined string of friendly ids
+     (already a well-formed Tcl list, *provided* every token is
+     guaranteed whitespace/brace-free — true of `get_obstructions`/
+     `get_terminal_ports`/`terminal_port_shapes`/`obstruction_shapes`,
+     whose tokens are always purely numeric `"obstruction:N"`/`"terminal_port:N"`/
+     `"shape:N"`, but *not* true of Terminal's own friendly id, which
+     embeds its LEF-authored name — `get_terminals` is therefore built as
+     `get_terminals_cmd`/`get_terminals_at` count+by-index instead, same
+     as a property table, with the Tcl-side `get_terminals` proc doing
+     the joining via `lappend` for correct quoting; see UPDATES.md's
+     Terminal-friendly-id item and `le_tcl_shim.hpp`'s own "IDs" comment).
      `le_tcl_procs.tcl` loops over these with `dict set`/`lappend` to
      build the ergonomic dict/list a caller actually wants
      (`terminal_properties`, `shape_rects`, `shape_polygons`,

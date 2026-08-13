@@ -39,6 +39,7 @@ class _TerminalState extends State<Terminal> {
     _messageSubscription = _provider.addMessageListener((message) {
       setState(() {
         _lines.add(message);
+        _scrollToEnd();
       });
     });
   }
@@ -97,7 +98,6 @@ class _TerminalState extends State<Terminal> {
         _nextCommandNumber++;
         _running = true;
       });
-      _scrollToEnd();
 
       String result;
       try {
@@ -146,51 +146,61 @@ class _TerminalState extends State<Terminal> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      controller: _scrollController,
-      child: Column(
-        crossAxisAlignment: .stretch,
-        children: [
-          if (_lines.isNotEmpty)
-            SelectableText.rich(
-              scrollPhysics: NeverScrollableScrollPhysics(),
-              TextSpan(
-                style: DefaultTextStyle.of(context).style,
-                children: _lines
-                    .map((message) => _messageToTextSpan(message))
-                    .toList(),
-              ),
-            ),
-          Row(
-            mainAxisSize: .min,
-            children: [
-              Text("$prompt % "),
-              Expanded(
-                child: CallbackShortcuts(
-                  bindings: <ShortcutActivator, VoidCallback>{
-                    const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-                        _history(-1),
-                    const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-                        _history(1),
-                  },
-                  child: TextField(
-                    controller: _inputController,
-                    focusNode: _inputFocusNode,
-                    enabled: !_running,
-                    cursorColor: Colors.white70,
-                    cursorWidth: 10,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      border: UnderlineInputBorder(borderSide: BorderSide.none),
-                    ),
-                    style: DefaultTextStyle.of(context).style,
-                    onSubmitted: (_) => _submit(),
-                  ),
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        child: Column(
+          crossAxisAlignment: .stretch,
+          children: [
+            if (_lines.isNotEmpty)
+              SelectableText.rich(
+                scrollPhysics: NeverScrollableScrollPhysics(),
+                TextSpan(
+                  style: DefaultTextStyle.of(context).style,
+                  children: _lines
+                      .map((message) => _messageToTextSpan(message))
+                      .toList(),
                 ),
               ),
-            ],
-          ),
-        ],
+            Row(
+              mainAxisSize: .min,
+              crossAxisAlignment: .start,
+              children: [
+                Text("$prompt % "),
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: <ShortcutActivator, VoidCallback>{
+                      const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+                          _history(-1),
+                      const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+                          _history(1),
+                      const SingleActivator(LogicalKeyboardKey.enter): () =>
+                          _submit(),
+                    },
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: _inputFocusNode,
+                      enabled: !_running,
+                      cursorColor: Colors.white70,
+                      cursorWidth: 10,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: UnderlineInputBorder(
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      style: DefaultTextStyle.of(context).style,
+                      maxLines: null,
+                      onSubmitted: (_) => _submit(),
+                      textAlignVertical: .top,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

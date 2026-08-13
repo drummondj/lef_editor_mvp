@@ -87,6 +87,23 @@ proc open_design {name args} {
     return $design_id
 }
 
+# Loops get_terminals_cmd/get_terminals_at (the shim's count+by-index
+# form - see le_tcl_shim.hpp's own comment on why get_terminals_cmd/_at
+# is shaped differently from get_obstructions/get_terminal_ports) into a
+# real Tcl list via lappend, same "build lists/dicts in Tcl, not C++"
+# principle as terminal_properties below - a Terminal's friendly id
+# embeds its own LEF-authored name, so nothing rules out a name
+# containing a space or brace, and only lappend quotes that correctly by
+# construction.
+proc get_terminals {filter_expression} {
+    set count [get_terminals_cmd $filter_expression]
+    set result {}
+    for {set i 0} {$i < $count} {incr i} {
+        lappend result [get_terminals_at $i]
+    }
+    return $result
+}
+
 # --- Terminal ---
 
 proc create_terminal {args} {

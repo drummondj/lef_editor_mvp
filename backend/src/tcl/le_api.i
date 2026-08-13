@@ -14,13 +14,16 @@
 // le_<verb>_<noun> ones. le_tcl_shim.hpp/.cpp supplies both by calling
 // into api.hpp underneath a hidden process-global LeHandle*.
 //
-// Every database id (LeAbstractId, LeTerminalId, ...) crosses this
-// boundary packed into a plain `long long`, not as a wrapped C struct -
-// see le_tcl_shim.hpp's own "IDs" comment for why (avoids 7 custom
-// struct typemaps; `long long`/`int32_t` are fundamental/portable types
-// SWIG already knows how to marshal to/from a Tcl integer). This means
-// no id-related typemap is needed here at all - only the coordinate-list
-// one below.
+// AbstractId/DesignId cross this boundary packed into a plain `long
+// long`, not as a wrapped C struct - see le_tcl_shim.hpp's own "IDs"
+// comment for why (avoids custom struct typemaps; `long long`/`int32_t`
+// are fundamental/portable types SWIG already knows how to marshal
+// to/from a Tcl integer). TerminalId/TerminalPortId/ObstructionId/
+// ShapeId cross as type-prefixed `const char*` friendly strings instead
+// (`"terminal:NAME"`/`"terminal_port:N"`/`"obstruction:N"`/`"shape:N"` - see
+// le_tcl_shim.hpp's own "IDs" comment) - SWIG's built-in string typemap
+// already handles plain `const char*` params/returns, so this needs no
+// typemap of its own either - only the coordinate-list one below.
 //
 // `-flag value` commands (create_terminal, update_abstract_boundary,
 // add_shape_rect, ...) are declared here under their internal `*_cmd`
@@ -93,57 +96,58 @@ int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
 // --- Terminal ---
-long long create_terminal_cmd(long long abstract_id, const char *name, int direction);
-int terminal_property_count(long long id);
-const char *terminal_property_name(long long id, int index);
-const char *terminal_property_value(long long id, int index);
-int set_terminal_name(long long id, const char *name);
-int set_terminal_direction_cmd(long long id, int direction);
-int delete_terminal(long long id);
-const char *get_terminals(const char *filter_expression);
+const char *create_terminal_cmd(long long abstract_id, const char *name, int direction);
+int terminal_property_count(const char *id);
+const char *terminal_property_name(const char *id, int index);
+const char *terminal_property_value(const char *id, int index);
+int set_terminal_name(const char *id, const char *name);
+int set_terminal_direction_cmd(const char *id, int direction);
+int delete_terminal(const char *id);
+int get_terminals_cmd(const char *filter_expression);
+const char *get_terminals_at(int index);
 
 // --- TerminalPort ---
-long long create_terminal_port_cmd(long long terminal_id);
-int terminal_port_property_count(long long id);
-const char *terminal_port_property_name(long long id, int index);
-const char *terminal_port_property_value(long long id, int index);
-int delete_terminal_port(long long id);
+const char *create_terminal_port_cmd(const char *terminal_id);
+int terminal_port_property_count(const char *id);
+const char *terminal_port_property_name(const char *id, int index);
+const char *terminal_port_property_value(const char *id, int index);
+int delete_terminal_port(const char *id);
 const char *get_terminal_ports(const char *filter_expression);
-const char *terminal_port_shapes(long long id);
+const char *terminal_port_shapes(const char *id);
 
 // --- Obstruction ---
-long long create_obstruction_cmd(long long abstract_id);
-int obstruction_property_count(long long id);
-const char *obstruction_property_name(long long id, int index);
-const char *obstruction_property_value(long long id, int index);
-int delete_obstruction(long long id);
+const char *create_obstruction_cmd(long long abstract_id);
+int obstruction_property_count(const char *id);
+const char *obstruction_property_name(const char *id, int index);
+const char *obstruction_property_value(const char *id, int index);
+int delete_obstruction(const char *id);
 const char *get_obstructions(const char *filter_expression);
-const char *obstruction_shapes(long long id);
+const char *obstruction_shapes(const char *id);
 
 // --- Abstract boundary ---
 int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count);
 
 // --- Shape ---
-long long create_terminal_port_shape_cmd(long long port_id, const char *layer_name);
-long long create_obstruction_shape_cmd(long long obstruction_id, const char *layer_name);
-const char *shape_layer_name(long long id);
-int set_shape_layer_name(long long id, const char *layer_name);
-int delete_shape(long long id);
+const char *create_terminal_port_shape_cmd(const char *terminal_port_id, const char *layer_name);
+const char *create_obstruction_shape_cmd(const char *obstruction_id, const char *layer_name);
+const char *shape_layer_name(const char *id);
+int set_shape_layer_name(const char *id, const char *layer_name);
+int delete_shape(const char *id);
 
-int shape_rect_count(long long id);
-const char *shape_rect_at(long long id, int index);
-int add_shape_rect_cmd(long long id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
-int remove_shape_rect(long long id, int index);
+int shape_rect_count(const char *id);
+const char *shape_rect_at(const char *id, int index);
+int add_shape_rect_cmd(const char *id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
+int remove_shape_rect(const char *id, int index);
 
-int shape_polygon_count(long long id);
-int shape_polygon_point_count(long long id, int polygon_index);
-const char *shape_polygon_point_at(long long id, int polygon_index, int point_index);
-int add_shape_polygon_cmd(long long id, const double *points_um, int32_t point_coord_count);
-int remove_shape_polygon(long long id, int polygon_index);
+int shape_polygon_count(const char *id);
+int shape_polygon_point_count(const char *id, int polygon_index);
+const char *shape_polygon_point_at(const char *id, int polygon_index, int point_index);
+int add_shape_polygon_cmd(const char *id, const double *points_um, int32_t point_coord_count);
+int remove_shape_polygon(const char *id, int polygon_index);
 
-int shape_path_count(long long id);
-double shape_path_width_um(long long id, int path_index);
-int shape_path_point_count(long long id, int path_index);
-const char *shape_path_point_at(long long id, int path_index, int point_index);
-int add_shape_path_cmd(long long id, double width_um, const double *points_um, int32_t point_coord_count);
-int remove_shape_path(long long id, int path_index);
+int shape_path_count(const char *id);
+double shape_path_width_um(const char *id, int path_index);
+int shape_path_point_count(const char *id, int path_index);
+const char *shape_path_point_at(const char *id, int path_index, int point_index);
+int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
+int remove_shape_path(const char *id, int path_index);

@@ -25,16 +25,35 @@
 // real interface?" - it wasn't; Phase 0 fixed that, and every Phase 4
 // CRUD command below follows the same shape.
 //
-// --- IDs (Phase 5) ---
-// Every database id (LeAbstractId, LeTerminalId, ...) is a plain
-// {uint32_t index, generation} struct in api.hpp. Rather than write a
-// custom SWIG typemap per id type (7 of them), every id crossing this
-// shim is packed into one int64_t (generation in the high 32 bits, index
-// in the low 32 bits, via pack_id/unpack_id in le_tcl_shim.cpp) -
+// --- IDs (Phase 5, revised for friendly ids) ---
+// AbstractId/DesignId (design_abstract_id, design_by_name,
+// set_current_design_cmd, update_abstract_boundary_cmd's abstract_id
+// argument) are still a plain {uint32_t index, generation} struct in
+// api.hpp, packed into one int64_t (generation in the high 32 bits, index
+// in the low 32 bits, via pack<IdT>/unpack<IdT> in le_tcl_shim.cpp) -
 // int64_t is a fundamental type SWIG's stdint.i already marshals to/from
-// a plain Tcl integer with zero custom typemap code. kInvalidId (-1)
-// marks an invalid id, since a packed valid id (index != UINT32_MAX) can
-// never equal -1 (all 64 bits set) - see pack_id's own comment for why.
+// a plain Tcl integer with zero custom typemap code. kInvalidId
+// (0xFFFFFFFF) marks an invalid id for these two types only, since a
+// packed valid id (index != UINT32_MAX) can never equal it.
+//
+// TerminalId/TerminalPortId/ObstructionId/ShapeId cross this shim as
+// type-prefixed strings instead - not user-friendly to hand a script a
+// raw packed integer as its only handle on an object. `"terminal:<name>"`
+// (Terminal's own name field - see le_create_terminal/le_set_terminal_name's
+// new uniqueness enforcement in api.hpp, which makes a name a safe,
+// unambiguous key within one Abstract) and `"obstruction:<n>"`/
+// `"terminal_port:<n>"`/`"shape:<n>"` (Obstruction/TerminalPort/Shape have no name
+// field - `<n>` is the same packed integer as before, just type-prefixed
+// for self-description, resolved with resolve_numeric_friendly_id in
+// le_tcl_shim.cpp) are built/parsed entirely in le_tcl_shim.cpp -
+// api.hpp's own return types for these are unchanged (still typed
+// LeTerminalId/etc structs), matching this shim's usual "ergonomics stay
+// here, not in the shared C API" split. Empty string `""` is the uniform
+// "not found / invalid" signal for all four - a malformed string or a
+// wrong-type prefix (e.g. passing an `"obstruction:..."` id where a
+// `"terminal:..."` one is expected) resolves to the same invalid sentinel
+// api.hpp's own not-found paths already produce, indistinguishable from
+// "no such object" - no separate error path needed for it.
 //
 // --- Property tables and search results (Phase 5) ---
 // Deliberately NOT built as Tcl lists/dicts in C++ here - that needs
@@ -49,6 +68,15 @@
 // own design (`expr {$v + 1}` works on a numeric string exactly the same
 // as a native int), so preserving LeProperty's STRING/INT/DOUBLE tag
 // across this boundary isn't worth the extra accessors it would take.
+//
+// get_terminals is the one search-result accessor built as count+by-index
+// (get_terminals_cmd/get_terminals_at) rather than one space-joined
+// string, unlike get_obstructions/get_terminal_ports/terminal_port_shapes/
+// obstruction_shapes: a Terminal's friendly id embeds its own
+// (LEF-authored, not this project's to constrain) name, so nothing rules
+// out whitespace/braces inside a joined "terminal:..." token - the other
+// four's tokens are always purely numeric (`obstruction:N`/`terminal_port:N`/
+// `shape:N`), so they're provably safe to keep space-joining.
 
 int read_lef(const char *path);
 int design_count();
@@ -93,13 +121,15 @@ long long design_by_name(const char *name);
 /// doesn't name a Design on this session.
 int set_current_design_cmd(long long design_id);
 
-/// @brief Sentinel for "no such id" - see this header's own "IDs"
-/// comment. Every api.hpp failure path returns an id struct with
-/// index == UINT32_MAX and generation == 0 (never left uninitialized -
-/// see TCL_EXPLORATION.md's "zero-init bug" note), which pack() (in
-/// le_tcl_shim.cpp) always turns into exactly this value - not -1
-/// (0xFFFFFFFFFFFFFFFF), which would require generation == UINT32_MAX
-/// too.
+/// @brief Sentinel for "no such id" for AbstractId/DesignId - see this
+/// header's own "IDs" comment. Every api.hpp failure path for these two
+/// types returns an id struct with index == UINT32_MAX and generation ==
+/// 0 (never left uninitialized - see TCL_EXPLORATION.md's "zero-init
+/// bug" note), which pack() (in le_tcl_shim.cpp) always turns into
+/// exactly this value - not -1 (0xFFFFFFFFFFFFFFFF), which would require
+/// generation == UINT32_MAX too. Terminal/TerminalPort/Obstruction/Shape
+/// ids use an empty string ("") as their own invalid sentinel instead -
+/// see the "IDs" comment above.
 constexpr long long kInvalidId = 0xFFFFFFFFLL;
 
 /// @brief Point every subsequent shim call at an externally-owned
@@ -122,68 +152,94 @@ void set_session_handle(long long handle_address);
 /// @brief Positional form behind `create_terminal -abstract ID -name NAME
 /// -direction DIR` (see le_tcl_procs.tcl; `direction` is one of
 /// INPUT/OUTPUT/INOUT/NONE/OUTPUT_TRISTATE/FEEDTHRU, parsed to an
-/// LeSignalDirection int by the Tcl proc). Returns kInvalidId on
-/// failure.
-long long create_terminal_cmd(long long abstract_id, const char *name, int direction);
+/// LeSignalDirection int by the Tcl proc). Returns a friendly
+/// `"terminal:NAME"` id (see this header's own "IDs" comment), or "" on
+/// failure - including a NAME collision with an existing Terminal on the
+/// same Abstract (see le_create_terminal's own uniqueness comment in
+/// api.hpp; check message_count() for the pushed error).
+const char *create_terminal_cmd(long long abstract_id, const char *name, int direction);
 
-int terminal_property_count(long long id);
-const char *terminal_property_name(long long id, int index);
-const char *terminal_property_value(long long id, int index);
+int terminal_property_count(const char *id);
+const char *terminal_property_name(const char *id, int index);
+const char *terminal_property_value(const char *id, int index);
 
-int set_terminal_name(long long id, const char *name);
+/// @brief Rename the Terminal `id` refers to - note that `id` itself
+/// (`"terminal:OLDNAME"`) becomes stale/dangling the moment this
+/// succeeds, since the friendly id *is* the name; a script needs to
+/// re-derive `"terminal:NEWNAME"` (it already has NEWNAME literally) to
+/// keep addressing the same Terminal afterward. Returns nonzero on a
+/// NAME collision with a different Terminal on the same Abstract - see
+/// le_set_terminal_name's own comment in api.hpp.
+int set_terminal_name(const char *id, const char *name);
 
 /// @brief Positional form behind `set_terminal_direction $id DIRECTION`
 /// (see le_tcl_procs.tcl - DIRECTION is a name, same mapping
 /// create_terminal_cmd's own direction argument uses, not a raw int).
-int set_terminal_direction_cmd(long long id, int direction);
-int delete_terminal(long long id);
+int set_terminal_direction_cmd(const char *id, int direction);
+int delete_terminal(const char *id);
 
 /// @brief Search the Terminals belonging to the current view's Abstract
 /// (see open_design/set_current_design_cmd - UPDATES.md item 17) for
 /// `filter_expression` (see backend/src/database/filter.hpp for the
 /// grammar, or pass "*" to match every Terminal in the current view
-/// without parsing a filter expression at all) - returns a
-/// space-separated string of packed ids (already a well-formed Tcl list:
-/// packed ids are plain integers, never containing whitespace/braces, so
-/// no escaping is needed - see this header's own "property tables and
-/// search results" comment for why that's not always true elsewhere).
-/// Empty string on no match, no current design selected, or a parse
-/// error - check message_count() for a parse error same as any other
-/// backend-originated message.
-const char *get_terminals(const char *filter_expression);
+/// without parsing a filter expression at all). Returns the match count
+/// (0 on no match, no current design selected, or a null
+/// filter_expression), or -1 on a parse error (check message_count()).
+/// Read results back via get_terminals_at, same "valid until the next
+/// get_terminals_cmd call" convention as this shim's other cached-result
+/// accessors - see this header's own "IDs"/"property tables and search
+/// results" comments for why this is count+by-index rather than one
+/// joined string, unlike get_obstructions/get_terminal_ports.
+int get_terminals_cmd(const char *filter_expression);
+
+/// @brief The friendly `"terminal:NAME"` id at `index`
+/// (0..get_terminals_cmd's last return value - 1) from the most recent
+/// get_terminals_cmd call. Returns "" if index is out of range.
+const char *get_terminals_at(int index);
 
 // --- TerminalPort CRUD + search ---
 
-long long create_terminal_port_cmd(long long terminal_id);
-int terminal_port_property_count(long long id);
-const char *terminal_port_property_name(long long id, int index);
-const char *terminal_port_property_value(long long id, int index);
-int delete_terminal_port(long long id);
+/// @brief Positional form behind `create_terminal_port -terminal ID`
+/// (see le_tcl_procs.tcl). `terminal_id` is a friendly `"terminal:NAME"`
+/// id. Returns a friendly `"terminal_port:N"` id, or "" on failure.
+const char *create_terminal_port_cmd(const char *terminal_id);
+int terminal_port_property_count(const char *id);
+const char *terminal_port_property_name(const char *id, int index);
+const char *terminal_port_property_value(const char *id, int index);
+int delete_terminal_port(const char *id);
 
 /// @brief Search the TerminalPorts whose Terminal belongs to the current
-/// view's Abstract - see get_terminals' own comment for the full
-/// contract (grammar/"*"/empty-string-on-no-match), identical here, just
-/// scoped to TerminalPort.
+/// view's Abstract - see get_terminals_cmd's own comment for the filter
+/// grammar/"*"/scoping contract. Unlike get_terminals_cmd, this stays a
+/// single space-separated-string return: every token is a purely numeric
+/// `"terminal_port:N"` id, never LEF-authored text, so joining is provably safe
+/// (already a well-formed Tcl list - see this header's own "property
+/// tables and search results" comment). Empty string on no match, no
+/// current design selected, or a parse error - check message_count().
 const char *get_terminal_ports(const char *filter_expression);
 
-/// @brief Space-separated string of packed ShapeIds owned by the
-/// TerminalPort at `id` - same "already a well-formed Tcl list"
-/// reasoning as get_terminals' own comment.
-const char *terminal_port_shapes(long long id);
+/// @brief Space-separated string of friendly `"shape:N"` ids owned by
+/// the TerminalPort at `id` - same "already a well-formed Tcl list"
+/// reasoning as get_terminal_ports' own comment.
+const char *terminal_port_shapes(const char *id);
 
 // --- Obstruction CRUD + search ---
 
-long long create_obstruction_cmd(long long abstract_id);
-int obstruction_property_count(long long id);
-const char *obstruction_property_name(long long id, int index);
-const char *obstruction_property_value(long long id, int index);
-int delete_obstruction(long long id);
+/// @brief Positional form behind `create_obstruction -abstract ID` (see
+/// le_tcl_procs.tcl). Returns a friendly `"obstruction:N"` id, or "" on
+/// failure.
+const char *create_obstruction_cmd(long long abstract_id);
+int obstruction_property_count(const char *id);
+const char *obstruction_property_name(const char *id, int index);
+const char *obstruction_property_value(const char *id, int index);
+int delete_obstruction(const char *id);
 
 /// @brief Search the Obstructions belonging to the current view's
-/// Abstract - see get_terminals' own comment for the full contract,
-/// identical here, just scoped to Obstruction.
+/// Abstract - see get_terminal_ports' own comment for the full contract
+/// (grammar/"*"/space-joined-is-safe reasoning), identical here, just
+/// scoped to Obstruction; tokens are purely numeric `"obstruction:N"`.
 const char *get_obstructions(const char *filter_expression);
-const char *obstruction_shapes(long long id);
+const char *obstruction_shapes(const char *id);
 
 // --- Abstract boundary ---
 
@@ -198,30 +254,33 @@ int update_abstract_boundary_cmd(long long abstract_id, const double *points_um,
 // see TCL_EXPLORATION.md's round-7 finding: they're a Pipeline-computed
 // render-time label, never LEF-authored data) ---
 
-long long create_terminal_port_shape_cmd(long long port_id, const char *layer_name);
-long long create_obstruction_shape_cmd(long long obstruction_id, const char *layer_name);
-const char *shape_layer_name(long long id);
-int set_shape_layer_name(long long id, const char *layer_name);
-int delete_shape(long long id);
+/// @brief `terminal_port_id`/`obstruction_id` are friendly ids
+/// (`"terminal_port:N"`/`"obstruction:N"`); both return a friendly `"shape:N"` id,
+/// or "" on failure.
+const char *create_terminal_port_shape_cmd(const char *terminal_port_id, const char *layer_name);
+const char *create_obstruction_shape_cmd(const char *obstruction_id, const char *layer_name);
+const char *shape_layer_name(const char *id);
+int set_shape_layer_name(const char *id, const char *layer_name);
+int delete_shape(const char *id);
 
-int shape_rect_count(long long id);
+int shape_rect_count(const char *id);
 /// @brief The rect at `index`, as a 4-element "ll_x ll_y ur_x ur_y"
 /// microns string (already a well-formed Tcl list of 4 numbers).
-const char *shape_rect_at(long long id, int index);
-int add_shape_rect_cmd(long long id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
-int remove_shape_rect(long long id, int index);
+const char *shape_rect_at(const char *id, int index);
+int add_shape_rect_cmd(const char *id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
+int remove_shape_rect(const char *id, int index);
 
-int shape_polygon_count(long long id);
-int shape_polygon_point_count(long long id, int polygon_index);
+int shape_polygon_count(const char *id);
+int shape_polygon_point_count(const char *id, int polygon_index);
 /// @brief The point at `point_index` in the polygon at `polygon_index`,
 /// as a 2-element "x y" microns string.
-const char *shape_polygon_point_at(long long id, int polygon_index, int point_index);
-int add_shape_polygon_cmd(long long id, const double *points_um, int32_t point_coord_count);
-int remove_shape_polygon(long long id, int polygon_index);
+const char *shape_polygon_point_at(const char *id, int polygon_index, int point_index);
+int add_shape_polygon_cmd(const char *id, const double *points_um, int32_t point_coord_count);
+int remove_shape_polygon(const char *id, int polygon_index);
 
-int shape_path_count(long long id);
-double shape_path_width_um(long long id, int path_index);
-int shape_path_point_count(long long id, int path_index);
-const char *shape_path_point_at(long long id, int path_index, int point_index);
-int add_shape_path_cmd(long long id, double width_um, const double *points_um, int32_t point_coord_count);
-int remove_shape_path(long long id, int path_index);
+int shape_path_count(const char *id);
+double shape_path_width_um(const char *id, int path_index);
+int shape_path_point_count(const char *id, int path_index);
+const char *shape_path_point_at(const char *id, int path_index, int point_index);
+int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
+int remove_shape_path(const char *id, int path_index);
