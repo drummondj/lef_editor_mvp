@@ -100,3 +100,24 @@ class _HomeState extends State<Home> {
     );
   }
 }
+
+
+// TabbedViewThemeData.dark(colorSet: Colors.blueGrey)
+//           ..tab.selectedStatus.innerBottomBorder = BorderSide(
+//             color: Colors.blueAccent,
+//             width: 3,
+//           )
+//           ..tabsArea.color = Colors.black
+//           ..tab.selectedStatus.decoration = BoxDecoration(
+//             color: const Color.fromARGB(255, 35, 35, 35),
+//           )
+//           ..tab.decoration = BoxDecoration(color: Colors.black)
+//           ..contentArea.decoration = BoxDecoration(
+//             border: BoxBorder.all(
+//               color: Color.fromARGB(255, 35, 35, 35),
+//               width: 1,
+//             ),
+//           )
+//           ..contentArea.padding = EdgeInsets.all(2),
+//         child: docking,
+//       );

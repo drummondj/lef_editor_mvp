@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.20.0",
+    version="0.22.0",
     classes=[
         Klass(
             name="Technology",
@@ -56,6 +56,48 @@ schema = Schema(
                     description="Database units in microns",
                     type="double",
                     example=2000.0,
+                ),
+                Field(
+                    name="capacitance_units_pf",
+                    description="LEF UNITS CAPACITANCE PICOFARADS <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=10.0,
+                    is_optional=True,
+                ),
+                Field(
+                    name="resistance_units_ohms",
+                    description="LEF UNITS RESISTANCE OHMS <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=10000.0,
+                    is_optional=True,
+                ),
+                Field(
+                    name="power_units_mw",
+                    description="LEF UNITS POWER MILLIWATTS <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=10000.0,
+                    is_optional=True,
+                ),
+                Field(
+                    name="current_units_ma",
+                    description="LEF UNITS CURRENT MILLIAMPS <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=10000.0,
+                    is_optional=True,
+                ),
+                Field(
+                    name="voltage_units_v",
+                    description="LEF UNITS VOLTAGE VOLTS <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=1000.0,
+                    is_optional=True,
+                ),
+                Field(
+                    name="frequency_units_mhz",
+                    description="LEF UNITS FREQUENCY MEGAHERTZ <value> - unset if the LEF file never declared it",
+                    type="double",
+                    example=10.0,
+                    is_optional=True,
                 ),
                 Field(
                     name="bus_bit_chars",
@@ -685,6 +727,7 @@ schema = Schema(
                 Field(name="adjacent_cuts", description="ADJACENTCUTS count", type="int", example=3, is_optional=True),
                 Field(name="adjacent_within", description="ADJACENTCUTS ... WITHIN distance, in database units", type="int64_t", example=250, is_optional=True),
                 Field(name="adjacent_except_same_pg_net", description="ADJACENTCUTS ... EXCEPTSAMEPGNET was specified", type="bool", example=False),
+                Field(name="area", description="SPACING ... AREA value, in database units (LEF 5.7, CUT layers only)", type="int64_t", example=200000, is_optional=True),
             ],
         ),
         Klass(
@@ -708,6 +751,20 @@ schema = Schema(
                     name="polygons",
                     description="A list of polygons",
                     type="Polygon",
+                    is_list=True,
+                ),
+                Field(
+                    name="rect_masks",
+                    description="MASK color per entry of rects (LEF RECT MASK n, 5.8) - parallel array, 0 meaning no mask; empty if no rect in this layer ever set one - same convention as Shape.rect_masks",
+                    type="int",
+                    example=0,
+                    is_list=True,
+                ),
+                Field(
+                    name="polygon_masks",
+                    description="MASK color per entry of polygons (LEF POLYGON MASK n, 5.8) - parallel array, same convention as rect_masks",
+                    type="int",
+                    example=0,
                     is_list=True,
                 ),
             ],
@@ -1095,6 +1152,7 @@ schema = Schema(
                     type="int64_t",
                     example=20000,
                 ),
+                Field(name="mask", description="MASK color (5.8)", type="int", example=0, is_optional=True),
             ],
         ),
         Klass(
@@ -1131,6 +1189,7 @@ schema = Schema(
                     type="int64_t",
                     example=20000,
                 ),
+                Field(name="mask", description="MASK color (5.8)", type="int", example=0, is_optional=True),
             ],
         ),
         Klass(
@@ -1281,15 +1340,17 @@ schema = Schema(
                 ),
                 Field(
                     name="spacing",
-                    description="LEF LAYER ... SPACING (OBS/PORT minimum-spacing override), in database units - 0 means unset (deliberately not is_optional: Shape, unlike LAYER-scoped structs, is exercised by Scene/API's generic to_string()/to_properties() reporting outside io/, and cmg's generated code calls std::optional::value() unconditionally on is_optional scalars regardless of has_value() - confirmed the hard way, crashed Scene/API tests) - mutually exclusive with design_rule_width",
+                    description="LEF LAYER ... SPACING (OBS/PORT minimum-spacing override), in database units - unset (not merely 0) means the router falls back to the LAYER definition's own rules, per UPDATES.md item 12; a real 0 is a distinct, meaningful value, not a sentinel for absence. Previously a bare int64_t with 0-means-unset, before cmg's wrap_with_to_property/wrap_with_to_string were fixed to call .value_or(...) instead of unconditional .value() on an unset is_optional scalar - now safe. Mutually exclusive with design_rule_width. The vendored LEF writer (lefwMacroObsLayer/lefwMacroPinPortLayer) still can't emit a literal SPACING 0 either way - see LEFDEF_BUGS.md.",
                     type="int64_t",
-                    example=0,
+                    example=1500,
+                    is_optional=True,
                 ),
                 Field(
                     name="design_rule_width",
-                    description="LEF LAYER ... DESIGNRULEWIDTH, in database units - 0 means unset, same reasoning as spacing above",
+                    description="LEF LAYER ... DESIGNRULEWIDTH, in database units - same unset-vs-real-zero reasoning as spacing above (and the same vendored-writer limitation on writing a literal 0 - see LEFDEF_BUGS.md).",
                     type="int64_t",
-                    example=0,
+                    example=1500,
+                    is_optional=True,
                 ),
                 Field(
                     name="except_pg_net",
@@ -1318,7 +1379,7 @@ schema = Schema(
             fields=[
                 Field(name="via_name", description="The name of the via", type="str", example="VIA12"),
                 Field(name="origin", description="In database units", type="Point"),
-                Field(name="mask", description="MASK color (5.8) - the vendored writer only accepts one combined mask value even though the reader can report up to 3 (top/cut/bottom) - see write_shape_geometry's own comment", type="int", example=0, is_optional=True),
+                Field(name="mask", description="MASK color (5.8) - a combined up-to-3-digit number (top*100 + cut*10 + bottom), matching both how the vendored reader reports it (three separate topMaskNum/cutMaskNum/bottomMaskNum digits, recombined - see lef_reader.cpp's combine_via_mask) and the single combined value the vendored writer accepts back", type="int", example=0, is_optional=True),
             ],
         ),
         Klass(
@@ -1332,7 +1393,7 @@ schema = Schema(
                 Field(name="num_y", description="LEF BY m", type="int", example=2),
                 Field(name="space_x", description="LEF STEP x, in database units", type="int64_t"),
                 Field(name="space_y", description="LEF STEP y, in database units", type="int64_t"),
-                Field(name="mask", description="MASK color (5.8)", type="int", example=0, is_optional=True),
+                Field(name="mask", description="MASK color (5.8) - same combined-digit convention as ShapeVia.mask", type="int", example=0, is_optional=True),
             ],
         ),
         Klass(
@@ -1584,13 +1645,15 @@ schema = Schema(
                 ),
                 Field(
                     name="origin",
-                    description="The foreign origin",
+                    description="The foreign origin - LEF FOREIGN's point is itself optional (bare 'FOREIGN name ;' is legal), so unset here means no point was written, not (0,0)",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="orient",
-                    description="The foreign orientation",
+                    description="The foreign orientation - also optional independently of origin ('FOREIGN name ( x y ) ;' with no orientation is legal)",
                     type="Orientation",
+                    is_optional=True,
                 ),
             ],
         ),

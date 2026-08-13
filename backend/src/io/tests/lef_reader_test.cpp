@@ -290,24 +290,32 @@ TEST(LEFReaderForeignIndex, EachForeignKeepsItsOwnOriginAndOrient)
     ASSERT_EQ(abstract->foreigns.size(), 4u);
 
     const Foreign &f0 = abstract->foreigns[0]; // FOREIGN F0 ( 1 2 ) N ;
-    EXPECT_EQ(f0.origin.x, 1000);
-    EXPECT_EQ(f0.origin.y, 2000);
-    EXPECT_EQ(f0.orient, Orientation::N);
+    ASSERT_TRUE(f0.origin.has_value());
+    EXPECT_EQ(f0.origin->x, 1000);
+    EXPECT_EQ(f0.origin->y, 2000);
+    ASSERT_TRUE(f0.orient.has_value());
+    EXPECT_EQ(*f0.orient, Orientation::N);
 
     const Foreign &f1 = abstract->foreigns[1]; // FOREIGN F1 ( 3 4 ) ;
-    EXPECT_EQ(f1.origin.x, 3000);
-    EXPECT_EQ(f1.origin.y, 4000);
-    EXPECT_EQ(f1.orient, Orientation::N); // no orient specified -> default
+    ASSERT_TRUE(f1.origin.has_value());
+    EXPECT_EQ(f1.origin->x, 3000);
+    EXPECT_EQ(f1.origin->y, 4000);
+    // UPDATES.md item 12: no orient specified in the LEF source means
+    // genuinely unset now, not defaulted to N - a real ORIENT N and "no
+    // ORIENT at all" must stay distinguishable.
+    EXPECT_FALSE(f1.orient.has_value());
 
     const Foreign &f2 = abstract->foreigns[2]; // FOREIGN F2 ;
-    EXPECT_EQ(f2.origin.x, 0);
-    EXPECT_EQ(f2.origin.y, 0);
-    EXPECT_EQ(f2.orient, Orientation::N);
+    // No point in the LEF source either - unset, not (0,0).
+    EXPECT_FALSE(f2.origin.has_value());
+    EXPECT_FALSE(f2.orient.has_value());
 
     const Foreign &f3 = abstract->foreigns[3]; // FOREIGN F3 ( 5 6 ) E ;
-    EXPECT_EQ(f3.origin.x, 5000);
-    EXPECT_EQ(f3.origin.y, 6000);
-    EXPECT_EQ(f3.orient, Orientation::E);
+    ASSERT_TRUE(f3.origin.has_value());
+    EXPECT_EQ(f3.origin->x, 5000);
+    EXPECT_EQ(f3.origin->y, 6000);
+    ASSERT_TRUE(f3.orient.has_value());
+    EXPECT_EQ(*f3.orient, Orientation::E);
 }
 
 // src/lefdef/lef/TEST/complete.5.8.lef has no MACRO with an OBS on the

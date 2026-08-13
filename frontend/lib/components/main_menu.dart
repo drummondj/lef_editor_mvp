@@ -40,13 +40,13 @@ class _MainMenuState extends State<MainMenu> {
   void _loadTestData() async {
     var provider = context.read<LeProvider>();
     await provider.readLef(
-      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_tech.lef",
+      "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_tech.lef",
     );
     await provider.readLef(
-      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_stdcell.lef",
+      "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_stdcell.lef",
     );
     await provider.readLef(
-      "/Users/john/Projects/synthosilicon/layout_engine/test_data/Nangate45/fakeram45_1024x32.lef",
+      "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/fakeram45_1024x32.lef",
     );
   }
 

@@ -59,6 +59,20 @@ namespace
         spdlog::error("{}", msg);
         g_pending_lef_messages.push_back("ERROR: " + msg);
     }
+
+    // The vendored reader splits a VIA/VIA ITERATE placement's MASK digits
+    // into three separate lefiGeomVia(Iter)::topMaskNum/cutMaskNum/
+    // bottomMaskNum fields (see lefiMisc.cpp's own `topMaskNum = viaMask /
+    // 100` etc.), but the vendored writer (lefwMacroObsVia/
+    // lefwMacroPinPortVia) only ever accepts the combined 3-digit number
+    // back, not the three digits separately - this recombines them the
+    // same way the reader split them, so ShapeVia/ShapeViaIterate.mask can
+    // stay the single value the writer needs. 0 for any digit means that
+    // digit wasn't set (per-cut-layer masking is itself optional).
+    int combine_via_mask(int top, int cut, int bottom)
+    {
+        return top * 100 + cut * 10 + bottom;
+    }
 }
 
 namespace le
@@ -450,6 +464,8 @@ namespace le
                 if (lef_layer->hasSpacingAdjacentExcept(i))
                     rule.adjacent_except_same_pg_net = true;
             }
+            if (lef_layer->hasSpacingArea(i))
+                rule.area = reader->microns_to_dbu(lef_layer->spacingArea(i));
             // Read-only (see write_technology_layers's own comment on the
             // vendored writer bug - these are never written back out).
             if (lef_layer->hasSpacingNotchLength(i))
@@ -698,6 +714,21 @@ namespace le
                 }
             }
         }
+
+        auto const technology = reader->technology_;
+        if (lef_units->hasCapacitance())
+            technology->capacitance_units_pf = lef_units->capacitance();
+        if (lef_units->hasResistance())
+            technology->resistance_units_ohms = lef_units->resistance();
+        if (lef_units->hasPower())
+            technology->power_units_mw = lef_units->power();
+        if (lef_units->hasCurrent())
+            technology->current_units_ma = lef_units->current();
+        if (lef_units->hasVoltage())
+            technology->voltage_units_v = lef_units->voltage();
+        if (lef_units->hasFrequency())
+            technology->frequency_units_mhz = lef_units->frequency();
+
         return 0;
     }
 
@@ -726,14 +757,20 @@ namespace le
             auto layer = ViaLayer{.layer_name = lef_via->layerName(i)};
 
             layer.rects.reserve(static_cast<size_t>(lef_via->numRects(i)));
+            layer.rect_masks.reserve(static_cast<size_t>(lef_via->numRects(i)));
             for (int j = 0; j < lef_via->numRects(i); j++)
+            {
                 layer.rects.push_back(rect_from_parser(reader, lef_via->xl(i, j), lef_via->yl(i, j), lef_via->xh(i, j), lef_via->yh(i, j)));
+                layer.rect_masks.push_back(lef_via->rectColorMask(i, j));
+            }
 
             layer.polygons.reserve(static_cast<size_t>(lef_via->numPolygons(i)));
+            layer.polygon_masks.reserve(static_cast<size_t>(lef_via->numPolygons(i)));
             for (int j = 0; j < lef_via->numPolygons(i); j++)
             {
                 const lefiGeomPolygon poly = lef_via->getPolygon(i, j);
                 layer.polygons.push_back(polygon_from_parser(reader, poly.numPoints, poly.x, poly.y));
+                layer.polygon_masks.push_back(lef_via->polyColorMask(i, j));
             }
 
             layers.push_back(std::move(layer));
@@ -770,13 +807,9 @@ namespace le
                     .x = reader->microns_to_dbu(lef_via->foreignX()),
                     .y = reader->microns_to_dbu(lef_via->foreignY()),
                 };
-            else
-                foreign.origin = Point{0, 0};
 
             if (lef_via->hasForeignOrient())
                 foreign.orient = orientation_from_parser(lef_via->foreignOrient());
-            else
-                foreign.orient = Orientation::N;
 
             via.foreign = foreign;
         }
@@ -1048,12 +1081,8 @@ namespace le
                         .x = reader->microns_to_dbu(lef_via->foreignX()),
                         .y = reader->microns_to_dbu(lef_via->foreignY()),
                     };
-                else
-                    foreign.origin = Point{0, 0};
                 if (lef_via->hasForeignOrient())
                     foreign.orient = orientation_from_parser(lef_via->foreignOrient());
-                else
-                    foreign.orient = Orientation::N;
                 via.foreign = foreign;
             }
             via.layers = via_layers_from_parser(reader, lef_via);
@@ -1173,13 +1202,9 @@ namespace le
                     .x = reader->microns_to_dbu(lef_macro->foreignX(i)),
                     .y = reader->microns_to_dbu(lef_macro->foreignY(i)),
                 };
-            else
-                foreign.origin = Point{0, 0};
 
             if (lef_macro->hasForeignOrient(i))
                 foreign.orient = orientation_from_parser(lef_macro->foreignOrient(i));
-            else
-                foreign.orient = Orientation::N;
 
             reader->abstract_data_.foreigns.push_back(foreign);
         }
@@ -1685,13 +1710,16 @@ namespace le
                 if (safe_iteration_count(lef_rect_iter->xStart, lef_rect_iter->yStart) == 0)
                     break;
 
-                shape.value().rect_iterates.push_back(RectIterate{
+                RectIterate rect_iter{
                     .rect = rect_from_parser(reader, lef_rect_iter->xl, lef_rect_iter->yl, lef_rect_iter->xh, lef_rect_iter->yh),
                     .num_x = static_cast<int>(lef_rect_iter->xStart),
                     .num_y = static_cast<int>(lef_rect_iter->yStart),
                     .space_x = reader->microns_to_dbu(lef_rect_iter->xStep),
                     .space_y = reader->microns_to_dbu(lef_rect_iter->yStep),
-                });
+                };
+                if (lef_rect_iter->colorMask)
+                    rect_iter.mask = lef_rect_iter->colorMask;
+                shape.value().rect_iterates.push_back(std::move(rect_iter));
                 geo_count++;
                 break;
             }
@@ -1722,13 +1750,16 @@ namespace le
                     break;
 
                 auto polygon = polygon_from_parser(reader, lef_path_iter->numPoints, lef_path_iter->x, lef_path_iter->y);
-                shape.value().path_iterates.push_back(PathIterate{
+                PathIterate path_iter{
                     .path = Path{.width = width, .polygon = polygon},
                     .num_x = static_cast<int>(lef_path_iter->xStart),
                     .num_y = static_cast<int>(lef_path_iter->yStart),
                     .space_x = reader->microns_to_dbu(lef_path_iter->xStep),
                     .space_y = reader->microns_to_dbu(lef_path_iter->yStep),
-                });
+                };
+                if (lef_path_iter->colorMask)
+                    path_iter.mask = lef_path_iter->colorMask;
+                shape.value().path_iterates.push_back(std::move(path_iter));
                 geo_count++;
                 break;
             }
@@ -1821,13 +1852,8 @@ namespace le
                     .via_name = lef_via->name,
                     .origin = Point{.x = reader->microns_to_dbu(lef_via->x), .y = reader->microns_to_dbu(lef_via->y)},
                 };
-                // Only the top mask is captured - the vendored writer's
-                // own lefwMacroObsVia/lefwMacroPinPortVia accept a single
-                // combined mask parameter, not 3 distinct ones, so
-                // cutMaskNum/bottomMaskNum couldn't be round-tripped
-                // separately even if stored here.
-                if (lef_via->topMaskNum)
-                    via.mask = lef_via->topMaskNum;
+                if (lef_via->topMaskNum || lef_via->cutMaskNum || lef_via->bottomMaskNum)
+                    via.mask = combine_via_mask(lef_via->topMaskNum, lef_via->cutMaskNum, lef_via->bottomMaskNum);
                 shape.value().vias.push_back(std::move(via));
                 geo_count++;
                 break;
@@ -1851,8 +1877,8 @@ namespace le
                     .space_x = reader->microns_to_dbu(lef_via_iter->xStep),
                     .space_y = reader->microns_to_dbu(lef_via_iter->yStep),
                 };
-                if (lef_via_iter->topMaskNum)
-                    via_iter.mask = lef_via_iter->topMaskNum;
+                if (lef_via_iter->topMaskNum || lef_via_iter->cutMaskNum || lef_via_iter->bottomMaskNum)
+                    via_iter.mask = combine_via_mask(lef_via_iter->topMaskNum, lef_via_iter->cutMaskNum, lef_via_iter->bottomMaskNum);
                 shape.value().via_iterates.push_back(std::move(via_iter));
                 geo_count++;
                 break;

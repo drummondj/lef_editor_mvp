@@ -376,14 +376,30 @@ namespace le
         if (status)
             return status;
 
-        // time/capacitance/resistance/power/current/voltage are all 0
-        // (falsy) - the vendored writer skips writing a sub-statement for
-        // any falsy argument (confirmed in lefwWriter.cpp), so only
-        // DATABASE MICRONS gets written, matching what LEFReader actually
-        // reads today (UPDATES.md 12 Phase 1 scope).
-        status = lefwUnits(0, 0, 0, 0, 0, 0, technology->database_units_microns);
+        // lefwUnits skips writing a sub-statement for any falsy (0.0)
+        // argument (confirmed in lefwWriter.cpp) - value_or(0.0) is
+        // therefore exactly "omit this one if never read", not a lossy
+        // sentinel, for every field here except (in principle) a real
+        // value of exactly 0.0, which none of these units ever legitimately
+        // are. TIME isn't modeled (no LEFReader field reads it - out of
+        // this phase's scope, same as when this function only wrote
+        // DATABASE MICRONS).
+        status = lefwUnits(0,
+                            technology->capacitance_units_pf.value_or(0.0),
+                            technology->resistance_units_ohms.value_or(0.0),
+                            technology->power_units_mw.value_or(0.0),
+                            technology->current_units_ma.value_or(0.0),
+                            technology->voltage_units_v.value_or(0.0),
+                            technology->database_units_microns);
         if (status)
             return status;
+
+        if (technology->frequency_units_mhz)
+        {
+            status = lefwUnitsFrequency(*technology->frequency_units_mhz);
+            if (status)
+                return status;
+        }
 
         return lefwEndUnits();
     }
@@ -918,7 +934,7 @@ namespace le
                             return status;
                     }
 
-                    // At most one of LAYER/ADJACENTCUTS/PARALLELOVERLAP
+                    // At most one of LAYER/ADJACENTCUTS/PARALLELOVERLAP/AREA
                     // follows a CUT SPACING statement (lefwWriter.hpp's own
                     // "either this routine ... or ..." comments on each).
                     if (!rule.second_layer_name.empty())
@@ -936,6 +952,12 @@ namespace le
                     else if (rule.parallel_overlap)
                     {
                         status = lefwLayerCutSpacingParallel();
+                        if (status)
+                            return status;
+                    }
+                    else if (rule.area)
+                    {
+                        status = lefwLayerCutSpacingArea(to_microns(*rule.area, dbu_per_micron));
                         if (status)
                             return status;
                     }
@@ -1055,9 +1077,14 @@ namespace le
             if (status)
                 return status;
 
-            for (const Rect &rect : layer.rects)
+            // rect_masks is a parallel array (see Shape.rect_masks's own
+            // schema comment for the same convention) - shorter than
+            // rects, or empty, if no rect in this layer ever set a mask.
+            for (size_t i = 0; i < layer.rects.size(); i++)
             {
-                status = lefwViaLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), 0);
+                const Rect &rect = layer.rects[i];
+                const int mask = i < layer.rect_masks.size() ? layer.rect_masks[i] : 0;
+                status = lefwViaLayerRect(to_um(rect.ll.x), to_um(rect.ll.y), to_um(rect.ur.x), to_um(rect.ur.y), mask);
                 if (status)
                     return status;
             }
@@ -1074,34 +1101,42 @@ namespace le
             // via the lef_roundtrip_diff dev tool against
             // complete.5.8.lef's myVia23, which has real via-layer
             // POLYGON geometry - it made lefdiff choke partway through
-            // and silently truncate the rest of that dump). Every
+            // and silently truncate the rest of that dump, hiding every
+            // real diff after it - NONDEFAULTRULE/SITE were never
+            // actually missing, lefdiff just never got that far). Every
             // OTHER polygon writer in this file (lefwMacroPinPortLayerPolygon/
             // lefwMacroObsLayerPolygon, called from write_shape_geometry)
-            // does NOT have this bug - only the VIA-specific one does.
-            // No fixture in this codebase's own test suite exercises a
-            // multi-point VIA POLYGON, so this doesn't affect CI, but a
-            // real design with polygonal via geometry would write a
-            // corrupt, unreadable LEF file - flagging for anyone
-            // touching this path next, not fixing here (out of scope:
-            // would require patching vendored source).
-            for (const Polygon &polygon : layer.polygons)
-            {
-                std::vector<double> xs;
-                std::vector<double> ys;
-                xs.reserve(polygon.points.size());
-                ys.reserve(polygon.points.size());
-                for (const Point &point : polygon.points)
-                {
-                    xs.push_back(to_um(point.x));
-                    ys.push_back(to_um(point.y));
-                }
-                status = lefwViaLayerPolygon(static_cast<int>(xs.size()), xs.data(), ys.data(), 0);
-                if (status)
-                    return status;
-            }
+            // does NOT have this bug - only the VIA-specific one does,
+            // and there's no bug-free alternate API for it (unlike
+            // RECT, which lefwViaLayerRect still writes correctly
+            // above). Not called here - ViaLayer.polygons is read-only
+            // for VIA geometry with this vendored writer version, same
+            // "skip the call, mark read-only" treatment as this file's
+            // other unparseable-output bugs (see LEFDEF_BUGS.md).
+            // ViaLayer.polygon_masks is read (see via_layers_from_parser)
+            // for the same reason rects/rect_masks both are - the database
+            // shouldn't lose information the reader can hand it just
+            // because the writer can't use it yet - but has nowhere to go
+            // here until lefwViaLayerPolygon itself is usable.
         }
 
         return 0;
+    }
+
+    int LEFWriter::write_via_foreign(const Foreign &foreign, double dbu_per_micron)
+    {
+        // lefwViaForeignStr treats xl==0.0 && yl==0.0 as "no point" (unless
+        // orient is also set, in which case it assumes the point really is
+        // (0,0) and writes both) and an empty orient string as "no
+        // orientation" - see its own lefwWriter.cpp implementation. That
+        // convention already matches exactly what "unset" should mean here,
+        // so passing origin/orient's value_or(...) defaults straight
+        // through (rather than special-casing has_value() ourselves) is
+        // correct, not just convenient.
+        const double xl = foreign.origin ? to_microns(foreign.origin->x, dbu_per_micron) : 0.0;
+        const double yl = foreign.origin ? to_microns(foreign.origin->y, dbu_per_micron) : 0.0;
+        const std::string orient = foreign.orient ? orientation_to_string(*foreign.orient) : "";
+        return lefwViaForeignStr(foreign.name.c_str(), xl, yl, orient.c_str());
     }
 
     int LEFWriter::write_vias(const Root &root, TechnologyId technology_id)
@@ -1125,7 +1160,12 @@ namespace le
 
             if (via->foreign)
             {
-                status = lefwViaForeignStr(via->foreign->name.c_str(), to_um(via->foreign->origin.x), to_um(via->foreign->origin.y), orientation_to_string(via->foreign->orient));
+                // lefwViaForeignStr's own xl/yl/orient are each independently
+                // optional(0)/optional("") - see write_via_foreign's own
+                // comment (shared by every FOREIGN write site) for why 0.0/""
+                // is passed through untouched rather than mapped to some
+                // other sentinel.
+                status = write_via_foreign(*via->foreign, dbu_per_micron);
                 if (status)
                     return status;
             }
@@ -1394,7 +1434,7 @@ namespace le
 
                 if (via.foreign)
                 {
-                    status = lefwViaForeignStr(via.foreign->name.c_str(), to_um(via.foreign->origin.x), to_um(via.foreign->origin.y), orientation_to_string(via.foreign->orient));
+                    status = write_via_foreign(*via.foreign, dbu_per_micron);
                     if (status)
                         return status;
                 }
@@ -1480,23 +1520,29 @@ namespace le
             // complete.5.8.lef's own OBS blocks never mix the two.
             status = lefwMacroExceptPGNet(shape.layer_name.c_str());
         }
-        else if (shape.design_rule_width != 0)
+        else if (shape.design_rule_width)
         {
-            // KNOWN LIMITATION: a real DESIGNRULEWIDTH of exactly 0
-            // (complete.5.8.lef has one: "LAYER a1sig DESIGNRULEWIDTH 0")
-            // is indistinguishable from "unset" with this 0-means-unset
-            // representation (see schema.py's own field comment on why
-            // Shape.design_rule_width isn't is_optional) and falls
-            // through to the plain LAYER branch below instead - a narrow,
-            // accepted tradeoff matching several other 0-as-sentinel
-            // conventions already in this codebase.
+            // KNOWN VENDORED-WRITER GAP (see LEFDEF_BUGS.md): even though
+            // Shape.design_rule_width now correctly distinguishes "unset"
+            // from "explicitly 0" (UPDATES.md item 12 - 0 is a real,
+            // meaningful DESIGNRULEWIDTH, not a sentinel - complete.5.8.lef
+            // has one: "LAYER a1sig DESIGNRULEWIDTH 0"), the vendored
+            // lefwMacroPinPortDesignRuleWidth/lefwMacroObsDesignRuleWidth
+            // both gate on `if (width)`, so a genuine 0 still can't reach
+            // the file - not something to work around here (out of scope:
+            // would require patching vendored source).
             status = is_pin_port
-                         ? lefwMacroPinPortDesignRuleWidth(shape.layer_name.c_str(), to_um(shape.design_rule_width))
-                         : lefwMacroObsDesignRuleWidth(shape.layer_name.c_str(), to_um(shape.design_rule_width));
+                         ? lefwMacroPinPortDesignRuleWidth(shape.layer_name.c_str(), to_um(*shape.design_rule_width))
+                         : lefwMacroObsDesignRuleWidth(shape.layer_name.c_str(), to_um(*shape.design_rule_width));
         }
         else
         {
-            status = is_pin_port ? lefwMacroPinPortLayer(shape.layer_name.c_str(), to_um(shape.spacing)) : lefwMacroObsLayer(shape.layer_name.c_str(), to_um(shape.spacing));
+            // Same vendored `if (spacing)` gap as DESIGNRULEWIDTH above
+            // applies here too - an explicit SPACING 0 can't be written
+            // either, only "no SPACING clause at all" (spacing unset, the
+            // value_or(0) case) and any nonzero value.
+            const int64_t spacing_dbu = shape.spacing.value_or(0);
+            status = is_pin_port ? lefwMacroPinPortLayer(shape.layer_name.c_str(), to_um(spacing_dbu)) : lefwMacroObsLayer(shape.layer_name.c_str(), to_um(spacing_dbu));
         }
         if (status)
             return status;
@@ -1526,9 +1572,10 @@ namespace le
 
         for (const RectIterate &it : shape.rect_iterates)
         {
+            const int mask = it.mask.value_or(0);
             status = is_pin_port
-                         ? lefwMacroPinPortLayerRect(to_um(it.rect.ll.x), to_um(it.rect.ll.y), to_um(it.rect.ur.x), to_um(it.rect.ur.y), it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), 0)
-                         : lefwMacroObsLayerRect(to_um(it.rect.ll.x), to_um(it.rect.ll.y), to_um(it.rect.ur.x), to_um(it.rect.ur.y), it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), 0);
+                         ? lefwMacroPinPortLayerRect(to_um(it.rect.ll.x), to_um(it.rect.ll.y), to_um(it.rect.ur.x), to_um(it.rect.ur.y), it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), mask)
+                         : lefwMacroObsLayerRect(to_um(it.rect.ll.x), to_um(it.rect.ll.y), to_um(it.rect.ur.x), to_um(it.rect.ur.y), it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), mask);
             if (status)
                 return status;
         }
@@ -1570,7 +1617,7 @@ namespace le
 
         for (const PathIterate &it : shape.path_iterates)
         {
-            status = write_path(it.path, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), 0);
+            status = write_path(it.path, it.num_x, it.num_y, to_um(it.space_x), to_um(it.space_y), it.mask.value_or(0));
             if (status)
                 return status;
         }
@@ -1856,9 +1903,17 @@ namespace le
                 return status;
         }
 
+        // lefwMacroForeignStr's own xl/yl/orient are each independently
+        // optional(0.0)/optional("") - same convention write_via_foreign
+        // relies on for the VIA-context FOREIGN sites, just a different
+        // vendored function (a MACRO can have several FOREIGNs, a VIA only
+        // one, so there's no single shared call site to factor this into).
         for (const Foreign &foreign : abstract->foreigns)
         {
-            status = lefwMacroForeignStr(foreign.name.c_str(), to_um(foreign.origin.x), to_um(foreign.origin.y), orientation_to_string(foreign.orient));
+            const double xl = foreign.origin ? to_um(foreign.origin->x) : 0.0;
+            const double yl = foreign.origin ? to_um(foreign.origin->y) : 0.0;
+            const std::string orient = foreign.orient ? orientation_to_string(*foreign.orient) : "";
+            status = lefwMacroForeignStr(foreign.name.c_str(), xl, yl, orient.c_str());
             if (status)
                 return status;
         }

@@ -93,6 +93,15 @@ namespace le
         // numeric properties there are readable but not writable, unlike
         // every other property-carrying construct including CUT layers.
         static int write_properties(const std::vector<LefProperty> &properties, bool include_numeric = true);
+        // Shared by every VIA-context FOREIGN write site (top-level VIA,
+        // NONDEFAULTRULE-embedded VIA) - lefwViaForeignStr's own xl/yl/
+        // orient are each independently optional(0.0)/optional("") (see
+        // its own lefwWriter.hpp doc comment), matching Foreign.origin/
+        // orient now being genuinely optional (UPDATES.md item 12 - LEF's
+        // own FOREIGN grammar allows a bare "FOREIGN name ;" with no point,
+        // and a point with no orientation) - passes 0.0/"" through exactly
+        // when unset, real converted values otherwise.
+        static int write_via_foreign(const Foreign &foreign, double dbu_per_micron);
         // Shared by both the ROUTING and CUT branches of
         // write_technology_layers - lefwLayerAntennaModel/its per-field
         // siblings accept LEFW_LAYERROUTING(_START) AND LEFW_LAYER(_START)

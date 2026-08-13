@@ -32,12 +32,31 @@ affected path fails to re-parse, not just loses information.
   x1=-0.2` writes as the single unparseable token `-1-0.2`. Found via
   `complete.5.8.lef`'s `myVia23`, which has real multi-point VIA POLYGON
   geometry; made `lefdiff` choke partway through and silently truncate the
-  rest of that dump. Every *other* polygon writer in the file
-  (`lefwMacroPinPortLayerPolygon`/`lefwMacroObsLayerPolygon`) does not have
-  this bug — only the VIA-specific one does. No fixture in this project's
-  own test suite exercises a multi-point VIA POLYGON, so it doesn't affect
-  CI, but a real design with polygonal via geometry would write a corrupt
-  file.
+  rest of that dump, which hid the real diff for everything written after
+  it in the same file (NONDEFAULTRULE/SITE weren't actually missing -
+  `lefdiff` just never got that far). Every *other* polygon writer in the
+  file (`lefwMacroPinPortLayerPolygon`/`lefwMacroObsLayerPolygon`) does not
+  have this bug — only the VIA-specific one does, and there's no working
+  alternate API for it. Not called; `ViaLayer.polygons` is read-only.
+- **`lefwViaRuleLayer`/`lefwViaRuleGenLayer`** (both route through the
+  shared `lefwViaRulePrtLayer` helper) hard-reject `direction`/`overhang`/
+  `metalOverhang` with `LEFW_OBSOLETE` at `versionNum >= 5.6` — and
+  `write_lef` always writes `VERSION 5.8`, so none of the three can ever be
+  passed. But `lef.y`'s own grammar for a **non-GENERATE** `VIARULE`'s
+  `LAYER` still *requires* a `DIRECTION` construct at 5.8 regardless —
+  confirmed by re-parsing a round-tripped `complete.5.8.lef` (`VIALIST1`/
+  `VIALIST12`, both non-GENERATE): `ERROR (LEFPARS-1705): VIARULE statement
+  in a layer, requires a DIRECTION construct statement`. A genuine
+  contradiction inside the vendored library itself — the writer's own
+  version gate and the reader's own grammar disagree about whether
+  `DIRECTION` is allowed at LEF 5.8, with no version this project's writer
+  can pick that satisfies both. Non-fatal (unlike the two bugs above,
+  parsing continues past it), but it does mean every non-GENERATE
+  `VIARULE`'s `LAYER` block round-trips as a real (recoverable) parse
+  error, and `overhang`/`metal_overhang` are read-only for GENERATE
+  VIARULE layers too (ENCLOSURE, LEF 5.5's replacement, still works and is
+  written when present). Not called; `ViaRuleLayer.direction`/`overhang`/
+  `metal_overhang` are read-only at this writer version.
 - **`lefwLayerRoutingSpacingEndOfLine`** unconditionally flushes (`;\n`)
   whatever `SPACING` statement is still open *before* writing `ENDOFLINE
   ...`, producing an orphaned top-level `ENDOFLINE` statement — but
@@ -118,6 +137,27 @@ and the vendored *reader* both accept.
   misinterpreted as "open table form" (with no closing `TableEntries`
   call ever made), rather than written as `ACCURRENTDENSITY <type> 0 ;`.
   Not hit by any value in `complete.5.8.lef`; not worked around.
+- **`lefwMacroPinPortLayer`/`lefwMacroObsLayer`** (`SPACING`) and
+  **`lefwMacroPinPortDesignRuleWidth`/`lefwMacroObsDesignRuleWidth`**
+  (`DESIGNRULEWIDTH`) both gate on a bare `if (spacing)`/`if (width)` — a
+  real value of exactly `0.0` is written as if it were never passed at
+  all. Unlike the AC/DC CURRENTDENSITY entry below, this one *is* hit by
+  `complete.5.8.lef` (`LAYER a1sig DESIGNRULEWIDTH 0`/an OBS `SPACING 0`),
+  and it's the same reason a real `Shape.spacing`/`design_rule_width` of
+  `0` (UPDATES.md item 12 — the router falls back to the LAYER
+  definition's own rules only when genuinely *unset*, not when it's `0`)
+  now round-trips correctly as far as the in-memory database goes
+  (`is_optional`, no longer a 0-means-unset sentinel) but still can't
+  reach the written file when the real value happens to be `0`.
+  **`lefwMacroForeignStr`**'s point has the identical `if (xl || yl)` gate
+  (see `lefwViaForeignStr`/`lefwMacroForeignStr`'s own doc comments,
+  "optional(0)") — `complete.5.8.lef`'s `FWHSQCN690V15` has a real
+  `FOREIGN FWHSQCN690 0.00 0.00 ;`, indistinguishable at write time from
+  no point at all. All three: not called with a value that would trigger
+  the bug (0.0 is passed straight through, since that's what "omit" also
+  looks like to the caller); `Shape.spacing`/`design_rule_width` and
+  `Foreign.origin` are correctly optional in the database, but a literal
+  `0`/`(0,0)` is unwritable through these four vendored functions.
 - **`lefwLayerRoutingSpacingtableTwoWidthsWidth`** checks `if
   (runLength)` to decide whether to emit `PRL ...` at all — a real PRL of
   exactly `0.0` (present in `complete.5.8.lef`'s own `WIDTH 0.25 PRL 0.0
