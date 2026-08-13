@@ -29,6 +29,7 @@
 #include <cctype>
 #include <charconv>
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -531,6 +532,38 @@ namespace le
             return match_hop(root, id, data, path[index], [&](auto &&...target) -> bool
                               { return walk(root, target..., path, index + 1, op, literal); });
         }
+
+        // UPDATES.md item 19.2 (chained get_properties paths, e.g.
+        // `.terminal.name`) - same two-overload hop-dispatch shape as
+        // walk()/walk_leaf() above, but *resolving* a value instead of
+        // *comparing* one, so the leaf step is get_field() directly and
+        // there's no op/literal to carry through the recursion. A list
+        // hop mid-path (match_hop()'s existential "call matcher per
+        // element until one returns true" contract) naturally yields
+        // "the first element whose remaining path resolves" - the same
+        // interpretation `-filter`'s own `.shapes.layer_name == M1`
+        // already has for list hops, not a new special case.
+        template <typename RootT, typename DataT>
+        std::optional<PropertyValue> resolve_path(const RootT &root, const DataT &data, const std::vector<std::string> &path, size_t index)
+        {
+            if (index + 1 == path.size())
+                return get_field(data, path[index]);
+            std::optional<PropertyValue> result;
+            match_hop(data, path[index], [&](auto &&...target) -> bool
+                      { result = resolve_path(root, target..., path, index + 1); return result.has_value(); });
+            return result;
+        }
+
+        template <typename RootT, typename IdT, typename DataT>
+        std::optional<PropertyValue> resolve_path(const RootT &root, IdT id, const DataT &data, const std::vector<std::string> &path, size_t index)
+        {
+            if (index + 1 == path.size())
+                return get_field(data, path[index]);
+            std::optional<PropertyValue> result;
+            match_hop(root, id, data, path[index], [&](auto &&...target) -> bool
+                      { result = resolve_path(root, target..., path, index + 1); return result.has_value(); });
+            return result;
+        }
     }
 
     /// @brief Parse a filter-expression string (see this header's own
@@ -542,6 +575,43 @@ namespace le
     inline std::expected<FilterExpr, std::string> parse_filter_expression(std::string_view text)
     {
         return filter_detail::Parser(text).parse();
+    }
+
+    /// @brief Parse a property-path string (UPDATES.md item 19.2's
+    /// `get_properties`/`report_properties` - `.name`, or chained like
+    /// `.terminal.name`) into a plain segment list, or an error message.
+    /// A strict subset of the filter-expression grammar's own `path`
+    /// production (`'.' IDENT ('.' IDENT)*`, no op/literal) - reuses this
+    /// header's own Lexer directly rather than a hand-rolled string split,
+    /// so identifier rules never drift from what `-filter` itself accepts.
+    inline std::expected<std::vector<std::string>, std::string> parse_property_path(std::string_view text)
+    {
+        filter_detail::Lexer lexer(text);
+        std::vector<std::string> path;
+
+        auto token = lexer.next();
+        if (!token)
+            return std::unexpected(token.error());
+        if (token->kind != filter_detail::Token::Kind::Dot)
+            return std::unexpected("expected a property path starting with '.' at '" + token->text + "'");
+
+        while (token->kind == filter_detail::Token::Kind::Dot)
+        {
+            auto ident = lexer.next_ident();
+            if (!ident)
+                return std::unexpected(ident.error());
+            path.push_back(std::move(ident->text));
+
+            token = lexer.next();
+            if (!token)
+                return std::unexpected(token.error());
+        }
+
+        if (token->kind != filter_detail::Token::Kind::End)
+            return std::unexpected("unexpected trailing text starting at '" + token->text + "'");
+        if (path.empty())
+            return std::unexpected("empty property path");
+        return path;
     }
 
     /// @brief Evaluate a parsed filter expression against one object -
@@ -571,5 +641,28 @@ namespace le
             return filter_detail::walk(root, id, data, expr.path, 0, expr.op, expr.literal);
         }
         return false;
+    }
+
+    /// @brief Resolve a parsed property path (parse_property_path) to a
+    /// single value, starting from `id`/`data` - UPDATES.md item 19.2's
+    /// `get_properties`/`report_properties`. Walks every segment but the
+    /// last through `match_hop()` exactly like `evaluate_filter` does
+    /// (same generated per-class metadata, same list-hop-is-existential
+    /// semantics - see filter_detail::resolve_path's own comment), then
+    /// resolves the leaf via `get_field()` instead of comparing it.
+    /// Returns nullopt if `path` is empty, a hop along the way has no
+    /// target (e.g. a list hop with zero elements), or the leaf field
+    /// isn't recognized - the caller is expected to have already
+    /// validated `path`'s field/hop names are legitimate for this class
+    /// (see api.cpp's validate_filter_path) if it wants to distinguish
+    /// "structurally invalid path" from "valid path, no data" - this
+    /// function itself doesn't distinguish the two, same as get_field()/
+    /// match_hop() individually don't.
+    template <typename RootT, typename IdT, typename DataT>
+    std::optional<PropertyValue> resolve_property_path(const RootT &root, IdT id, const DataT &data, const std::vector<std::string> &path)
+    {
+        if (path.empty())
+            return std::nullopt;
+        return filter_detail::resolve_path(root, id, data, path, 0);
     }
 }

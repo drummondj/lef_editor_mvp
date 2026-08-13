@@ -10,7 +10,7 @@
 #
 # Also owns every piece of Phase 5's CRUD/search surface that's better
 # built in Tcl than in C++: property tables and search-result/shape-list
-# aggregation (terminal_properties, shape_rects, ...) loop over the
+# aggregation (properties_for_token, shape_rects, ...) loop over the
 # shim's plain count+by-index accessors and build a real Tcl dict/list
 # with `dict set`/`lappend` - correct quoting by construction, unlike
 # hand-rolled string-building in C++ (see le_tcl_shim.hpp's own
@@ -306,6 +306,128 @@ proc get_shapes {args} {
     return [lsort -unique $result]
 }
 
+# --- get_properties/report_properties (UPDATES.md item 19.2) ---
+#
+# Replaces the old per-type terminal_properties/terminal_port_properties/
+# obstruction_properties procs with one generic pair that works on any
+# friendly-id token (library:/design:/abstract:/terminal:/terminal_port:/
+# obstruction:/shape:), dispatching by the token's own prefix - nothing
+# else in this file needs a 7-way type dispatch like this, so unlike the
+# get_<type> commands above (which lean on `check_of_prefixes` matching
+# just the one-or-two prefixes each command cares about) this is its own
+# small helper.
+
+# Maps a friendly-id token to its {count name value path} shim-function
+# quadruplet - count/name/value back properties_for_token's "list
+# everything" mode, path backs get_properties' own dotted/chained
+# property-name lookups (see get_properties' own comment).
+proc property_accessors_for_token {token} {
+    if {[string match "library:*" $token]} {
+        return {library_property_count library_property_name library_property_value library_property_path}
+    } elseif {[string match "design:*" $token]} {
+        return {design_property_count design_property_name design_property_value design_property_path}
+    } elseif {[string match "abstract:*" $token]} {
+        return {abstract_property_count abstract_property_name abstract_property_value abstract_property_path}
+    } elseif {[string match "terminal_port:*" $token]} {
+        return {terminal_port_property_count terminal_port_property_name terminal_port_property_value terminal_port_property_path}
+    } elseif {[string match "terminal:*" $token]} {
+        return {terminal_property_count terminal_property_name terminal_property_value terminal_property_path}
+    } elseif {[string match "obstruction:*" $token]} {
+        return {obstruction_property_count obstruction_property_name obstruction_property_value obstruction_property_path}
+    } elseif {[string match "shape:*" $token]} {
+        return {shape_property_count shape_property_name shape_property_value shape_property_path}
+    }
+    error "get_properties: unrecognized token \"$token\" - expected a friendly id (library:/design:/abstract:/terminal:/terminal_port:/obstruction:/shape:)"
+}
+
+# All properties for one token, as a dict - the shared building block
+# behind both get_properties and report_properties.
+proc properties_for_token {token} {
+    lassign [property_accessors_for_token $token] count_cmd name_cmd value_cmd
+    set result {}
+    set n [$count_cmd $token]
+    for {set i 0} {$i < $n} {incr i} {
+        dict set result [$name_cmd $token $i] [$value_cmd $token $i]
+    }
+    return $result
+}
+
+# `tokens`/`property_names` each independently collapse from "a list" to
+# "one value" when they hold exactly one element - Tcl can't otherwise
+# distinguish a single bare token/name from a one-element list of them
+# (`terminal:IN0` literal and a one-match [get_terminals] result are
+# structurally identical), so this is the only rule that can match every
+# one of UPDATES.md item 19.2's own worked examples:
+#   get_properties [get_terminals]              -> list of dicts (many tokens)
+#   get_properties terminal:IN0 .name           -> scalar (one token, one name)
+#   get_properties terminal:IN0 {.name .direction} -> flat list (one token, many names)
+#   get_properties [get_terminals] {.name .direction} -> list of flat lists
+#
+# Each requested property name is a dotted path (`.name`, or chained
+# through a hop like `.terminal.name` - backend/src/database/filter.hpp's
+# parse_property_path/resolve_property_path grammar, the same one -filter
+# expressions already use for their own field paths) resolved via the
+# token's own *_property_path shim function - always through this path
+# mechanism, even for a plain single-segment name, rather than a separate
+# dict-lookup fast path, so chained and unchained lookups behave
+# identically. A path that fails to parse or references an unrecognized
+# field/hop pushes a message (see le_message_*) that this detects via a
+# message_count before/after diff and re-raises as a Tcl error, naming
+# the specific problem - a structurally valid path that simply has no
+# data for this object (e.g. a list hop with zero elements) pushes no
+# message and just resolves to "".
+proc get_properties {tokens {property_names {}}} {
+    set single_token [expr {[llength $tokens] == 1}]
+    set token_list [expr {$single_token ? [list $tokens] : $tokens}]
+
+    set results {}
+    foreach token $token_list {
+        if {[llength $property_names] == 0} {
+            lappend results [properties_for_token $token]
+        } else {
+            lassign [property_accessors_for_token $token] count_cmd name_cmd value_cmd path_cmd
+            set values {}
+            foreach path $property_names {
+                set messages_before [message_count]
+                set value [$path_cmd $token $path]
+                if {[message_count] > $messages_before} {
+                    error "get_properties: [message_at [expr {[message_count] - 1}]]"
+                }
+                lappend values $value
+            }
+            if {[llength $property_names] == 1} {
+                lappend results [lindex $values 0]
+            } else {
+                lappend results $values
+            }
+        }
+    }
+
+    if {$single_token} {
+        return [lindex $results 0]
+    }
+    return $results
+}
+
+# Pretty-prints every property of every token to stdout, one block per
+# token, names padded (within that token's own block) to align values.
+proc report_properties {tokens} {
+    foreach token $tokens {
+        puts $token
+        set props [properties_for_token $token]
+        set max_len 0
+        foreach name [dict keys $props] {
+            if {[string length $name] > $max_len} {
+                set max_len [string length $name]
+            }
+        }
+        dict for {name value} $props {
+            puts [format "  %-*s %s" [expr {$max_len + 1}] "${name}:" $value]
+        }
+        puts ""
+    }
+}
+
 # --- Terminal ---
 
 proc create_terminal {args} {
@@ -328,15 +450,6 @@ proc set_terminal_direction {id direction} {
     return [set_terminal_direction_cmd $id [direction_code $direction]]
 }
 
-proc terminal_properties {id} {
-    set result {}
-    set n [terminal_property_count $id]
-    for {set i 0} {$i < $n} {incr i} {
-        dict set result [terminal_property_name $id $i] [terminal_property_value $id $i]
-    }
-    return $result
-}
-
 # --- TerminalPort ---
 
 proc create_terminal_port {args} {
@@ -353,15 +466,6 @@ proc create_terminal_port {args} {
     return [create_terminal_port_cmd $opts(-terminal)]
 }
 
-proc terminal_port_properties {id} {
-    set result {}
-    set n [terminal_port_property_count $id]
-    for {set i 0} {$i < $n} {incr i} {
-        dict set result [terminal_port_property_name $id $i] [terminal_port_property_value $id $i]
-    }
-    return $result
-}
-
 # --- Obstruction ---
 
 proc create_obstruction {args} {
@@ -376,15 +480,6 @@ proc create_obstruction {args} {
         error "create_obstruction: -abstract is required"
     }
     return [create_obstruction_cmd $opts(-abstract)]
-}
-
-proc obstruction_properties {id} {
-    set result {}
-    set n [obstruction_property_count $id]
-    for {set i 0} {$i < $n} {incr i} {
-        dict set result [obstruction_property_name $id $i] [obstruction_property_value $id $i]
-    }
-    return $result
 }
 
 # --- Abstract boundary ---

@@ -78,6 +78,17 @@ if {[catch {get_abstracts -of library:testcell} err]} {
     exit 1
 }
 
+# --- Library/Design/Abstract properties (UPDATES.md item 19.2 - new
+# types, exercising get_properties beyond the Terminal-only examples in
+# the item's own text) ---
+
+check "get_properties on a library token" testcell \
+    [dict get [get_properties [get_libraries]] name]
+check "get_properties on a design token" TESTCELL \
+    [dict get [get_properties [get_designs]] name]
+check "get_properties on an abstract token" 0 \
+    [dict get [get_properties [get_abstracts]] is_fixed_mask]
+
 # --- Terminal ---
 
 set in0 [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
@@ -99,11 +110,61 @@ set messages_before_rename_collision [message_count]
 check "set_terminal_name to a colliding name fails" 1 [set_terminal_name $out0 IN0]
 check_true "set_terminal_name name collision pushed an error message" \
     [expr {[message_count] > $messages_before_rename_collision}]
-check "set_terminal_name failure left OUT0 untouched" OUT0 [dict get [terminal_properties $out0] name]
+check "set_terminal_name failure left OUT0 untouched" OUT0 [dict get [get_properties $out0] name]
 
-set props [terminal_properties $in0]
-check "terminal_properties name" IN0 [dict get $props name]
-check "terminal_properties direction" INPUT [dict get $props direction]
+set props [get_properties $in0]
+check "get_properties name" IN0 [dict get $props name]
+check "get_properties direction" INPUT [dict get $props direction]
+
+# --- get_properties/report_properties shape (UPDATES.md item 19.2) ---
+# Verifies all four of the item's own worked examples: single-token/no
+# names -> dict (above); single-token/one-name -> scalar; single-token/
+# many-names -> flat list; many-tokens/many-names -> list of flat lists.
+
+check "get_properties single token, one name -> scalar" IN0 [get_properties $in0 .name]
+check "get_properties single token, many names -> flat list" {IN0 INPUT} [get_properties $in0 {.name .direction}]
+
+set multi_props [get_properties [list $in0 $out0] {.name .direction}]
+check "get_properties many tokens, many names -> list of flat lists" \
+    [list [list IN0 INPUT] [list OUT0 OUTPUT]] $multi_props
+
+set multi_dicts [get_properties [list $in0 $out0]]
+check "get_properties many tokens, no names -> list of dicts count" 2 [llength $multi_dicts]
+check "get_properties many tokens, no names -> each entry is a dict" IN0 [dict get [lindex $multi_dicts 0] name]
+
+if {[catch {get_properties {} .name}]} {
+    puts "note: get_properties on an empty token list raised an error (acceptable, not exercised further)"
+} else {
+    check "get_properties on an empty token list returns empty" {} [get_properties {} .name]
+}
+
+if {[catch {get_properties bogus_token:1} err]} {
+    check "get_properties unrecognized token error message" \
+        "get_properties: unrecognized token \"bogus_token:1\" - expected a friendly id (library:/design:/abstract:/terminal:/terminal_port:/obstruction:/shape:)" \
+        $err
+} else {
+    puts stderr "FAIL: get_properties on an unrecognized token did not raise a Tcl error"
+    exit 1
+}
+
+if {[catch {get_properties $in0 bogus_property}]} {
+    puts "ok: get_properties with a missing leading '.' raised an error"
+} else {
+    puts stderr "FAIL: get_properties with a missing leading '.' did not raise a Tcl error"
+    exit 1
+}
+
+if {[catch {get_properties $in0 .bogus_property}]} {
+    puts "ok: get_properties with an unknown property name raised an error"
+} else {
+    puts stderr "FAIL: get_properties with an unknown property name did not raise a Tcl error"
+    exit 1
+}
+
+# report_properties doesn't return anything meaningful to assert against
+# (it prints) - just confirm it runs without error, same "prints, doesn't
+# assert exact stdout" precedent as show_gui below.
+report_properties [list $in0 $out0]
 
 # Renaming changes what the friendly id refers to (it *is* the name) -
 # $in0 ("terminal:IN0") goes stale the instant this succeeds; re-derive
@@ -112,14 +173,14 @@ check "terminal_properties direction" INPUT [dict get $props direction]
 check "set_terminal_name return code" 0 [set_terminal_name $in0 IN0_RENAMED]
 set in0 [get_terminals IN0_RENAMED]
 check "renamed terminal is findable via its new friendly id" terminal:IN0_RENAMED $in0
-check "renamed terminal_properties name" IN0_RENAMED [dict get [terminal_properties $in0] name]
+check "renamed get_properties name" IN0_RENAMED [dict get [get_properties $in0] name]
 
 check "set_terminal_name restore return code" 0 [set_terminal_name $in0 IN0]
 set in0 [get_terminals IN0]
 check "restored terminal is findable via its restored friendly id" terminal:IN0 $in0
 
 check "set_terminal_direction return code" 0 [set_terminal_direction $in0 INOUT]
-check "changed terminal_properties direction" INOUT [dict get [terminal_properties $in0] direction]
+check "changed get_properties direction" INOUT [dict get [get_properties $in0] direction]
 check "set_terminal_direction restore return code" 0 [set_terminal_direction $in0 INPUT]
 
 set matches [get_terminals IN*]
@@ -146,8 +207,27 @@ check_true "get_terminals -filter unknown-field error was logged" [expr {[messag
 set port [create_terminal_port -terminal $in0]
 check_true "create_terminal_port returned a valid friendly id" [expr {$port ne {}}]
 
+# --- get_properties chained/dot-notation paths (dot-notation follow-up to
+# item 19.2) ---
+
+check "get_properties chained path through a hop" IN0 [get_properties $port .terminal.name]
+check "get_properties chained path, many names -> flat list" {IN0 INPUT} \
+    [get_properties $port {.terminal.name .terminal.direction}]
+check "get_properties chained list-hop path before any shape exists -> empty" {} \
+    [get_properties $port .shapes.layer_name]
+
+if {[catch {get_properties $port .bogus_hop.name}]} {
+    puts "ok: get_properties with an unknown hop in a chained path raised an error"
+} else {
+    puts stderr "FAIL: get_properties with an unknown hop in a chained path did not raise a Tcl error"
+    exit 1
+}
+
 set shape [create_terminal_port_shape -port $port -layer M1]
 check_true "create_terminal_port_shape returned a valid friendly id" [expr {$shape ne {}}]
+
+check "get_properties chained list-hop path after a shape exists" M1 \
+    [get_properties $port .shapes.layer_name]
 
 check "shape_layer_name" M1 [shape_layer_name $shape]
 check "set_shape_layer_name return code" 0 [set_shape_layer_name $shape M1]
@@ -180,6 +260,8 @@ check "get_shapes -of \$port finds only the created shape" $shape [get_shapes -o
 # PIN A, which has its own Port+Shape (shape:0, created while reading
 # testcell.lef) - not just the one this test just created (shape:1).
 check "get_shapes default scope finds every Shape in the current view" {shape:0 shape:1} [get_shapes]
+
+check "get_properties on a shape token" M1 [dict get [get_properties $shape] layer_name]
 
 check "remove_shape_rect return code" 0 [remove_shape_rect $shape 0]
 check "shape_rects after remove" {} [shape_rects $shape]
@@ -215,7 +297,7 @@ check "delete_terminal (out0) return code" 0 [delete_terminal $out0]
 # The fixture's own LEF-authored PIN A is untouched by any of the above -
 # it's the only Terminal left once both terminals this test created are
 # gone.
-check "get_terminals after deleting both created terminals" A [dict get [terminal_properties [get_terminals]] name]
+check "get_terminals after deleting both created terminals" A [dict get [get_properties [get_terminals]] name]
 
 # --- Current-view scoping (UPDATES.md item 17) ---
 #
@@ -233,7 +315,7 @@ check "open_design OTHERCELL returns a friendly design id" design:OTHERCELL [ope
 
 set other_terminal_names {}
 foreach id [get_terminals] {
-    lappend other_terminal_names [dict get [terminal_properties $id] name]
+    lappend other_terminal_names [dict get [get_properties $id] name]
 }
 check "get_terminals default scope in OTHERCELL's view only sees OTHERCELL's own terminal" B $other_terminal_names
 
@@ -241,7 +323,7 @@ check "open_design TESTCELL returns a friendly design id" design:TESTCELL [open_
 
 set testcell_terminal_names {}
 foreach id [get_terminals] {
-    lappend testcell_terminal_names [dict get [terminal_properties $id] name]
+    lappend testcell_terminal_names [dict get [get_properties $id] name]
 }
 check "get_terminals default scope back in TESTCELL's view only sees TESTCELL's own terminal, not OTHERCELL's" A $testcell_terminal_names
 

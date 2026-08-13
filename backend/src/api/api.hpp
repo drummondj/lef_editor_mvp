@@ -993,6 +993,93 @@ extern "C"
     /// index is out of range.
     LeProperty le_terminal_property_at(LeHandle *handle, LeTerminalId id, int32_t index);
 
+    /// @brief Resolve a dotted property path against the Terminal at
+    /// `id` (UPDATES.md item 19.2's `get_properties`/`report_properties`
+    /// dot-notation, e.g. `.name`, or chained through a hop like
+    /// `.ports.port_class`) - see `backend/src/database/filter.hpp`'s
+    /// `parse_property_path`/`resolve_property_path` for the grammar and
+    /// resolution semantics (same `match_hop`/`get_field` machinery
+    /// `-filter` expressions already use, just resolving a value instead
+    /// of evaluating a comparison). Every segment but the last must be a
+    /// hop, the last must be a leaf field - both checked against the
+    /// same allowlist `-filter` validation uses (`validate_filter_path`
+    /// in api.cpp) before resolving, so an unrecognized field/hop name
+    /// is a real error (pushed via `le_message_count`/`le_message_at`),
+    /// not silent. Returns an all-null/zero row (LeProperty::name ==
+    /// nullptr) if handle/path is null, `path` fails to parse or
+    /// validate, id doesn't name a Terminal on this handle, or the path
+    /// is structurally valid but resolves to nothing for this specific
+    /// object (e.g. a list hop with zero elements) - the latter case
+    /// pushes no message, unlike a parse/validation failure.
+    LeProperty le_terminal_property_path(LeHandle *handle, LeTerminalId id, const char *path);
+
+    // --- Library/Design/Abstract/Shape property rows (UPDATES.md item
+    // 19.2's get_properties/report_properties) - same by-id shape as
+    // le_terminal_property_count/_at above, one pair per type. Unlike
+    // Terminal's own "port_count" (or TerminalPort/Obstruction's
+    // "shapes_count", further below), none of these four add a derived
+    // child-pool "_count" row - just cmg's generated to_properties() as-is
+    // for each type; see le_get_designs/le_get_terminals/
+    // le_get_obstructions if you need those counts instead. ---
+
+    /// @brief Number of property rows for the Library at `id`. Rows:
+    /// every plain Library field from cmg's generated to_properties()
+    /// ("name"). Returns 0 if handle is null or id doesn't name a Library
+    /// on this handle.
+    int32_t le_library_property_count(LeHandle *handle, LeLibraryId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_library_property_count(id)-1) for the Library at `id`.
+    /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+    /// handle is null, id doesn't name a Library on this handle, or index
+    /// is out of range.
+    LeProperty le_library_property_at(LeHandle *handle, LeLibraryId id, int32_t index);
+
+    /// @brief Resolve a dotted property path against the Library at
+    /// `id` (e.g. `.name`, or chained through a hop like
+    /// `.designs.name`) - see le_terminal_property_path's own comment
+    /// for the full grammar/validation/error contract.
+    LeProperty le_library_property_path(LeHandle *handle, LeLibraryId id, const char *path);
+
+    /// @brief Number of property rows for the Design at `id`. Rows: every
+    /// plain Design field from cmg's generated to_properties() ("name").
+    /// Returns 0 if handle is null or id doesn't name a Design on this
+    /// handle.
+    int32_t le_design_property_count(LeHandle *handle, LeDesignId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_design_property_count(id)-1) for the Design at `id`.
+    /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+    /// handle is null, id doesn't name a Design on this handle, or index
+    /// is out of range.
+    LeProperty le_design_property_at(LeHandle *handle, LeDesignId id, int32_t index);
+
+    /// @brief Resolve a dotted property path against the Design at
+    /// `id` (e.g. `.name`, or chained through a hop like
+    /// `.library.name`) - see le_terminal_property_path's own comment
+    /// for the full grammar/validation/error contract.
+    LeProperty le_design_property_path(LeHandle *handle, LeDesignId id, const char *path);
+
+    /// @brief Number of property rows for the Abstract at `id`. Rows:
+    /// every plain Abstract field from cmg's generated to_properties()
+    /// ("type", "size", "origin", ..., plus its own list-field "_count"
+    /// rows like "boundary_count"). Returns 0 if handle is null or id
+    /// doesn't name an Abstract on this handle.
+    int32_t le_abstract_property_count(LeHandle *handle, LeAbstractId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_abstract_property_count(id)-1) for the Abstract at `id`.
+    /// Returns an all-null/zero row (LeProperty::name == nullptr) if
+    /// handle is null, id doesn't name an Abstract on this handle, or
+    /// index is out of range.
+    LeProperty le_abstract_property_at(LeHandle *handle, LeAbstractId id, int32_t index);
+
+    /// @brief Resolve a dotted property path against the Abstract at
+    /// `id` (e.g. `.type`, or chained through a hop like
+    /// `.design.name`) - see le_terminal_property_path's own comment
+    /// for the full grammar/validation/error contract.
+    LeProperty le_abstract_property_path(LeHandle *handle, LeAbstractId id, const char *path);
+
     /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
     /// `update_terminal_port -name ...` pattern, applied to Terminal
     /// itself) - `name` isn't index=True so this is a direct field
@@ -1105,6 +1192,12 @@ extern "C"
     /// or index is out of range.
     LeProperty le_terminal_port_property_at(LeHandle *handle, LeTerminalPortId id, int32_t index);
 
+    /// @brief Resolve a dotted property path against the TerminalPort at
+    /// `id` (e.g. `.port_class`, or chained through a hop like
+    /// `.terminal.name`) - see le_terminal_property_path's own comment
+    /// for the full grammar/validation/error contract.
+    LeProperty le_terminal_port_property_path(LeHandle *handle, LeTerminalPortId id, const char *path);
+
     /// @brief Delete the TerminalPort at `id`, cascading to every Shape
     /// it owns first - same reasoning as le_delete_terminal's own cascade
     /// to TerminalPorts (see its doc comment): a Shape is pooled
@@ -1159,6 +1252,14 @@ extern "C"
     /// if handle is null, id doesn't name an Obstruction on this handle,
     /// or index is out of range.
     LeProperty le_obstruction_property_at(LeHandle *handle, LeObstructionId id, int32_t index);
+
+    /// @brief Resolve a dotted property path against the Obstruction at
+    /// `id` - Obstruction itself has no leaf scalar fields (see
+    /// api.cpp's filter_field_tables), so every valid path here is
+    /// chained through a hop, e.g. `.shapes.layer_name`. See
+    /// le_terminal_property_path's own comment for the full grammar/
+    /// validation/error contract.
+    LeProperty le_obstruction_property_path(LeHandle *handle, LeObstructionId id, const char *path);
 
     /// @brief Delete the Obstruction at `id`, cascading to every Shape it
     /// owns first - same reasoning as le_delete_terminal_port. Returns 0
@@ -1286,6 +1387,32 @@ extern "C"
     /// @brief The LeShapeId at `index` from the most recent le_get_shapes
     /// call - see le_search_result_library_at's own contract.
     LeShapeId le_search_result_shape_at(LeHandle *handle, int32_t index);
+
+    /// @brief Number of property rows for the Shape at `id` (UPDATES.md
+    /// item 19.2 - same by-id shape as le_terminal_property_count/_at and
+    /// its Library/Design/Abstract siblings above). Rows: every plain
+    /// Shape field from cmg's generated to_properties() ("layer_name",
+    /// "spacing", ..., plus its own list-field "_count" rows like
+    /// "rects_count"). Shape has no children (the leaf of the
+    /// Library->Design->Abstract->{Terminal->TerminalPort,Obstruction}->
+    /// Shape hierarchy), so unlike TerminalPort/Obstruction there's no
+    /// derived child-pool "_count" row this function could even add.
+    /// Returns 0 if handle is null or id doesn't name a Shape on this
+    /// handle.
+    int32_t le_shape_property_count(LeHandle *handle, LeShapeId id);
+
+    /// @brief The property row at `index`
+    /// (0..le_shape_property_count(id)-1) for the Shape at `id`. Returns
+    /// an all-null/zero row (LeProperty::name == nullptr) if handle is
+    /// null, id doesn't name a Shape on this handle, or index is out of
+    /// range.
+    LeProperty le_shape_property_at(LeHandle *handle, LeShapeId id, int32_t index);
+
+    /// @brief Resolve a dotted property path against the Shape at `id`
+    /// (e.g. `.layer_name`, or chained through a hop like
+    /// `.terminal_port.terminal.name`) - see le_terminal_property_path's
+    /// own comment for the full grammar/validation/error contract.
+    LeProperty le_shape_property_path(LeHandle *handle, LeShapeId id, const char *path);
 
     /// @brief Number of shapes owned by the TerminalPort at `id` -
     /// indexes `le_terminal_port_shape_at`'s own `index` parameter,

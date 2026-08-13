@@ -357,6 +357,93 @@ const char *terminal_property_value(const char *id, int index)
     return return_string(format_property_value(le_terminal_property_at(session(), resolve_terminal_id(id), index)));
 }
 
+const char *terminal_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_terminal_property_path(session(), resolve_terminal_id(id), path)));
+}
+
+// --- Library/Design/Abstract/Shape property rows (UPDATES.md item 19.2) ---
+
+int library_property_count(const char *id)
+{
+    return le_library_property_count(session(), resolve_library_id(id));
+}
+
+const char *library_property_name(const char *id, int index)
+{
+    return le_library_property_at(session(), resolve_library_id(id), index).name;
+}
+
+const char *library_property_value(const char *id, int index)
+{
+    return return_string(format_property_value(le_library_property_at(session(), resolve_library_id(id), index)));
+}
+
+const char *library_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_library_property_path(session(), resolve_library_id(id), path)));
+}
+
+int design_property_count(const char *id)
+{
+    return le_design_property_count(session(), resolve_design_id(id));
+}
+
+const char *design_property_name(const char *id, int index)
+{
+    return le_design_property_at(session(), resolve_design_id(id), index).name;
+}
+
+const char *design_property_value(const char *id, int index)
+{
+    return return_string(format_property_value(le_design_property_at(session(), resolve_design_id(id), index)));
+}
+
+const char *design_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_design_property_path(session(), resolve_design_id(id), path)));
+}
+
+int abstract_property_count(const char *id)
+{
+    return le_abstract_property_count(session(), resolve_abstract_id(id));
+}
+
+const char *abstract_property_name(const char *id, int index)
+{
+    return le_abstract_property_at(session(), resolve_abstract_id(id), index).name;
+}
+
+const char *abstract_property_value(const char *id, int index)
+{
+    return return_string(format_property_value(le_abstract_property_at(session(), resolve_abstract_id(id), index)));
+}
+
+const char *abstract_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_abstract_property_path(session(), resolve_abstract_id(id), path)));
+}
+
+int shape_property_count(const char *id)
+{
+    return le_shape_property_count(session(), resolve_shape_id(id));
+}
+
+const char *shape_property_name(const char *id, int index)
+{
+    return le_shape_property_at(session(), resolve_shape_id(id), index).name;
+}
+
+const char *shape_property_value(const char *id, int index)
+{
+    return return_string(format_property_value(le_shape_property_at(session(), resolve_shape_id(id), index)));
+}
+
+const char *shape_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_shape_property_path(session(), resolve_shape_id(id), path)));
+}
+
 int set_terminal_name(const char *id, const char *name)
 {
     return le_set_terminal_name(session(), resolve_terminal_id(id), name);
@@ -411,6 +498,11 @@ const char *terminal_port_property_name(const char *id, int index)
 const char *terminal_port_property_value(const char *id, int index)
 {
     return return_string(format_property_value(le_terminal_port_property_at(session(), resolve_terminal_port_id(id), index)));
+}
+
+const char *terminal_port_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_terminal_port_property_path(session(), resolve_terminal_port_id(id), path)));
 }
 
 int delete_terminal_port(const char *id)
@@ -471,6 +563,11 @@ const char *obstruction_property_name(const char *id, int index)
 const char *obstruction_property_value(const char *id, int index)
 {
     return return_string(format_property_value(le_obstruction_property_at(session(), resolve_obstruction_id(id), index)));
+}
+
+const char *obstruction_property_path(const char *id, const char *path)
+{
+    return return_string(format_property_value(le_obstruction_property_path(session(), resolve_obstruction_id(id), path)));
 }
 
 int delete_obstruction(const char *id)

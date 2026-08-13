@@ -93,7 +93,9 @@
 // correctly by construction) and error-prone to hand-roll in C++. This
 // shim only exposes count+by-index accessors, mirroring api.hpp's own
 // shape exactly; le_tcl_procs.tcl loops over them to build the ergonomic
-// dict/list a real Tcl caller wants (see e.g. `terminal_properties`).
+// dict/list a real Tcl caller wants (see e.g. `properties_for_token`,
+// UPDATES.md item 19.2's shared helper behind `get_properties`/
+// `report_properties`).
 // Every property value is exposed pre-stringified (`*_property_value`),
 // not int/double/string-tagged - Tcl is "everything is a string" by its
 // own design (`expr {$v + 1}` works on a numeric string exactly the same
@@ -233,6 +235,41 @@ int terminal_property_count(const char *id);
 const char *terminal_property_name(const char *id, int index);
 const char *terminal_property_value(const char *id, int index);
 
+/// @brief Resolve a dotted property path (e.g. "." + "name", or chained
+/// like ".ports.port_class") against the Terminal `id` refers to - see
+/// backend/src/database/filter.hpp's parse_property_path/
+/// resolve_property_path for the grammar, and le_terminal_property_path's
+/// own api.hpp comment for the full validation/error contract. Returns ""
+/// on any failure (malformed/unrecognized path - check message_count() -
+/// or a structurally valid path with no data for this object, silent).
+const char *terminal_property_path(const char *id, const char *path);
+
+// --- Library/Design/Abstract/Shape property rows (UPDATES.md item 19.2 -
+// get_properties/report_properties in le_tcl_procs.tcl dispatch across
+// all seven property-count/name/value/path quadruplets by token prefix;
+// these four plus terminal_property_*/terminal_port_property_*/
+// obstruction_property_* below are never called directly by a script). ---
+
+int library_property_count(const char *id);
+const char *library_property_name(const char *id, int index);
+const char *library_property_value(const char *id, int index);
+const char *library_property_path(const char *id, const char *path);
+
+int design_property_count(const char *id);
+const char *design_property_name(const char *id, int index);
+const char *design_property_value(const char *id, int index);
+const char *design_property_path(const char *id, const char *path);
+
+int abstract_property_count(const char *id);
+const char *abstract_property_name(const char *id, int index);
+const char *abstract_property_value(const char *id, int index);
+const char *abstract_property_path(const char *id, const char *path);
+
+int shape_property_count(const char *id);
+const char *shape_property_name(const char *id, int index);
+const char *shape_property_value(const char *id, int index);
+const char *shape_property_path(const char *id, const char *path);
+
 /// @brief Rename the Terminal `id` refers to - note that `id` itself
 /// (`"terminal:OLDNAME"`) becomes stale/dangling the moment this
 /// succeeds, since the friendly id *is* the name; a script needs to
@@ -273,6 +310,7 @@ const char *create_terminal_port_cmd(const char *terminal_id);
 int terminal_port_property_count(const char *id);
 const char *terminal_port_property_name(const char *id, int index);
 const char *terminal_port_property_value(const char *id, int index);
+const char *terminal_port_property_path(const char *id, const char *path);
 int delete_terminal_port(const char *id);
 
 /// @brief Search TerminalPorts. `of_terminal_token` (a friendly
@@ -300,6 +338,7 @@ const char *create_obstruction_cmd(long long abstract_id);
 int obstruction_property_count(const char *id);
 const char *obstruction_property_name(const char *id, int index);
 const char *obstruction_property_value(const char *id, int index);
+const char *obstruction_property_path(const char *id, const char *path);
 int delete_obstruction(const char *id);
 
 /// @brief Search Obstructions. `of_abstract_token` (a friendly

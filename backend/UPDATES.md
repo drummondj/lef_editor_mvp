@@ -356,7 +356,7 @@ See `src/tcl/tests/crud_test.tcl` for the full regression coverage, including th
 
 ## 19.2 Properties
 
-Instead of individual commands for listing properties I would like the following command to get properties using tokens:
+Instead of individual commands for listing properties (please remove them) I would like the following command to get properties using tokens:
 
 - get_properties <list of tokens> [<property names>] : Returns a list of properties for the specified tokens
 
@@ -368,7 +368,7 @@ Return a list all terminal properies, returns list of dict:
 get_properties [get_terminals] -> { {name IN0 direction INPUT } { name OUT1 direction OUTPUT} ...}
 ```
 
-Get a property value:
+Get a single property value:
 
 ```
 get_properties terminal:IN0 name -> IN0
@@ -383,7 +383,7 @@ get_properties terminal:IN0 {name direction} -> {IN0 INPUT}
 Get multiple properties for mutlple objects (returns list of list):
 
 ```
-get_properties [get_terminals] {name direction} -> { {IN0 INPUT } { OUT1 OUTPUT} ...}
+get_properties [get_terminals] {name direction} -> { {IN0 INPUT} { OUT1 OUTPUT} ...}
 ```
 
 Then another command to report properties to stdout in a human readable format:
@@ -409,3 +409,11 @@ terminal:OUT0
 ```
 
 NOTE: property names must be padded to align values.
+
+**Resolution**: `terminal_properties`/`terminal_port_properties`/`obstruction_properties` are removed. `get_properties`/`report_properties` work on any friendly-id token from the item 19.1 `get_<type>` family - Library/Design/Abstract/Terminal/TerminalPort/Obstruction/Shape - dispatched by the token's own prefix (`property_accessors_for_token` in `le_tcl_procs.tcl`). `get_properties`'s return shape is decided purely by whether `tokens`/`property names` each hold one element or many (Tcl can't otherwise distinguish a bare token from a one-element list of tokens) - verified against all four of this item's own worked examples character-for-character. `report_properties`'s padding is computed per token block (the longest property name in that specific token's own property set), matching the example output exactly.
+
+Backing this required four new `le_X_property_count`/`_at` pairs in `api.hpp`/`api.cpp` (Library/Design/Abstract/Shape - Terminal/TerminalPort/Obstruction already had theirs), each a thin wrapper over `cmg`'s generated `to_properties()` with no hand-appended child-pool count row (unlike Terminal's `port_count`/TerminalPort's and Obstruction's `shapes_count` - not extended to the new types since this item asked for a unified listing mechanism, not new fields).
+
+**Follow-up (dot notation + chaining)**: `get_properties`'s property-name argument now takes the same dotted path syntax as `-filter` (item 15) instead of a bare word - `get_properties terminal:IN0 .name`, `get_properties terminal:IN0 {.name .direction}` - and that path can chain through a relational hop exactly like `-filter` does, e.g. `get_properties terminal_port:0 .terminal.name` or a list hop like `get_properties terminal_port:0 .shapes.layer_name` (existential/first-match semantics on the list hop, same contract `-filter` already has - resolves to `""` if the port has no shapes yet rather than erroring). This reuses the filter DSL's machinery rather than adding a second parser: `filter.hpp` gained `parse_property_path`/`resolve_property_path`, built on the same generated `get_field`/`match_hop` functions `-filter` itself walks, and one new `le_X_property_path`/`X_property_path` accessor per type (`api.hpp`/`api.cpp`, `le_tcl_shim`, `le_api.i`) alongside the existing `_count`/`_at`/`_value` triplet. A path that fails to parse (missing leading `.`) or references an unrecognized field/hop name is a Tcl error, same as an unrecognized `-filter` field; a structurally valid path that simply has no data to resolve (e.g. an empty list hop) returns an empty string, not an error.
+
+**Found and fixed a real, previously-latent bug while implementing this**: `to_properties()`/`to_string()` for any `is_optional` field called `.value()` unconditionally, with no `has_value()` check - `Abstract.power` (unset on any Abstract without a LEF POWER statement, which is the common case) crashed with `std::bad_optional_access` the moment `get_properties`/`report_properties` reached an Abstract token, since nothing in this codebase had ever called `to_properties(AbstractData)` before. Fixed at the root cause in `cmg`'s code generator (`Field.wrap_with_to_property`/`wrap_with_to_string` in the sibling `cmg` checkout) - both now emit `.value_or(<value-initialized-default>)` instead of `.value()` - then regenerated via the `regen-database` skill. This is a generator-level fix (affects the `cmg` tool itself, not just this project's `schema.py`), flagged here since it's a real, if narrow, behavior change to shared codegen infrastructure beyond this repo.
