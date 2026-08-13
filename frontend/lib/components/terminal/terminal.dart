@@ -13,6 +13,17 @@ const Map<String, Color> kMessageColors = {
 
 const String prompt = "le_shell";
 
+// A single misbehaving command (e.g. a bare get_shapes on a design with
+// thousands of shapes) shouldn't be able to dump megabytes of text into
+// the terminal's scrollback - truncate what's *displayed*, not the value
+// itself, so a script relying on the full result is unaffected.
+const int kMaxResultDisplayLength = 1000;
+
+String _truncateForDisplay(String text) {
+  if (text.length <= kMaxResultDisplayLength) return text;
+  return '${text.substring(0, kMaxResultDisplayLength)}..truncated';
+}
+
 class Terminal extends StatefulWidget {
   const Terminal({super.key});
 
@@ -107,7 +118,7 @@ class _TerminalState extends State<Terminal> {
       }
 
       setState(() {
-        if (result.isNotEmpty) _lines.add(result);
+        if (result.isNotEmpty) _lines.add(_truncateForDisplay(result));
         _running = false;
       });
     }
