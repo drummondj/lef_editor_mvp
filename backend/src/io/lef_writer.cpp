@@ -530,7 +530,27 @@ namespace le
                     // At most one of RANGE/LENGTHTHRESHOLD/SAMENET follows a
                     // ROUTING SPACING statement (lefwWriter.hpp's own "either
                     // this routine ... or ..." comments on each).
-                    if (rule.range_min && rule.range_max)
+                    // "SPACING d LENGTHTHRESHOLD len RANGE min max ;" has its
+                    // own dedicated trailing-range fields in the vendored
+                    // reader (lefiLayer::hasSpacingLengthThresholdRange()/
+                    // spacingLengthThresholdRangeMin()/Max()) - a genuinely
+                    // separate pair from hasSpacingRange()/spacingRangeMin()/
+                    // Max() used by the plain "SPACING d RANGE min max ...;"
+                    // construct below, even though lefwLayerRoutingSpacingLengthThreshold
+                    // also happens to print its own min/max as "RANGE %g %g"
+                    // text - confirmed the hard way (a length_threshold_range_min/
+                    // max of exactly 0/0.1 silently wrote no RANGE clause at
+                    // all when this branch was still reading range_min/
+                    // range_max instead of its own dedicated fields).
+                    if (rule.length_threshold)
+                    {
+                        status = lefwLayerRoutingSpacingLengthThreshold(to_microns(*rule.length_threshold, dbu_per_micron),
+                                                                         rule.length_threshold_range_min ? to_microns(*rule.length_threshold_range_min, dbu_per_micron) : 0.0,
+                                                                         rule.length_threshold_range_max ? to_microns(*rule.length_threshold_range_max, dbu_per_micron) : 0.0);
+                        if (status)
+                            return status;
+                    }
+                    else if (rule.range_min && rule.range_max)
                     {
                         status = lefwLayerRoutingSpacingRange(to_microns(*rule.range_min, dbu_per_micron), to_microns(*rule.range_max, dbu_per_micron));
                         if (status)
@@ -556,12 +576,6 @@ namespace le
                             if (status)
                                 return status;
                         }
-                    }
-                    else if (rule.length_threshold)
-                    {
-                        status = lefwLayerRoutingSpacingLengthThreshold(to_microns(*rule.length_threshold, dbu_per_micron), 0.0, 0.0);
-                        if (status)
-                            return status;
                     }
                     else if (rule.same_net)
                     {
@@ -2132,6 +2146,41 @@ namespace le
                 if (status)
                 {
                     messages_.push_back(fmt::format("ERROR: lefwMaxviastack failed with status {}.", status));
+                    return status;
+                }
+            }
+
+            // Legacy pre-5.0 top-level antenna defaults - no ordering
+            // constraint beyond "after lefwInit" per their own doc
+            // comments, so grouped here with the other simple Technology
+            // scalars rather than matching complete.5.8.lef's own
+            // after-every-MACRO placement (which our multi-file writer,
+            // one Technology-only file plus one file per MACRO, has no
+            // equivalent position for anyway).
+            if (technology->antenna_input_gate_area)
+            {
+                status = lefwAntennaInputGateArea(*technology->antenna_input_gate_area);
+                if (status)
+                {
+                    messages_.push_back(fmt::format("ERROR: lefwAntennaInputGateArea failed with status {}.", status));
+                    return status;
+                }
+            }
+            if (technology->antenna_inout_diff_area)
+            {
+                status = lefwAntennaInOutDiffArea(*technology->antenna_inout_diff_area);
+                if (status)
+                {
+                    messages_.push_back(fmt::format("ERROR: lefwAntennaInOutDiffArea failed with status {}.", status));
+                    return status;
+                }
+            }
+            if (technology->antenna_output_diff_area)
+            {
+                status = lefwAntennaOutputDiffArea(*technology->antenna_output_diff_area);
+                if (status)
+                {
+                    messages_.push_back(fmt::format("ERROR: lefwAntennaOutputDiffArea failed with status {}.", status));
                     return status;
                 }
             }

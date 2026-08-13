@@ -115,6 +115,9 @@ namespace le
         lefrSetClearanceMeasureCbk(lefrClearanceMeasureCbkFn);
         lefrSetManufacturingCbk(lefrManufacturingCbkFn);
         lefrSetMaxStackViaCbk(lefrMaxStackViaCbkFn);
+        lefrSetAntennaInputCbk(lefrAntennaInputCbkFn);
+        lefrSetAntennaInoutCbk(lefrAntennaInoutCbkFn);
+        lefrSetAntennaOutputCbk(lefrAntennaOutputCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -436,6 +439,11 @@ namespace le
             }
             if (lef_layer->hasSpacingLengthThreshold(i))
                 rule.length_threshold = reader->microns_to_dbu(lef_layer->spacingLengthThreshold(i));
+            if (lef_layer->hasSpacingLengthThresholdRange(i))
+            {
+                rule.length_threshold_range_min = reader->microns_to_dbu(lef_layer->spacingLengthThresholdRangeMin(i));
+                rule.length_threshold_range_max = reader->microns_to_dbu(lef_layer->spacingLengthThresholdRangeMax(i));
+            }
             if (lef_layer->hasSpacingCenterToCenter(i))
                 rule.center_to_center = true;
             if (lef_layer->hasSpacingSamenet(i))
@@ -796,6 +804,27 @@ namespace le
             reader->technology_->max_via_stack_bottom_layer = lef_max_stack_via->maxStackViaBottomLayer();
             reader->technology_->max_via_stack_top_layer = lef_max_stack_via->maxStackViaTopLayer();
         }
+        return 0;
+    }
+
+    int LEFReader::lefrAntennaInputCbkFn(lefrCallbackType_e typ, double antenna_input_gate_area, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->antenna_input_gate_area = antenna_input_gate_area;
+        return 0;
+    }
+
+    int LEFReader::lefrAntennaInoutCbkFn(lefrCallbackType_e typ, double antenna_inout_diff_area, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->antenna_inout_diff_area = antenna_inout_diff_area;
+        return 0;
+    }
+
+    int LEFReader::lefrAntennaOutputCbkFn(lefrCallbackType_e typ, double antenna_output_diff_area, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->antenna_output_diff_area = antenna_output_diff_area;
         return 0;
     }
 

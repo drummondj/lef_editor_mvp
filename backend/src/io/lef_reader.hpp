@@ -69,6 +69,9 @@ namespace le
         static int lefrClearanceMeasureCbkFn(lefrCallbackType_e typ, const char *clearance_measure, void *user_data);
         static int lefrManufacturingCbkFn(lefrCallbackType_e typ, double manufacturing_grid, void *user_data);
         static int lefrMaxStackViaCbkFn(lefrCallbackType_e typ, lefiMaxStackVia *lef_max_stack_via, void *user_data);
+        static int lefrAntennaInputCbkFn(lefrCallbackType_e typ, double antenna_input_gate_area, void *user_data);
+        static int lefrAntennaInoutCbkFn(lefrCallbackType_e typ, double antenna_inout_diff_area, void *user_data);
+        static int lefrAntennaOutputCbkFn(lefrCallbackType_e typ, double antenna_output_diff_area, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through

@@ -31,6 +31,8 @@ class MyApp extends StatelessWidget {
             onError: Colors.black,
             surface: Color.fromARGB(255, 30, 30, 30),
             onSurface: Color.fromARGB(255, 220, 220, 220),
+            surfaceDim: Color.fromARGB(255, 0, 0, 0),
+            surfaceContainer: Color.fromARGB(255, 10, 10, 10),
           ),
         ),
         theme: ThemeData(brightness: .light, fontFamily: 'JetBrains Mono'),

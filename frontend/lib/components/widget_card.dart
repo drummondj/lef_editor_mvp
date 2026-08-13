@@ -7,6 +7,9 @@ class WidgetCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(color: Colors.black, child: child);
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainer,
+      child: child,
+    );
   }
 }

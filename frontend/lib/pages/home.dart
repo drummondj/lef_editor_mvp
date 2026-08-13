@@ -71,7 +71,7 @@ class _HomeState extends State<Home> {
     Docking docking = Docking(layout: layout);
     MultiSplitViewTheme theme = MultiSplitViewTheme(
       data: MultiSplitViewThemeData(
-        dividerThickness: 15,
+        dividerThickness: 16,
         dividerPainter: DividerPainters.grooved2(
           backgroundColor: Colors.black,
           color: Colors.grey[400]!,
@@ -100,8 +100,9 @@ class _HomeState extends State<Home> {
       ),
     );
     return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.surfaceDim,
       body: SafeArea(
-        child: Padding(padding: const EdgeInsets.all(8.0), child: theme),
+        child: Padding(padding: const EdgeInsets.all(16), child: theme),
       ),
     );
   }
