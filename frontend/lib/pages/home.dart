@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:lef_editor/components/layout_editor.dart';
 import 'package:lef_editor/components/main_menu.dart';
-import 'package:lef_editor/components/message_console.dart';
-import 'package:lef_editor/components/right_sidebar/right_sidebar_alt.dart';
-import 'package:lef_editor/components/tcl_console.dart';
+import 'package:lef_editor/components/right_sidebar/right_sidebar.dart';
+import 'package:lef_editor/components/status_bar.dart';
 import 'package:lef_editor/components/terminal/terminal.dart';
 import 'package:lef_editor/components/widget_card.dart';
 
@@ -16,7 +15,7 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   final double leftWidth = 300;
-  final double rightWidth = 100;
+  final double rightWidth = 110;
 
   @override
   Widget build(BuildContext context) {
@@ -29,16 +28,23 @@ class _HomeState extends State<Home> {
             children: [
               Positioned(
                 left: leftWidth,
-                right: 10,
-                top: size.height - 300,
-                bottom: 10,
+                right: rightWidth,
+                height: 300,
+                bottom: 100,
                 child: WidgetCard(child: Terminal()),
+              ),
+              Positioned(
+                left: leftWidth,
+                right: rightWidth,
+                bottom: 0,
+                height: 100,
+                child: WidgetCard(child: StatusBar()),
               ),
               Positioned(
                 top: 10,
                 left: leftWidth,
-                right: 10,
-                bottom: 300,
+                right: rightWidth,
+                bottom: 400,
                 child: LayoutEditor(),
               ),
               Positioned(
@@ -48,18 +54,7 @@ class _HomeState extends State<Home> {
                 width: leftWidth,
                 child: WidgetCard(child: MainMenu()),
               ),
-              // Positioned(
-              //   bottom: 0,
-              //   left: leftWidth,
-              //   right: rightWidth,
-              //   child: WidgetCard(
-              //     child: Column(
-              //       mainAxisSize: MainAxisSize.min,
-              //       children: [MessageConsole(), TclConsole()],
-              //     ),
-              //   ),
-              // ),
-              // Positioned(top: 0, bottom: 0, right: 0, child: RightSidebarAlt()),
+              Positioned(top: 0, bottom: 0, right: 0, child: RightSidebar()),
             ],
           ),
         ),

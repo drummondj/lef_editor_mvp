@@ -286,8 +286,126 @@ Returning object IDs from TCL commands isn't very user friendly (e.g. `create_te
 
 **Resolution**: `terminal:<name>` (Terminal already has a `.name` field), `obstruction:<id>`/`terminal_port:<id>`/`shape:<id>` (Obstruction/TerminalPort/Shape have no name field, so these keep their existing packed integer, just type-prefixed for self-description rather than a bare number) - every `create_terminal`/`create_terminal_port`/`create_obstruction`/`create_terminal_port_shape`/`create_obstruction_shape`/`get_terminals`/`get_obstructions`/`get_terminal_ports`/`terminal_port_shapes`/`obstruction_shapes` call and every command that takes one of these ids back (`delete_*`, `set_*`, every shape geometry mutator) uses this friendly string form exclusively - no numeric fallback kept for these four types. Empty string `""` is the uniform "not found/invalid" signal, replacing the old `kInvalidId` for these four (`kInvalidId` still applies to Design/Abstract ids, unaffected by this item).
 
-`create_terminal`/`set_terminal_name` now reject a name that collides with another Terminal already on the same Abstract (`le_create_terminal`/`le_set_terminal_name` in `api.hpp`/`api.cpp`, a plain linear scan over `Root::get_abstract_terminals` - deliberately *not* a `cmg`/`schema.py` `index=True` lookup, since real LEF libraries legitimately reuse pin names like `VDD`/`IN0` across different Abstracts, and `index=True`'s generated index is flat/global, not per-Abstract) - this closes a real, previously-unvalidated gap (the LEF reader has a literal `// TODO: Check that pin doesn't already exists with the same name`), not just a naming-scheme side effect. Obstruction gained no name field and no uniqueness concept - it was deliberately kept index-based per a direct correction during planning.
+`create_terminal`/`set_terminal_name` now reject a name that collides with another Terminal already on the same Abstract (`le_create_terminal`/`le_set_terminal_name` in `api.hpp`/`api.cpp`, a plain linear scan over `Root::get_abstract_terminals` - deliberately _not_ a `cmg`/`schema.py` `index=True` lookup, since real LEF libraries legitimately reuse pin names like `VDD`/`IN0` across different Abstracts, and `index=True`'s generated index is flat/global, not per-Abstract) - this closes a real, previously-unvalidated gap (the LEF reader has a literal `// TODO: Check that pin doesn't already exists with the same name`), not just a naming-scheme side effect. Obstruction gained no name field and no uniqueness concept - it was deliberately kept index-based per a direct correction during planning.
 
-Renaming a Terminal changes what its friendly id refers to, by construction (the id *is* the name) - a script holding an old `"terminal:OLDNAME"` string after a rename has a stale reference and needs to re-derive the new one (trivial - it already has the new name literally). See `src/tcl/tests/crud_test.tcl`'s uniqueness-enforcement and rename-staleness cases.
+Renaming a Terminal changes what its friendly id refers to, by construction (the id _is_ the name) - a script holding an old `"terminal:OLDNAME"` string after a rename has a stale reference and needs to re-derive the new one (trivial - it already has the new name literally). See `src/tcl/tests/crud_test.tcl`'s uniqueness-enforcement and rename-staleness cases.
 
-**Known, deliberately out-of-scope gap**: `lefrPinCbkFn` (`src/io/lef_reader.cpp`) still has no duplicate-PIN-name check when *reading* a LEF file (bypasses the new API-layer uniqueness check entirely, calling `Root::create_terminal` directly) - two same-named PINs in one malformed `MACRO` would produce two Terminals sharing one friendly id, and the second becomes unreachable by name from TCL (still present in the database, just not addressable by `terminal:name`). Left as a documented gap, not fixed here - this item was about TCL ergonomics/API-level create/rename validation, not LEF-import validation.
+**Known, deliberately out-of-scope gap**: `lefrPinCbkFn` (`src/io/lef_reader.cpp`) still has no duplicate-PIN-name check when _reading_ a LEF file (bypasses the new API-layer uniqueness check entirely, calling `Root::create_terminal` directly) - two same-named PINs in one malformed `MACRO` would produce two Terminals sharing one friendly id, and the second becomes unreachable by name from TCL (still present in the database, just not addressable by `terminal:name`). Left as a documented gap, not fixed here - this item was about TCL ergonomics/API-level create/rename validation, not LEF-import validation.
+
+# 19. Common TCL command patterns for all object types
+
+## 19.1 get\_\*
+
+Each object type should have a get\_ command: get_libraries, get_designs, get_abstracts, get_terminals, get_terminal_ports, get_obstructions etc.
+
+The get\_ command syntax should be (square brackets means optional):
+
+`get_<type> [<name expressions>] [-of <parent tokens>] [-filter <filter expression>] [-help]`
+
+NOTE: For object types without a name, omit the positional `<name expressions>` argument.
+
+- `<name expressions>`: filters object by name, using optional widrcards, may be multiple expressions which should be or'ed.
+- `-of <parent tokens>`: returns objects that have the specified parent tokens.
+- `-filter <filter expression>`: filter by properties (current implementation).
+- `-help`: Returns usage
+
+Examples:
+
+Get a library name my_library:
+
+```
+get_libraries my_library -> library:my_library
+```
+
+Get all designs in my_library:
+
+```
+get_designs -of library:my_library -> {design:A design:B ...}
+```
+
+Get designs with name containing AND from my_library:
+
+```
+get_designs *AND* -of library:my_library -> {design:AND4 design:AND8 ...}
+```
+
+Get designs abstract view:
+
+```
+get_abstract -of design:AND4 -> abstract:0
+```
+
+Get abstract views terminals:
+
+```
+get_terminals -of abstract:0 -> {terminal:IN0 terminal:OUT ...}
+```
+
+Error checking:
+
+1. -of must only contain valid parent object types
+2. -filter must only contain valid property names/chains that match the objects available properties. For example, get_abstracts -of library:my_library should return an error stating that only design objects can be used with get_abstracts -of.
+
+**Resolution**: `get_libraries`, `get_designs`, `get_abstracts`, `get_terminals`, `get_terminal_ports`, `get_obstructions`, and (for full type coverage) `get_shapes` all share one Tcl proc shape (`parse_get_args` in `le_tcl_procs.tcl`): zero-or-more OR'd `<name expressions>` (glob-matched, only for the types with a real `.name` field - Library/Design/Terminal), zero-or-more OR'd `-of <parent-token>` values (each validated against the command's own valid parent-type prefix _before_ any lookup - a wrong-type token errors immediately, per requirement 1), an optional `-filter <expr>`, and `-help`. Omitting `-of` falls back to the existing "current view" default (`Scene::current_abstract()`, from `open_design` - item 17) rather than requiring it on every call, extended outward/inward through the whole hierarchy (`get_abstracts` defaults to the current view itself; `get_designs` defaults to the current view's own Library; `get_terminal_ports`/`get_shapes` default to a 2-hop union under the current view, same shape as item 17's own `get_terminal_ports` default already was).
+
+`filter_expression`'s field/hop names are now validated (requirement 2) against a hand-maintained per-type allowlist in `api.cpp` (`validate_filter_path`/`filter_field_tables`, cross-checked directly against each generated class's own `get_field`/`match_hop`) - an unrecognized name is a real parse-time-adjacent error (pushed via `le_message_*`, `-1` return), not the silent no-match `filter.hpp` produces on its own. Deliberately excludes hops into non-pooled/value-list fields (Abstract's `bbox`/`densities`/etc., Terminal's `antenna_*`, Shape's `rects`/`polygons`/etc.) - those remain usable only via the older, unscoped `le_search_terminal`/etc. escape hatch.
+
+Library/Design/Abstract gained friendly ids extending item 18's scheme: `"library:<name>"`/`"design:<name>"` (both real, globally-unique `index=True` fields already) and `"abstract:<n>"` (no name field, same numeric-type-prefix pattern as Obstruction/TerminalPort/Shape). This is additive, not a retrofit - `design_by_name`, `design_abstract_id`, `set_current_design_cmd`, and every `-abstract` CRUD flag (`create_terminal`, `create_obstruction`, `update_abstract_boundary`) are unchanged, still raw packed ids; only `open_design`'s own return value was switched to `"design:<name>"` for consistency (trivial - it already has the name in hand). `get_terminals`/`get_obstructions`/`get_terminal_ports` themselves were changed in place (breaking their item-17/18 single-filter-string signature) rather than left alongside new commands, per the "one unified pattern" framing of this item's own title.
+
+See `src/tcl/tests/crud_test.tcl` for the full regression coverage, including the `-of`-wrong-type and `-filter`-unknown-field error cases.
+
+## 19.2 Properties
+
+Instead of individual commands for listing properties I would like the following command to get properties using tokens:
+
+- get_properties <list of tokens> [<property names>] : Returns a list of properties for the specified tokens
+
+For example:
+
+Return a list all terminal properies, returns list of dict:
+
+```
+get_properties [get_terminals] -> { {name IN0 direction INPUT } { name OUT1 direction OUTPUT} ...}
+```
+
+Get a property value:
+
+```
+get_properties terminal:IN0 name -> IN0
+```
+
+Get multiple properties for one object:
+
+```
+get_properties terminal:IN0 {name direction} -> {IN0 INPUT}
+```
+
+Get multiple properties for mutlple objects (returns list of list):
+
+```
+get_properties [get_terminals] {name direction} -> { {IN0 INPUT } { OUT1 OUTPUT} ...}
+```
+
+Then another command to report properties to stdout in a human readable format:
+
+```
+report_properties <list of tokens>
+```
+
+Example:
+
+```
+report_properties [get_terminals]
+
+terminal:IN0
+  name:      IN0
+  direction: INPUT
+  ... etc ...
+
+terminal:OUT0
+  name:      OUT0
+  direction: OUTPUT
+  ... etc ...
+```
+
+NOTE: property names must be padded to align values.

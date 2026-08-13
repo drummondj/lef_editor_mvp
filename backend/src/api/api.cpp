@@ -14,6 +14,11 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 // The real, C++-only definition behind the opaque LeHandle - never exposed
 // in api.hpp. Owns everything needed to load a LEF file and render it: one
@@ -73,6 +78,15 @@ struct LeHandle
     std::vector<le::PropertyValue> cached_obstruction_properties;
     std::vector<le::ObstructionId> obstruction_search_results;
 
+    // Same "valid until the next call" search-result cache pattern as
+    // terminal_search_results/obstruction_search_results above, backing
+    // UPDATES.md item 19.1's le_get_libraries/le_get_designs/
+    // le_get_abstracts/le_get_shapes.
+    std::vector<le::LibraryId> library_search_results;
+    std::vector<le::DesignId> design_search_results;
+    std::vector<le::AbstractId> abstract_search_results;
+    std::vector<le::ShapeId> shape_search_results;
+
     // Backs le_message_count/le_message_at (UPDATES.md item 3) - every
     // error/warning/info message produced by this handle's backend
     // operations so far (currently just le_read_lef), in order, never
@@ -99,6 +113,7 @@ namespace
     LeObstructionId to_c(le::ObstructionId id) { return LeObstructionId{.index = id.index, .generation = id.generation}; }
     LeShapeId to_c(le::ShapeId id) { return LeShapeId{.index = id.index, .generation = id.generation}; }
 
+    le::LibraryId from_c(LeLibraryId id) { return le::LibraryId{.index = id.index, .generation = id.generation}; }
     le::DesignId from_c(LeDesignId id) { return le::DesignId{.index = id.index, .generation = id.generation}; }
     le::AbstractId from_c(LeAbstractId id) { return le::AbstractId{.index = id.index, .generation = id.generation}; }
     le::TerminalId from_c(LeTerminalId id) { return le::TerminalId{.index = id.index, .generation = id.generation}; }
@@ -190,6 +205,123 @@ namespace
                 return true;
         }
         return false;
+    }
+
+    // UPDATES.md item 19.1's `-filter` validation (every le_get_* function
+    // below) - a hand-maintained allowlist of each class's filterable leaf
+    // fields and hops, cross-checked directly against each class's own
+    // generated get_field()/match_hop() (src/database/generated/*.hpp).
+    // Hand-duplicated from schema.py rather than adding a cmg-generated
+    // runtime enumeration - same precedent as le_tcl_procs.tcl's
+    // direction_codes array, a short static list not worth a cross-repo
+    // codegen change for. Deliberately narrower than what get_field/
+    // match_hop actually dispatch: excludes hops into non-pooled
+    // value-list/embedded types (Abstract's bbox/boundary/densities/
+    // foreigns/origin/properties/site_placements/size/symmetry; Terminal's
+    // antenna_*/properties; Shape's paths/polygons/rects/texts/vias/
+    // *_iterates; Design's schematic hop, Schematic not being one of the
+    // seven get_* types) - a filter naming one of these is rejected by
+    // get_* even though it still works via the unscoped le_search_terminal/
+    // etc. escape hatch (item 17).
+    struct FilterFieldTable
+    {
+        std::unordered_set<std::string> leaf_fields;
+        std::unordered_map<std::string, std::string> hops; // hop name -> target class name
+    };
+
+    const std::unordered_map<std::string, FilterFieldTable> &filter_field_tables()
+    {
+        static const std::unordered_map<std::string, FilterFieldTable> tables = {
+            {"Library", {{"name"}, {{"designs", "Design"}}}},
+            {"Design", {{"name"}, {{"library", "Library"}, {"abstract", "Abstract"}}}},
+            {"Abstract", {{"type", "site", "eeq", "leq", "power", "source", "is_fixed_mask"}, {{"design", "Design"}, {"terminals", "Terminal"}, {"obstructions", "Obstruction"}}}},
+            {"Terminal", {{"name", "direction", "shape", "use", "must_join", "net_expr", "leq", "taper_rule", "supply_sensitivity", "ground_sensitivity", "rise_slew_limit", "fall_slew_limit", "max_load"}, {{"abstract", "Abstract"}, {"ports", "TerminalPort"}}}},
+            {"TerminalPort", {{"port_class"}, {{"terminal", "Terminal"}, {"shapes", "Shape"}}}},
+            {"Obstruction", {{}, {{"abstract", "Abstract"}, {"shapes", "Shape"}}}},
+            {"Shape", {{"layer_name", "spacing", "design_rule_width", "except_pg_net"}, {{"obstruction", "Obstruction"}, {"terminal_port", "TerminalPort"}}}},
+        };
+        return tables;
+    }
+
+    // Walks one Comparison's path (the last segment must be a leaf field of
+    // whatever class the path has hopped to by then; every earlier segment
+    // must be a hop of the class it's checked against, advancing the
+    // "current class" to the hop's target). filter.hpp itself never
+    // validates field/hop names - an unrecognized one just silently
+    // evaluates to no-match (get_field returns nullopt / match_hop returns
+    // false) - this is what turns that into a real, reported error instead.
+    std::optional<std::string> validate_filter_path(const std::string &root_class, const std::vector<std::string> &path)
+    {
+        std::string current_class = root_class;
+        for (size_t i = 0; i < path.size(); ++i)
+        {
+            const auto table_it = filter_field_tables().find(current_class);
+            if (table_it == filter_field_tables().end())
+                return fmt::format("unknown class '{}'", current_class);
+
+            const std::string &segment = path[i];
+            const bool is_last = (i + 1 == path.size());
+            if (is_last)
+            {
+                if (table_it->second.leaf_fields.count(segment))
+                    return std::nullopt;
+                return fmt::format("unknown field '{}' on {}", segment, current_class);
+            }
+
+            const auto hop_it = table_it->second.hops.find(segment);
+            if (hop_it == table_it->second.hops.end())
+                return fmt::format("unknown hop '{}' on {}", segment, current_class);
+            current_class = hop_it->second;
+        }
+        return std::string("empty field path");
+    }
+
+    // Recurses through a parsed FilterExpr's And/Or tree, validating every
+    // leaf Comparison's path against root_class via validate_filter_path.
+    std::optional<std::string> validate_filter_expr(const std::string &root_class, const le::FilterExpr &expr)
+    {
+        switch (expr.kind)
+        {
+        case le::FilterExpr::Kind::Comparison:
+            return validate_filter_path(root_class, expr.path);
+        case le::FilterExpr::Kind::And:
+        case le::FilterExpr::Kind::Or:
+            for (const le::FilterExpr &child : expr.children)
+            {
+                if (auto error = validate_filter_expr(root_class, child))
+                    return error;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    // Shared parse+validate+push-message sequence every le_get_* function
+    // below needs for its `-filter` axis - std::nullopt with `ok` left
+    // true means "no -filter given" (skip that axis entirely);
+    // std::nullopt with `ok` set false means a parse or validation error
+    // already pushed to handle->messages (caller returns -1). Caller must
+    // already hold handle->mutex_.
+    std::optional<le::FilterExpr> parse_and_validate_filter(LeHandle *handle, const char *caller, const std::string &root_class, const char *filter_expression, bool &ok)
+    {
+        ok = true;
+        if (!filter_expression || filter_expression[0] == '\0')
+            return std::nullopt;
+
+        auto parsed = le::parse_filter_expression(filter_expression);
+        if (!parsed)
+        {
+            handle->messages.push_back(fmt::format("ERROR: {}: {}", caller, parsed.error()));
+            ok = false;
+            return std::nullopt;
+        }
+        if (auto error = validate_filter_expr(root_class, *parsed))
+        {
+            handle->messages.push_back(fmt::format("ERROR: {}: {}", caller, *error));
+            ok = false;
+            return std::nullopt;
+        }
+        return std::move(*parsed);
     }
 
     // Single shared/global Technology, same assumption
@@ -898,6 +1030,185 @@ extern "C"
         return to_c(handle->root.get_design_by_name(name));
     }
 
+    LeLibraryId le_library_by_name(LeHandle *handle, const char *name)
+    {
+        const LeLibraryId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || !name)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        return to_c(handle->root.get_library_by_name(name));
+    }
+
+    const char *le_library_name(LeHandle *handle, LeLibraryId id)
+    {
+        if (!handle)
+            return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::LibraryData *library = handle->root.get_library(from_c(id));
+        return library ? library->name.c_str() : nullptr;
+    }
+
+    const char *le_design_name_by_id(LeHandle *handle, LeDesignId id)
+    {
+        if (!handle)
+            return nullptr;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const le::DesignData *design = handle->root.get_design(from_c(id));
+        return design ? design->name.c_str() : nullptr;
+    }
+
+    int32_t le_get_libraries(LeHandle *handle, const char *name_expression, const char *filter_expression)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_libraries", "Library", filter_expression, ok);
+        if (!ok)
+            return -1;
+
+        handle->library_search_results.clear();
+        for (const le::LibraryId id : handle->root.get_library_ids())
+        {
+            const le::LibraryData *data = handle->root.get_library(id);
+            if (!data)
+                continue;
+            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
+                continue;
+            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
+                continue;
+            handle->library_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->library_search_results.size());
+    }
+
+    LeLibraryId le_search_result_library_at(LeHandle *handle, int32_t index)
+    {
+        const LeLibraryId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->library_search_results.size())
+            return invalid;
+        return to_c(handle->library_search_results[static_cast<size_t>(index)]);
+    }
+
+    int32_t le_get_designs(LeHandle *handle, LeLibraryId of_library, const char *name_expression, const char *filter_expression)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_designs", "Design", filter_expression, ok);
+        if (!ok)
+            return -1;
+
+        // -of given and valid -> scoped to that Library. Otherwise ->
+        // default scope: the current view's own Design's Library if a
+        // Design is currently selected, else every Design on this handle.
+        std::vector<le::DesignId> candidates;
+        const le::LibraryId library = from_c(of_library);
+        if (handle->root.get_library(library))
+        {
+            candidates = handle->root.get_library_designs(library);
+        }
+        else
+        {
+            const le::AbstractData *current_abstract = handle->root.get_abstract(handle->scene.current_abstract());
+            if (current_abstract)
+            {
+                const le::DesignData *current_design = handle->root.get_design(current_abstract->design);
+                if (current_design)
+                    candidates = handle->root.get_library_designs(current_design->library);
+            }
+            else
+            {
+                candidates = handle->root.get_design_ids();
+            }
+        }
+
+        handle->design_search_results.clear();
+        for (const le::DesignId id : candidates)
+        {
+            const le::DesignData *data = handle->root.get_design(id);
+            if (!data)
+                continue;
+            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
+                continue;
+            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
+                continue;
+            handle->design_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->design_search_results.size());
+    }
+
+    LeDesignId le_search_result_design_at(LeHandle *handle, int32_t index)
+    {
+        const LeDesignId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->design_search_results.size())
+            return invalid;
+        return to_c(handle->design_search_results[static_cast<size_t>(index)]);
+    }
+
+    int32_t le_get_abstracts(LeHandle *handle, LeDesignId of_design, const char *filter_expression)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_abstracts", "Abstract", filter_expression, ok);
+        if (!ok)
+            return -1;
+
+        // -of given and valid -> that Design's own Abstract (today always
+        // at most one). Otherwise -> default scope: the currently
+        // selected Abstract, if any.
+        std::vector<le::AbstractId> candidates;
+        const le::DesignData *design = handle->root.get_design(from_c(of_design));
+        if (design)
+        {
+            const le::AbstractId abstract = handle->root.get_design_abstract(from_c(of_design));
+            if (handle->root.get_abstract(abstract))
+                candidates.push_back(abstract);
+        }
+        else if (handle->root.get_abstract(handle->scene.current_abstract()))
+        {
+            candidates.push_back(handle->scene.current_abstract());
+        }
+
+        handle->abstract_search_results.clear();
+        for (const le::AbstractId id : candidates)
+        {
+            const le::AbstractData *data = handle->root.get_abstract(id);
+            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
+                handle->abstract_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->abstract_search_results.size());
+    }
+
+    LeAbstractId le_search_result_abstract_at(LeHandle *handle, int32_t index)
+    {
+        const LeAbstractId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->abstract_search_results.size())
+            return invalid;
+        return to_c(handle->abstract_search_results[static_cast<size_t>(index)]);
+    }
+
     int32_t le_layer_count(LeHandle *handle)
     {
         if (!handle)
@@ -1556,33 +1867,34 @@ extern "C"
         return to_c(handle->terminal_search_results[static_cast<size_t>(index)]);
     }
 
-    int32_t le_get_terminals(LeHandle *handle, const char *filter_expression)
+    int32_t le_get_terminals(LeHandle *handle, LeAbstractId of_abstract, const char *name_expression, const char *filter_expression)
     {
-        if (!handle || !filter_expression)
+        if (!handle)
             return 0;
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
-        const std::vector<le::TerminalId> &candidates = handle->root.get_abstract_terminals(handle->scene.current_abstract());
-
-        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
-        {
-            handle->terminal_search_results = candidates;
-            return static_cast<int32_t>(handle->terminal_search_results.size());
-        }
-
-        auto expr = le::parse_filter_expression(filter_expression);
-        if (!expr)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_get_terminals: {}", expr.error()));
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_terminals", "Terminal", filter_expression, ok);
+        if (!ok)
             return -1;
-        }
+
+        // -of given and valid -> that Abstract's own Terminals.
+        // Otherwise -> the currently selected Abstract (item 17's
+        // current-view default), or none.
+        const le::AbstractId abstract = handle->root.get_abstract(from_c(of_abstract)) ? from_c(of_abstract) : handle->scene.current_abstract();
+        const std::vector<le::TerminalId> &candidates = handle->root.get_abstract_terminals(abstract);
 
         handle->terminal_search_results.clear();
         for (const le::TerminalId id : candidates)
         {
             const le::TerminalData *data = handle->root.get_terminal(id);
-            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
-                handle->terminal_search_results.push_back(id);
+            if (!data)
+                continue;
+            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
+                continue;
+            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
+                continue;
+            handle->terminal_search_results.push_back(id);
         }
         return static_cast<int32_t>(handle->terminal_search_results.size());
     }
@@ -1687,42 +1999,44 @@ extern "C"
         return to_c(handle->terminal_port_search_results[static_cast<size_t>(index)]);
     }
 
-    int32_t le_get_terminal_ports(LeHandle *handle, const char *filter_expression)
+    int32_t le_get_terminal_ports(LeHandle *handle, LeTerminalId of_terminal, const char *filter_expression)
     {
-        if (!handle || !filter_expression)
+        if (!handle)
             return 0;
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
-        // TerminalPort has no direct Abstract field - it's one hop away via
-        // its parent Terminal, so scope by unioning each of the current
-        // Abstract's own Terminals' port lists rather than filtering the
-        // whole TerminalPort pool by a hop expression (see UPDATES.md item
-        // 17's plan: .abstract isn't a filterable leaf field at all).
-        std::vector<le::TerminalPortId> candidates;
-        for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(handle->scene.current_abstract()))
-        {
-            const auto &ports = handle->root.get_terminal_ports(terminal_id);
-            candidates.insert(candidates.end(), ports.begin(), ports.end());
-        }
-
-        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
-        {
-            handle->terminal_port_search_results = std::move(candidates);
-            return static_cast<int32_t>(handle->terminal_port_search_results.size());
-        }
-
-        auto expr = le::parse_filter_expression(filter_expression);
-        if (!expr)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_get_terminal_ports: {}", expr.error()));
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_terminal_ports", "TerminalPort", filter_expression, ok);
+        if (!ok)
             return -1;
+
+        // -of given and valid -> that Terminal's own Ports. Otherwise ->
+        // default scope: every TerminalPort under every Terminal of the
+        // currently selected Abstract (TerminalPort has no direct
+        // Abstract field - it's one hop away via its parent Terminal, so
+        // this unions each Terminal's own port list rather than filtering
+        // the whole TerminalPort pool by a hop expression - .abstract
+        // isn't a filterable leaf field at all, see UPDATES.md item 17).
+        std::vector<le::TerminalPortId> candidates;
+        if (handle->root.get_terminal(from_c(of_terminal)))
+        {
+            const auto &ports = handle->root.get_terminal_ports(from_c(of_terminal));
+            candidates.assign(ports.begin(), ports.end());
+        }
+        else
+        {
+            for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(handle->scene.current_abstract()))
+            {
+                const auto &ports = handle->root.get_terminal_ports(terminal_id);
+                candidates.insert(candidates.end(), ports.begin(), ports.end());
+            }
         }
 
         handle->terminal_port_search_results.clear();
         for (const le::TerminalPortId id : candidates)
         {
             const le::TerminalPortData *data = handle->root.get_terminal_port(id);
-            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
+            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
                 handle->terminal_port_search_results.push_back(id);
         }
         return static_cast<int32_t>(handle->terminal_port_search_results.size());
@@ -1826,32 +2140,27 @@ extern "C"
         return to_c(handle->obstruction_search_results[static_cast<size_t>(index)]);
     }
 
-    int32_t le_get_obstructions(LeHandle *handle, const char *filter_expression)
+    int32_t le_get_obstructions(LeHandle *handle, LeAbstractId of_abstract, const char *filter_expression)
     {
-        if (!handle || !filter_expression)
+        if (!handle)
             return 0;
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
-        const std::vector<le::ObstructionId> &candidates = handle->root.get_abstract_obstructions(handle->scene.current_abstract());
-
-        if (filter_expression[0] == '*' && filter_expression[1] == '\0')
-        {
-            handle->obstruction_search_results = candidates;
-            return static_cast<int32_t>(handle->obstruction_search_results.size());
-        }
-
-        auto expr = le::parse_filter_expression(filter_expression);
-        if (!expr)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_get_obstructions: {}", expr.error()));
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_obstructions", "Obstruction", filter_expression, ok);
+        if (!ok)
             return -1;
-        }
+
+        // -of given and valid -> that Abstract's own Obstructions.
+        // Otherwise -> the currently selected Abstract.
+        const le::AbstractId abstract = handle->root.get_abstract(from_c(of_abstract)) ? from_c(of_abstract) : handle->scene.current_abstract();
+        const std::vector<le::ObstructionId> &candidates = handle->root.get_abstract_obstructions(abstract);
 
         handle->obstruction_search_results.clear();
         for (const le::ObstructionId id : candidates)
         {
             const le::ObstructionData *data = handle->root.get_obstruction(id);
-            if (data && le::evaluate_filter(*expr, handle->root, id, *data))
+            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
                 handle->obstruction_search_results.push_back(id);
         }
         return static_cast<int32_t>(handle->obstruction_search_results.size());
@@ -1910,6 +2219,78 @@ extern "C"
         const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
         handle->root.bump_mutation_version();
         return result;
+    }
+
+    int32_t le_get_shapes(LeHandle *handle, LeTerminalPortId of_terminal_port, LeObstructionId of_obstruction, const char *filter_expression)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        bool ok = true;
+        auto expr = parse_and_validate_filter(handle, "le_get_shapes", "Shape", filter_expression, ok);
+        if (!ok)
+            return -1;
+
+        // Either -of parameter (or both) contributes its own Shapes;
+        // if neither is valid, fall back to the current-view default: a
+        // union of every Shape under the current Abstract's Terminals'
+        // Ports and every Shape under its own Obstructions - one hop
+        // further than le_get_terminal_ports' own 2-hop default.
+        std::vector<le::ShapeId> candidates;
+        const le::TerminalPortId port = from_c(of_terminal_port);
+        const le::ObstructionId obstruction = from_c(of_obstruction);
+        const bool port_valid = handle->root.get_terminal_port(port) != nullptr;
+        const bool obstruction_valid = handle->root.get_obstruction(obstruction) != nullptr;
+
+        if (port_valid)
+        {
+            const auto &shapes = handle->root.get_terminal_port_shapes(port);
+            candidates.insert(candidates.end(), shapes.begin(), shapes.end());
+        }
+        if (obstruction_valid)
+        {
+            const auto &shapes = handle->root.get_obstruction_shapes(obstruction);
+            candidates.insert(candidates.end(), shapes.begin(), shapes.end());
+        }
+        if (!port_valid && !obstruction_valid)
+        {
+            const le::AbstractId current = handle->scene.current_abstract();
+            for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(current))
+            {
+                for (const le::TerminalPortId port_id : handle->root.get_terminal_ports(terminal_id))
+                {
+                    const auto &shapes = handle->root.get_terminal_port_shapes(port_id);
+                    candidates.insert(candidates.end(), shapes.begin(), shapes.end());
+                }
+            }
+            for (const le::ObstructionId obstruction_id : handle->root.get_abstract_obstructions(current))
+            {
+                const auto &shapes = handle->root.get_obstruction_shapes(obstruction_id);
+                candidates.insert(candidates.end(), shapes.begin(), shapes.end());
+            }
+        }
+
+        handle->shape_search_results.clear();
+        for (const le::ShapeId id : candidates)
+        {
+            const le::ShapeData *data = handle->root.get_shape(id);
+            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
+                handle->shape_search_results.push_back(id);
+        }
+        return static_cast<int32_t>(handle->shape_search_results.size());
+    }
+
+    LeShapeId le_search_result_shape_at(LeHandle *handle, int32_t index)
+    {
+        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle || index < 0)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (static_cast<size_t>(index) >= handle->shape_search_results.size())
+            return invalid;
+        return to_c(handle->shape_search_results[static_cast<size_t>(index)]);
     }
 
     int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)

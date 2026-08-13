@@ -77,10 +77,23 @@ namespace
     // --- Friendly id formatting/parsing (see le_tcl_shim.hpp's own "IDs"
     // comment for the full contract) ---
 
+    constexpr std::string_view kLibraryPrefix = "library:";
+    constexpr std::string_view kDesignPrefix = "design:";
+    constexpr std::string_view kAbstractPrefix = "abstract:";
     constexpr std::string_view kTerminalPrefix = "terminal:";
     constexpr std::string_view kObstructionPrefix = "obstruction:";
     constexpr std::string_view kTerminalPortPrefix = "terminal_port:";
     constexpr std::string_view kShapePrefix = "shape:";
+
+    std::string format_library_id(const char *name)
+    {
+        return std::string(kLibraryPrefix) + (name ? name : "");
+    }
+
+    std::string format_design_id(const char *name)
+    {
+        return std::string(kDesignPrefix) + (name ? name : "");
+    }
 
     std::string format_terminal_id(const char *name)
     {
@@ -88,10 +101,37 @@ namespace
     }
 
     // Fixed-prefix compare (not "find first colon") so a LEF-legal name
-    // containing ':' itself can't misparse - kTerminalPrefix always
-    // matches the whole leading literal, everything after is the raw
-    // name verbatim, passed straight to le_terminal_by_name (itself
-    // already scoped to the current view, same as le_get_terminals).
+    // containing ':' itself can't misparse - the prefix always matches
+    // the whole leading literal, everything after is the raw name
+    // verbatim. An empty/null `s` (no -of token given at all) fails the
+    // prefix check the same way a malformed one does, resolving to the
+    // same invalid sentinel - exactly what "use the default scope" needs
+    // (see le_tcl_shim.hpp's own "IDs" comment).
+    LeLibraryId resolve_library_id(const char *s)
+    {
+        const LeLibraryId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!s)
+            return invalid;
+        std::string_view sv(s);
+        if (sv.substr(0, kLibraryPrefix.size()) != kLibraryPrefix)
+            return invalid;
+        return le_library_by_name(session(), std::string(sv.substr(kLibraryPrefix.size())).c_str());
+    }
+
+    LeDesignId resolve_design_id(const char *s)
+    {
+        const LeDesignId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!s)
+            return invalid;
+        std::string_view sv(s);
+        if (sv.substr(0, kDesignPrefix.size()) != kDesignPrefix)
+            return invalid;
+        return le_design_by_name(session(), std::string(sv.substr(kDesignPrefix.size())).c_str());
+    }
+
+    // le_terminal_by_name is itself already scoped to the current view,
+    // same as le_get_terminals - see resolve_library_id's own comment for
+    // the general fixed-prefix/empty-means-default-scope reasoning.
     LeTerminalId resolve_terminal_id(const char *s)
     {
         const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
@@ -135,10 +175,12 @@ namespace
         return std::string(prefix) + std::to_string(pack(id));
     }
 
+    LeAbstractId resolve_abstract_id(const char *s) { return resolve_numeric_friendly_id<LeAbstractId>(s, kAbstractPrefix); }
     LeObstructionId resolve_obstruction_id(const char *s) { return resolve_numeric_friendly_id<LeObstructionId>(s, kObstructionPrefix); }
     LeTerminalPortId resolve_terminal_port_id(const char *s) { return resolve_numeric_friendly_id<LeTerminalPortId>(s, kTerminalPortPrefix); }
     LeShapeId resolve_shape_id(const char *s) { return resolve_numeric_friendly_id<LeShapeId>(s, kShapePrefix); }
 
+    std::string format_abstract_id(LeAbstractId id) { return format_numeric_friendly_id(id, kAbstractPrefix); }
     std::string format_obstruction_id(LeObstructionId id) { return format_numeric_friendly_id(id, kObstructionPrefix); }
     std::string format_terminal_port_id(LeTerminalPortId id) { return format_numeric_friendly_id(id, kTerminalPortPrefix); }
     std::string format_shape_id(LeShapeId id) { return format_numeric_friendly_id(id, kShapePrefix); }
@@ -246,6 +288,50 @@ void set_session_handle(long long handle_address)
     injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
 }
 
+// --- Library/Design/Abstract search (UPDATES.md item 19.1) ---
+
+int get_libraries_cmd(const char *name_expression, const char *filter_expression)
+{
+    return le_get_libraries(session(), name_expression, filter_expression);
+}
+
+const char *get_libraries_at(int index)
+{
+    LeLibraryId id = le_search_result_library_at(session(), index);
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    const char *name = le_library_name(session(), id);
+    if (!name)
+        return return_string("");
+    return return_string(format_library_id(name));
+}
+
+int get_designs_cmd(const char *of_library_token, const char *name_expression, const char *filter_expression)
+{
+    return le_get_designs(session(), resolve_library_id(of_library_token), name_expression, filter_expression);
+}
+
+const char *get_designs_at(int index)
+{
+    LeDesignId id = le_search_result_design_at(session(), index);
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    const char *name = le_design_name_by_id(session(), id);
+    if (!name)
+        return return_string("");
+    return return_string(format_design_id(name));
+}
+
+const char *get_abstracts_cmd(const char *of_design_token, const char *filter_expression)
+{
+    int32_t count = le_get_abstracts(session(), resolve_design_id(of_design_token), filter_expression);
+    if (count <= 0)
+    {
+        return return_string("");
+    }
+    return return_string(join_friendly_ids<LeAbstractId>(count, le_search_result_abstract_at, kAbstractPrefix));
+}
+
 // --- Terminal ---
 
 const char *create_terminal_cmd(long long abstract_id, const char *name, int direction)
@@ -286,9 +372,9 @@ int delete_terminal(const char *id)
     return le_delete_terminal(session(), resolve_terminal_id(id));
 }
 
-int get_terminals_cmd(const char *filter_expression)
+int get_terminals_cmd(const char *of_abstract_token, const char *name_expression, const char *filter_expression)
 {
-    return le_get_terminals(session(), filter_expression);
+    return le_get_terminals(session(), resolve_abstract_id(of_abstract_token), name_expression, filter_expression);
 }
 
 const char *get_terminals_at(int index)
@@ -332,9 +418,9 @@ int delete_terminal_port(const char *id)
     return le_delete_terminal_port(session(), resolve_terminal_port_id(id));
 }
 
-const char *get_terminal_ports(const char *filter_expression)
+const char *get_terminal_ports_cmd(const char *of_terminal_token, const char *filter_expression)
 {
-    int32_t count = le_get_terminal_ports(session(), filter_expression);
+    int32_t count = le_get_terminal_ports(session(), resolve_terminal_id(of_terminal_token), filter_expression);
     if (count <= 0)
     {
         return return_string("");
@@ -392,9 +478,9 @@ int delete_obstruction(const char *id)
     return le_delete_obstruction(session(), resolve_obstruction_id(id));
 }
 
-const char *get_obstructions(const char *filter_expression)
+const char *get_obstructions_cmd(const char *of_abstract_token, const char *filter_expression)
 {
-    int32_t count = le_get_obstructions(session(), filter_expression);
+    int32_t count = le_get_obstructions(session(), resolve_abstract_id(of_abstract_token), filter_expression);
     if (count <= 0)
     {
         return return_string("");
@@ -420,6 +506,18 @@ const char *obstruction_shapes(const char *id)
         out << format_shape_id(le_obstruction_shape_at(session(), obstruction_id, i));
     }
     return return_string(out.str());
+}
+
+// --- Shape search (UPDATES.md item 19.1 - CRUD is further below) ---
+
+const char *get_shapes_cmd(const char *of_terminal_port_token, const char *of_obstruction_token, const char *filter_expression)
+{
+    int32_t count = le_get_shapes(session(), resolve_terminal_port_id(of_terminal_port_token), resolve_obstruction_id(of_obstruction_token), filter_expression);
+    if (count <= 0)
+    {
+        return return_string("");
+    }
+    return return_string(join_friendly_ids<LeShapeId>(count, le_search_result_shape_at, kShapePrefix));
 }
 
 // --- Abstract boundary ---

@@ -48,12 +48,33 @@ check "message_count after read_lef" 0 [message_count]
 set abstract_id [design_abstract_id 0]
 check_true "design_abstract_id is valid" [expr {$abstract_id != $kInvalidId}]
 
-check_true "open_design returns a valid design id" [expr {[open_design TESTCELL] != $kInvalidId}]
+check "open_design returns a friendly design id" design:TESTCELL [open_design TESTCELL]
 
 if {[catch {open_design DOES_NOT_EXIST} err]} {
     check "open_design unknown name error message" "open_design: no such design \"DOES_NOT_EXIST\"" $err
 } else {
     puts stderr "FAIL: open_design on an unknown name did not raise a Tcl error"
+    exit 1
+}
+
+# --- Library/Design/Abstract search (UPDATES.md item 19.1) ---
+
+check "get_libraries finds the loaded library" library:testcell [get_libraries]
+check "get_libraries with a matching name expression" library:testcell [get_libraries testcell]
+check "get_libraries with a non-matching name expression" {} [get_libraries DOES_NOT_EXIST]
+
+check "get_designs -of library:testcell" design:TESTCELL [get_designs -of library:testcell]
+check "get_designs default scope uses the current view's Library" design:TESTCELL [get_designs]
+
+check "get_abstracts -of design:TESTCELL" abstract:0 [get_abstracts -of design:TESTCELL]
+check "get_abstracts default scope uses the current view" abstract:0 [get_abstracts]
+
+if {[catch {get_abstracts -of library:testcell} err]} {
+    check "get_abstracts wrong -of type error message" \
+        "get_abstracts: -of only accepts design: tokens (got \"library:testcell\") - only design objects are valid parents for get_abstracts" \
+        $err
+} else {
+    puts stderr "FAIL: get_abstracts -of library:... did not raise a Tcl error"
     exit 1
 }
 
@@ -89,33 +110,36 @@ check "terminal_properties direction" INPUT [dict get $props direction]
 # it from the new name rather than assuming the old string still
 # resolves (see le_tcl_shim.hpp's own comment on set_terminal_name).
 check "set_terminal_name return code" 0 [set_terminal_name $in0 IN0_RENAMED]
-set in0 [get_terminals ".name == IN0_RENAMED"]
+set in0 [get_terminals IN0_RENAMED]
 check "renamed terminal is findable via its new friendly id" terminal:IN0_RENAMED $in0
 check "renamed terminal_properties name" IN0_RENAMED [dict get [terminal_properties $in0] name]
 
 check "set_terminal_name restore return code" 0 [set_terminal_name $in0 IN0]
-set in0 [get_terminals ".name == IN0"]
+set in0 [get_terminals IN0]
 check "restored terminal is findable via its restored friendly id" terminal:IN0 $in0
 
 check "set_terminal_direction return code" 0 [set_terminal_direction $in0 INOUT]
 check "changed terminal_properties direction" INOUT [dict get [terminal_properties $in0] direction]
 check "set_terminal_direction restore return code" 0 [set_terminal_direction $in0 INPUT]
 
-set matches [get_terminals ".name =~ IN*"]
-check "get_terminals glob match" $in0 $matches
+set matches [get_terminals IN*]
+check "get_terminals name-expression glob match" $in0 $matches
 
-set both [get_terminals ".direction == INPUT || .direction == OUTPUT"]
-check "get_terminals or-expression match count" 3 [llength $both]
+set both [get_terminals -filter {.direction == INPUT || .direction == OUTPUT}]
+check "get_terminals -filter or-expression match count" 3 [llength $both]
 
-check "get_terminals no match" {} [get_terminals ".name == DOES_NOT_EXIST"]
+check "get_terminals name-expression no match" {} [get_terminals DOES_NOT_EXIST]
 
+# A bare positional name-expression is never a parse error (it's just a
+# glob pattern, matched literally if it contains no wildcard) - the
+# parse-error path only exists behind -filter now.
 set messages_before_parse_error [message_count]
-if {[catch {get_terminals "not a filter expression"} bad_result]} {
-    puts "unexpected: get_terminals on a bad expression raised a Tcl error ($bad_result)"
-} else {
-    check "get_terminals parse-error result" {} $bad_result
-    check_true "get_terminals parse error was logged" [expr {[message_count] > $messages_before_parse_error}]
-}
+check "get_terminals -filter parse-error result" {} [get_terminals -filter {not a filter expression}]
+check_true "get_terminals -filter parse error was logged" [expr {[message_count] > $messages_before_parse_error}]
+
+set messages_before_bad_field [message_count]
+check "get_terminals -filter with an unknown field returns empty" {} [get_terminals -filter {.bogus_field == 1}]
+check_true "get_terminals -filter unknown-field error was logged" [expr {[message_count] > $messages_before_bad_field}]
 
 # --- TerminalPort + Shape (rect/polygon/path via the coordinate typemap) ---
 
@@ -148,8 +172,14 @@ check "shape_paths point count" 3 [llength [dict get [lindex $paths 0] points]]
 
 check "terminal_port_shapes lists the created shape" $shape [terminal_port_shapes $port]
 
-set port_matches [get_terminal_ports ".terminal.name =~ IN* && .shapes.layer_name == M1"]
-check "get_terminal_ports relational + list-hop match" $port $port_matches
+set port_matches [get_terminal_ports -filter {.terminal.name =~ IN* && .shapes.layer_name == M1}]
+check "get_terminal_ports -filter relational + list-hop match" $port $port_matches
+
+check "get_shapes -of \$port finds only the created shape" $shape [get_shapes -of $port]
+# The default (no -of) scope also picks up the fixture's own LEF-authored
+# PIN A, which has its own Port+Shape (shape:0, created while reading
+# testcell.lef) - not just the one this test just created (shape:1).
+check "get_shapes default scope finds every Shape in the current view" {shape:0 shape:1} [get_shapes]
 
 check "remove_shape_rect return code" 0 [remove_shape_rect $shape 0]
 check "shape_rects after remove" {} [shape_rects $shape]
@@ -163,11 +193,11 @@ set obstruction_shape [create_obstruction_shape -obstruction $obstruction -layer
 check "add rect to obstruction shape" 0 [add_shape_rect -shape $obstruction_shape -rect {0 0 1 1}]
 check "obstruction_shapes lists the created shape" $obstruction_shape [obstruction_shapes $obstruction]
 
-set obstruction_matches [get_obstructions ".shapes.layer_name == M1"]
-check "get_obstructions list-hop match" $obstruction $obstruction_matches
+set obstruction_matches [get_obstructions -filter {.shapes.layer_name == M1}]
+check "get_obstructions -filter list-hop match" $obstruction $obstruction_matches
 
 check "delete_obstruction return code" 0 [delete_obstruction $obstruction]
-check "get_obstructions after delete" {} [get_obstructions ".shapes.layer_name == M1"]
+check "get_obstructions after delete" {} [get_obstructions -filter {.shapes.layer_name == M1}]
 
 # --- Abstract boundary ---
 
@@ -178,14 +208,14 @@ check "update_abstract_boundary return code" 0 [update_abstract_boundary -abstra
 # way (see le_delete_terminal's own doc comment in api.hpp). ---
 
 check "delete_terminal return code" 0 [delete_terminal $in0]
-check "get_terminal_ports after cascade delete" {} [get_terminal_ports ".terminal.name == IN0"]
+check "get_terminal_ports after cascade delete" {} [get_terminal_ports -filter {.terminal.name == IN0}]
 
 check "delete_terminal (out0) return code" 0 [delete_terminal $out0]
 
 # The fixture's own LEF-authored PIN A is untouched by any of the above -
 # it's the only Terminal left once both terminals this test created are
 # gone.
-check "get_terminals after deleting both created terminals" A [dict get [terminal_properties [get_terminals ".name =~ *"]] name]
+check "get_terminals after deleting both created terminals" A [dict get [terminal_properties [get_terminals]] name]
 
 # --- Current-view scoping (UPDATES.md item 17) ---
 #
@@ -199,20 +229,20 @@ check "get_terminals after deleting both created terminals" A [dict get [termina
 
 check "read_lef (othercell.lef) return code" 0 [read_lef $other_lef_path]
 
-check_true "open_design OTHERCELL returns a valid design id" [expr {[open_design OTHERCELL] != $kInvalidId}]
+check "open_design OTHERCELL returns a friendly design id" design:OTHERCELL [open_design OTHERCELL]
 
 set other_terminal_names {}
-foreach id [get_terminals "*"] {
+foreach id [get_terminals] {
     lappend other_terminal_names [dict get [terminal_properties $id] name]
 }
-check "get_terminals * in OTHERCELL's view only sees OTHERCELL's own terminal" B $other_terminal_names
+check "get_terminals default scope in OTHERCELL's view only sees OTHERCELL's own terminal" B $other_terminal_names
 
-check_true "open_design TESTCELL returns a valid design id" [expr {[open_design TESTCELL] != $kInvalidId}]
+check "open_design TESTCELL returns a friendly design id" design:TESTCELL [open_design TESTCELL]
 
 set testcell_terminal_names {}
-foreach id [get_terminals "*"] {
+foreach id [get_terminals] {
     lappend testcell_terminal_names [dict get [terminal_properties $id] name]
 }
-check "get_terminals * back in TESTCELL's view only sees TESTCELL's own terminal, not OTHERCELL's" A $testcell_terminal_names
+check "get_terminals default scope back in TESTCELL's view only sees TESTCELL's own terminal, not OTHERCELL's" A $testcell_terminal_names
 
 puts "le_tcl CRUD test passed"

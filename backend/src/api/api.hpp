@@ -260,6 +260,90 @@ extern "C"
     /// on this handle.
     LeDesignId le_design_by_name(LeHandle *handle, const char *name);
 
+    // --- UPDATES.md item 19.1: get_<type> enumeration (Library/Design/
+    // Abstract) ---
+    //
+    // A unified `get_<type> [<name-expr>] [-of <parent>] [-filter <expr>]`
+    // TCL command pattern sits on top of these - see le_get_terminals'
+    // own comment for the general contract (name-expression glob
+    // matching, filter-expression validation, "invalid parent id means
+    // use the default scope" convention) shared by every le_get_* function
+    // in this API, not just this section's three.
+
+    /// @brief Look up the Library named `name` (exact match) on this
+    /// handle - same contract as le_design_by_name, one level up. Returns
+    /// an invalid id (index == UINT32_MAX) if handle or name is null, or
+    /// no Library with that name is loaded on this handle.
+    LeLibraryId le_library_by_name(LeHandle *handle, const char *name);
+
+    /// @brief The Library at `id`'s own name - a direct field accessor
+    /// (same convention as le_terminal_name), for a caller that has an id
+    /// (e.g. from le_search_result_library_at) rather than a flat index
+    /// (le_library_at's own addressing). Returned pointer is owned by the
+    /// handle's Root - valid until the next call that mutates this
+    /// handle's Library pool - copy out immediately, don't hold across
+    /// another call. Returns nullptr if handle is null or id doesn't name
+    /// a Library on this handle.
+    const char *le_library_name(LeHandle *handle, LeLibraryId id);
+
+    /// @brief The Design at `id`'s own name - same contract as
+    /// le_library_name, one level down. Distinct from le_design_name
+    /// above (which is flat-index addressed, like le_library_at/
+    /// le_library_design_at's own enumeration) since this plain-C API
+    /// can't overload on parameter type.
+    const char *le_design_name_by_id(LeHandle *handle, LeDesignId id);
+
+    /// @brief Search every Library on this handle - unlike
+    /// le_get_terminals/le_get_designs/le_get_abstracts, Library has no
+    /// parent type, so there is no `-of`/default-scope concept here; this
+    /// always searches every Library loaded so far. `name_expression`
+    /// (glob-matched against Library::name, Tcl `string match` semantics)
+    /// and `filter_expression` (see backend/src/database/filter.hpp) are
+    /// each optional - pass null or "" to skip that axis. Returns the
+    /// match count (0 if handle is null or nothing matched), or -1 if
+    /// filter_expression fails to parse or references an unknown
+    /// field/hop (see le_message_count/le_message_at for either error).
+    /// Read results back via le_search_result_library_at, same "valid
+    /// until the next call" convention as this API's other cached-result
+    /// accessors.
+    int32_t le_get_libraries(LeHandle *handle, const char *name_expression, const char *filter_expression);
+
+    /// @brief The LeLibraryId at `index` (0..le_get_libraries' last
+    /// return value - 1) from the most recent le_get_libraries call.
+    /// Returns an invalid id (index == UINT32_MAX) if handle is null or
+    /// index is out of range.
+    LeLibraryId le_search_result_library_at(LeHandle *handle, int32_t index);
+
+    /// @brief Search Designs. `of_library` scopes to one Library's own
+    /// Designs (see le_library_by_name) - pass an invalid id (e.g. a
+    /// default-constructed LeLibraryId) to use the default scope instead:
+    /// the current view's own Design's Library if a Design is currently
+    /// selected (le_set_current_design/le_set_current_design_by_id), else
+    /// every Design loaded on this handle. `name_expression`/
+    /// `filter_expression` - see le_get_libraries' own comment. Returns
+    /// the match count, or -1 on a filter parse/validation error.
+    int32_t le_get_designs(LeHandle *handle, LeLibraryId of_library, const char *name_expression, const char *filter_expression);
+
+    /// @brief The LeDesignId at `index` from the most recent le_get_designs
+    /// call - see le_search_result_library_at's own contract.
+    LeDesignId le_search_result_design_at(LeHandle *handle, int32_t index);
+
+    /// @brief Search Abstracts. `of_design` scopes to one Design's own
+    /// Abstract (today always exactly one, per Design - see
+    /// le_design_by_name) - pass an invalid id to use the default scope:
+    /// the currently selected Design's Abstract if one is selected, else
+    /// none. Abstract has no name field (LEF has no concept of naming an
+    /// Abstract independently of its Design), so there is no
+    /// `name_expression` parameter here, only `filter_expression` - see
+    /// le_get_libraries' own comment. Returns the match count, or -1 on a
+    /// filter parse/validation error.
+    int32_t le_get_abstracts(LeHandle *handle, LeDesignId of_design, const char *filter_expression);
+
+    /// @brief The LeAbstractId at `index` from the most recent
+    /// le_get_abstracts call - see le_search_result_library_at's own
+    /// contract.
+    LeAbstractId le_search_result_abstract_at(LeHandle *handle, int32_t index);
+
     /// @brief Number of layer-widget rows currently available - mirrors
     /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
     /// includes BOUNDARY and any future non-Technology-derived "extra"
@@ -961,20 +1045,32 @@ extern "C"
     /// handle is null or index is out of range.
     LeTerminalId le_search_result_terminal_at(LeHandle *handle, int32_t index);
 
-    /// @brief Search only the Terminals belonging to the currently
-    /// selected Design's Abstract (see le_set_current_design/
-    /// le_set_current_design_by_id) for `filter_expression` - same
-    /// grammar/error contract as le_search_terminal, but scoped instead
-    /// of scanning every Terminal on the handle (UPDATES.md item 17: a
-    /// TCL script's "give me the terminals" means "in the view I have
-    /// open", not "across every open Library/Design"). Pass "*" to match
-    /// every Terminal in the current Abstract without parsing it as a
-    /// filter expression at all. Shares le_search_terminal's result
-    /// buffer - read results back via le_search_result_terminal_at, same
-    /// as le_search_terminal's own results. Returns the match count (0 if
-    /// handle or filter_expression is null, or no Design is currently
-    /// selected), or -1 if filter_expression fails to parse.
-    int32_t le_get_terminals(LeHandle *handle, const char *filter_expression);
+    /// @brief Search Terminals (UPDATES.md item 19.1 - supersedes item
+    /// 17's own single-filter-string `le_get_terminals`, this is the
+    /// general contract every other le_get_* function in this API
+    /// follows too). Three independent, each-optional axes:
+    ///   - `of_abstract` scopes to one Abstract's own Terminals (see
+    ///     le_get_abstracts) - pass an invalid id (e.g. a
+    ///     default-constructed LeAbstractId) to use the default scope
+    ///     instead: the currently selected Design's Abstract (item 17's
+    ///     "current view" - le_set_current_design/
+    ///     le_set_current_design_by_id), or none if no Design is
+    ///     selected.
+    ///   - `name_expression` glob-matches Terminal::name (Tcl `string
+    ///     match` semantics, e.g. "IN*") - pass null or "" to skip this
+    ///     axis (match every name).
+    ///   - `filter_expression` (see backend/src/database/filter.hpp) -
+    ///     pass null or "" to skip this axis. Only field/hop names this
+    ///     API recognizes as valid for Terminal are accepted - an
+    ///     unrecognized one is a validation error (item 19.1's own
+    ///     error-checking requirement), not silent no-match.
+    /// A Terminal matches iff it satisfies every given axis. Shares
+    /// le_search_terminal's result buffer - read results back via
+    /// le_search_result_terminal_at. Returns the match count (0 if handle
+    /// is null or nothing matched), or -1 if filter_expression fails to
+    /// parse or references an unknown field/hop (see le_message_count/
+    /// le_message_at for either error).
+    int32_t le_get_terminals(LeHandle *handle, LeAbstractId of_abstract, const char *name_expression, const char *filter_expression);
 
     // --- TerminalPort/Obstruction CRUD + filter-search, and Abstract
     // boundary update (Phase 4, continued) ---
@@ -1033,12 +1129,15 @@ extern "C"
     /// own comment for the general contract.
     LeTerminalPortId le_search_result_terminal_port_at(LeHandle *handle, int32_t index);
 
-    /// @brief Search only the TerminalPorts whose Terminal belongs to the
-    /// currently selected Design's Abstract - see le_get_terminals' own
-    /// comment for the full contract (grammar/"*"/error/result-buffer
-    /// behavior), identical here, just scoped to TerminalPort. Returns
-    /// the match count, or -1 on a parse error.
-    int32_t le_get_terminal_ports(LeHandle *handle, const char *filter_expression);
+    /// @brief Search TerminalPorts - see le_get_terminals' own comment
+    /// for the general contract. `of_terminal` scopes to one Terminal's
+    /// own Ports (see le_terminal_by_name) - pass an invalid id to use
+    /// the default scope: every TerminalPort under every Terminal of the
+    /// currently selected Abstract (a 2-hop current-view default).
+    /// TerminalPort has no name field, so there is no `name_expression`
+    /// parameter, only `filter_expression`. Returns the match count, or
+    /// -1 on a filter parse/validation error.
+    int32_t le_get_terminal_ports(LeHandle *handle, LeTerminalId of_terminal, const char *filter_expression);
 
     /// @brief Create an empty Obstruction on the Abstract at
     /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
@@ -1077,11 +1176,14 @@ extern "C"
     /// own comment for the general contract.
     LeObstructionId le_search_result_obstruction_at(LeHandle *handle, int32_t index);
 
-    /// @brief Search only the Obstructions belonging to the currently
-    /// selected Design's Abstract - see le_get_terminals' own comment for
-    /// the full contract, identical here, just scoped to Obstruction.
-    /// Returns the match count, or -1 on a parse error.
-    int32_t le_get_obstructions(LeHandle *handle, const char *filter_expression);
+    /// @brief Search Obstructions - see le_get_terminals' own comment
+    /// for the general contract. `of_abstract` scopes to one Abstract's
+    /// own Obstructions - pass an invalid id to use the default scope:
+    /// the currently selected Abstract. Obstruction has no name field,
+    /// so there is no `name_expression` parameter, only
+    /// `filter_expression`. Returns the match count, or -1 on a filter
+    /// parse/validation error.
+    int32_t le_get_obstructions(LeHandle *handle, LeAbstractId of_abstract, const char *filter_expression);
 
     /// @brief Replace the Abstract at `id`'s boundary outline wholesale
     /// with a single polygon built from `coords_um` (UPDATES.md item
@@ -1163,6 +1265,27 @@ extern "C"
     /// handle or layer_name is null, or obstruction_id doesn't name an
     /// Obstruction on this handle.
     LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name);
+
+    /// @brief Search Shapes (UPDATES.md item 19.1) - `of_terminal_port`/
+    /// `of_obstruction` each independently scope to one TerminalPort's or
+    /// one Obstruction's own Shapes (a Shape has exactly one real parent,
+    /// never both - see ShapeData's own comment - but both parameters are
+    /// accepted so a caller doesn't need to know which kind it has;
+    /// pass an invalid id for whichever doesn't apply). If **both** are
+    /// invalid, the default scope is every Shape reachable from the
+    /// current view: every Shape under the currently selected Design's
+    /// Abstract's Terminals' Ports, unioned with every Shape under that
+    /// Abstract's own Obstructions (the same current-view concept
+    /// le_get_terminal_ports already uses, extended one hop further).
+    /// Shape has no name field, only `layer_name` (a property, not an
+    /// identity), so there is no `name_expression` parameter - only
+    /// `filter_expression`, see le_get_libraries' own comment. Returns
+    /// the match count, or -1 on a filter parse/validation error.
+    int32_t le_get_shapes(LeHandle *handle, LeTerminalPortId of_terminal_port, LeObstructionId of_obstruction, const char *filter_expression);
+
+    /// @brief The LeShapeId at `index` from the most recent le_get_shapes
+    /// call - see le_search_result_library_at's own contract.
+    LeShapeId le_search_result_shape_at(LeHandle *handle, int32_t index);
 
     /// @brief Number of shapes owned by the TerminalPort at `id` -
     /// indexes `le_terminal_port_shape_at`'s own `index` parameter,

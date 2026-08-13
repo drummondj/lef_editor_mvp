@@ -724,7 +724,16 @@ index, generation}` — wrapping each of the
      `get_obstructions`/`get_terminal_ports` commands (replacing
      `search_terminal`/`search_obstruction`/`search_terminal_port`) to
      it — the CRUD commands above remain explicit-`-abstract`, unchanged;
-     item 17 was query scoping only, not a full context stack.
+     item 17 was query scoping only, not a full context stack. UPDATES.md
+     item 19.1 later generalized `get_terminals`/`get_obstructions`/
+     `get_terminal_ports` (plus new `get_libraries`/`get_designs`/
+     `get_abstracts`/`get_shapes`) into one unified `get_<type> [<name-
+     expr>...] [-of <parent-token>...] [-filter <expr>] [-help]` pattern —
+     `-of` reintroduces explicit, opt-in cross-view addressing (e.g.
+     `get_terminals -of abstract:5` from a script currently viewing a
+     different Abstract), with the current-view default preserved when
+     `-of` is omitted. See item 19.1's own Resolution for the full
+     command surface and friendly-id extension to Library/Design/Abstract.
 
    `src/tcl/tests/crud_test.tcl` (`ctest`'s `le_tcl_crud`) exercises the
    whole surface end to end against the same `testcell.lef` fixture:

@@ -25,35 +25,66 @@
 // real interface?" - it wasn't; Phase 0 fixed that, and every Phase 4
 // CRUD command below follows the same shape.
 //
-// --- IDs (Phase 5, revised for friendly ids) ---
-// AbstractId/DesignId (design_abstract_id, design_by_name,
-// set_current_design_cmd, update_abstract_boundary_cmd's abstract_id
-// argument) are still a plain {uint32_t index, generation} struct in
+// --- IDs (Phase 5, revised for friendly ids - UPDATES.md items 18/19.1) ---
+// AbstractId/DesignId's own CRUD-flag/session-selection uses
+// (design_abstract_id, design_by_name, set_current_design_cmd,
+// update_abstract_boundary_cmd's abstract_id argument, every `-abstract`
+// CRUD flag) are still a plain {uint32_t index, generation} struct in
 // api.hpp, packed into one int64_t (generation in the high 32 bits, index
 // in the low 32 bits, via pack<IdT>/unpack<IdT> in le_tcl_shim.cpp) -
 // int64_t is a fundamental type SWIG's stdint.i already marshals to/from
 // a plain Tcl integer with zero custom typemap code. kInvalidId
-// (0xFFFFFFFF) marks an invalid id for these two types only, since a
-// packed valid id (index != UINT32_MAX) can never equal it.
+// (0xFFFFFFFF) marks an invalid id for these two types in that role,
+// since a packed valid id (index != UINT32_MAX) can never equal it. Item
+// 19.1's own new get_libraries/get_designs/get_abstracts commands are
+// additive - they return/accept friendly strings (below), not a retrofit
+// of those already-shipped entry points (a deliberate, flagged choice,
+// see UPDATES.md item 19.1's own Resolution).
 //
-// TerminalId/TerminalPortId/ObstructionId/ShapeId cross this shim as
-// type-prefixed strings instead - not user-friendly to hand a script a
-// raw packed integer as its only handle on an object. `"terminal:<name>"`
-// (Terminal's own name field - see le_create_terminal/le_set_terminal_name's
-// new uniqueness enforcement in api.hpp, which makes a name a safe,
-// unambiguous key within one Abstract) and `"obstruction:<n>"`/
-// `"terminal_port:<n>"`/`"shape:<n>"` (Obstruction/TerminalPort/Shape have no name
-// field - `<n>` is the same packed integer as before, just type-prefixed
-// for self-description, resolved with resolve_numeric_friendly_id in
-// le_tcl_shim.cpp) are built/parsed entirely in le_tcl_shim.cpp -
-// api.hpp's own return types for these are unchanged (still typed
-// LeTerminalId/etc structs), matching this shim's usual "ergonomics stay
-// here, not in the shared C API" split. Empty string `""` is the uniform
-// "not found / invalid" signal for all four - a malformed string or a
-// wrong-type prefix (e.g. passing an `"obstruction:..."` id where a
-// `"terminal:..."` one is expected) resolves to the same invalid sentinel
-// api.hpp's own not-found paths already produce, indistinguishable from
-// "no such object" - no separate error path needed for it.
+// Terminal/TerminalPort/Obstruction/Shape ids (item 18), and now also
+// Library/Design/Abstract ids wherever item 19.1's own get_* commands
+// return/accept them (though not the pre-existing CRUD-flag/session
+// entry points above), cross this shim as type-prefixed strings instead
+// - not user-friendly to hand a script a raw packed integer as its only
+// handle on an object. `"terminal:<name>"`/`"library:<name>"`/
+// `"design:<name>"` (each has a real, uniquely-indexed-or-uniqueness-
+// enforced .name field - Terminal's uniqueness is enforced per-Abstract
+// by api.hpp, Library/Design's is a real global cmg index=True) and
+// `"obstruction:<n>"`/`"terminal_port:<n>"`/`"shape:<n>"`/`"abstract:<n>"`
+// (no name field on any of these four - `<n>` is the same packed integer
+// as before, just type-prefixed for self-description, resolved with
+// resolve_numeric_friendly_id in le_tcl_shim.cpp) are built/parsed
+// entirely in le_tcl_shim.cpp - api.hpp's own return types for these are
+// unchanged (still typed LeTerminalId/etc structs), matching this shim's
+// usual "ergonomics stay here, not in the shared C API" split. Empty
+// string `""` is the uniform "not found / invalid" signal for all seven
+// - a malformed string or a wrong-type prefix (e.g. passing an
+// `"obstruction:..."` id where a `"terminal:..."` one is expected)
+// resolves to the same invalid sentinel api.hpp's own not-found paths
+// already produce, indistinguishable from "no such object" - no separate
+// error path needed for it. An empty *token* string is exactly what a
+// caller passes to mean "no -of given" too (see below) - it resolves the
+// same way (an unresolvable/absent token both look like "invalid" to the
+// resolver), which is exactly what "use the default scope" needs.
+//
+// --- get_<type> command pattern (UPDATES.md item 19.1) ---
+// Every get_<type> command (get_libraries, get_designs, get_abstracts,
+// get_terminals, get_terminal_ports, get_obstructions, get_shapes) shares
+// one shape at the api.hpp layer: an optional `of_<parent>` id (an
+// invalid/default-constructed one means "no -of given, use the default
+// scope" - see each le_get_* function's own api.hpp comment for exactly
+// what that default is), an optional `name_expression` (glob-matched
+// against the type's own .name field, Tcl `string match` semantics - only
+// present for types that have one: Library/Design/Terminal), and an
+// optional `filter_expression` (backend/src/database/filter.hpp,
+// field/hop names now validated against a hand-maintained allowlist per
+// type - an unrecognized name is a real error, not silent no-match, per
+// item 19.1's own error-checking requirement). At the Tcl layer, `-of`
+// accepts a *list* of same-type parent tokens (OR'd) and name expressions
+// are likewise OR'd (see le_tcl_procs.tcl's parse_get_args) - the shim/
+// api.hpp layer only ever sees one resolved id/expression per call; the
+// Tcl proc loops over multiple tokens/expressions itself and unions the
+// per-call results.
 //
 // --- Property tables and search results (Phase 5) ---
 // Deliberately NOT built as Tcl lists/dicts in C++ here - that needs
@@ -69,14 +100,16 @@
 // as a native int), so preserving LeProperty's STRING/INT/DOUBLE tag
 // across this boundary isn't worth the extra accessors it would take.
 //
-// get_terminals is the one search-result accessor built as count+by-index
-// (get_terminals_cmd/get_terminals_at) rather than one space-joined
-// string, unlike get_obstructions/get_terminal_ports/terminal_port_shapes/
-// obstruction_shapes: a Terminal's friendly id embeds its own
-// (LEF-authored, not this project's to constrain) name, so nothing rules
-// out whitespace/braces inside a joined "terminal:..." token - the other
-// four's tokens are always purely numeric (`obstruction:N`/`terminal_port:N`/
-// `shape:N`), so they're provably safe to keep space-joining.
+// get_libraries/get_designs/get_terminals are the search-result accessors
+// built as count+by-index (e.g. get_terminals_cmd/get_terminals_at)
+// rather than one space-joined string, unlike get_abstracts/
+// get_obstructions/get_terminal_ports/get_shapes/terminal_port_shapes/
+// obstruction_shapes: Library/Design/Terminal friendly ids embed their
+// own (LEF-authored, not this project's to constrain) name, so nothing
+// rules out whitespace/braces inside a joined "library:..."/"design:..."/
+// "terminal:..." token - the other four's tokens are always purely
+// numeric (`abstract:N`/`obstruction:N`/`terminal_port:N`/`shape:N`), so
+// they're provably safe to keep space-joining.
 
 int read_lef(const char *path);
 int design_count();
@@ -104,7 +137,8 @@ int viewport_height();
 /// one LEF file/library is in play, same assumption this project's
 /// single-shared-Technology convention already makes elsewhere. Superseded
 /// for the "select a view to work in" use case by open_design below
-/// (UPDATES.md item 17) - kept as-is since scripts may still want a raw
+/// (UPDATES.md item 17), and for general enumeration by get_abstracts
+/// (UPDATES.md item 19.1) - kept as-is since scripts may still want a raw
 /// AbstractId without changing the session's current-view state.
 /// Returns kInvalidId if index is out of range.
 long long design_abstract_id(int design_index);
@@ -121,15 +155,17 @@ long long design_by_name(const char *name);
 /// doesn't name a Design on this session.
 int set_current_design_cmd(long long design_id);
 
-/// @brief Sentinel for "no such id" for AbstractId/DesignId - see this
-/// header's own "IDs" comment. Every api.hpp failure path for these two
-/// types returns an id struct with index == UINT32_MAX and generation ==
-/// 0 (never left uninitialized - see TCL_EXPLORATION.md's "zero-init
-/// bug" note), which pack() (in le_tcl_shim.cpp) always turns into
-/// exactly this value - not -1 (0xFFFFFFFFFFFFFFFF), which would require
-/// generation == UINT32_MAX too. Terminal/TerminalPort/Obstruction/Shape
-/// ids use an empty string ("") as their own invalid sentinel instead -
-/// see the "IDs" comment above.
+/// @brief Sentinel for "no such id" for AbstractId/DesignId in their
+/// CRUD-flag/session-selection role - see this header's own "IDs"
+/// comment. Every api.hpp failure path for these two types in that role
+/// returns an id struct with index == UINT32_MAX and generation == 0
+/// (never left uninitialized - see TCL_EXPLORATION.md's "zero-init bug"
+/// note), which pack() (in le_tcl_shim.cpp) always turns into exactly
+/// this value - not -1 (0xFFFFFFFFFFFFFFFF), which would require
+/// generation == UINT32_MAX too. Every other id type (including Library/
+/// Design/Abstract wherever get_* commands return/accept them) uses an
+/// empty string ("") as their own invalid sentinel instead - see the
+/// "IDs" comment above.
 constexpr long long kInvalidId = 0xFFFFFFFFLL;
 
 /// @brief Point every subsequent shim call at an externally-owned
@@ -146,6 +182,40 @@ constexpr long long kInvalidId = 0xFFFFFFFFLL;
 /// self-created handle is lazily latched on session()'s first call and
 /// is never revisited afterward, injected or not.
 void set_session_handle(long long handle_address);
+
+// --- Library/Design/Abstract search (UPDATES.md item 19.1) ---
+
+/// @brief Search Libraries - see this header's own "get_<type> command
+/// pattern" comment for the general contract. Library has no parent
+/// type, so there is no `of_*` parameter here. Pass "" for either
+/// argument to skip that axis. Returns the match count, or -1 on a
+/// filter parse/validation error (check message_count()).
+int get_libraries_cmd(const char *name_expression, const char *filter_expression);
+
+/// @brief The friendly `"library:NAME"` id at `index`
+/// (0..get_libraries_cmd's last return value - 1). Returns "" if index
+/// is out of range.
+const char *get_libraries_at(int index);
+
+/// @brief Search Designs. `of_library_token` (a friendly `"library:NAME"`
+/// id, or "" to use the default scope - see le_get_designs' own api.hpp
+/// comment). Returns the match count, or -1 on a filter parse/validation
+/// error.
+int get_designs_cmd(const char *of_library_token, const char *name_expression, const char *filter_expression);
+
+/// @brief The friendly `"design:NAME"` id at `index` from the most
+/// recent get_designs_cmd call.
+const char *get_designs_at(int index);
+
+/// @brief Search Abstracts. `of_design_token` (a friendly `"design:NAME"`
+/// id, or "" for the default scope - see le_get_abstracts' own api.hpp
+/// comment). Abstract has no name field, so there is no
+/// `name_expression` parameter. Returns a space-separated string of
+/// friendly `"abstract:N"` ids (already a well-formed Tcl list - see
+/// this header's own "property tables and search results" comment) - ""
+/// on no match, or on a filter parse/validation error (check
+/// message_count() to distinguish the two).
+const char *get_abstracts_cmd(const char *of_design_token, const char *filter_expression);
 
 // --- Terminal CRUD + search ---
 
@@ -178,19 +248,16 @@ int set_terminal_name(const char *id, const char *name);
 int set_terminal_direction_cmd(const char *id, int direction);
 int delete_terminal(const char *id);
 
-/// @brief Search the Terminals belonging to the current view's Abstract
-/// (see open_design/set_current_design_cmd - UPDATES.md item 17) for
-/// `filter_expression` (see backend/src/database/filter.hpp for the
-/// grammar, or pass "*" to match every Terminal in the current view
-/// without parsing a filter expression at all). Returns the match count
-/// (0 on no match, no current design selected, or a null
-/// filter_expression), or -1 on a parse error (check message_count()).
-/// Read results back via get_terminals_at, same "valid until the next
-/// get_terminals_cmd call" convention as this shim's other cached-result
-/// accessors - see this header's own "IDs"/"property tables and search
-/// results" comments for why this is count+by-index rather than one
-/// joined string, unlike get_obstructions/get_terminal_ports.
-int get_terminals_cmd(const char *filter_expression);
+/// @brief Search Terminals - see this header's own "get_<type> command
+/// pattern" and "IDs" comments for the general contract.
+/// `of_abstract_token` (a friendly `"abstract:N"` id, or "" for the
+/// default scope - the current view, see le_get_terminals' own api.hpp
+/// comment) and `name_expression` (glob against Terminal::name, "" to
+/// skip) and `filter_expression` ("" to skip) are each independent axes.
+/// Returns the match count (0 on no match, or a null handle), or -1 on a
+/// filter parse/validation error (check message_count()). Read results
+/// back via get_terminals_at.
+int get_terminals_cmd(const char *of_abstract_token, const char *name_expression, const char *filter_expression);
 
 /// @brief The friendly `"terminal:NAME"` id at `index`
 /// (0..get_terminals_cmd's last return value - 1) from the most recent
@@ -208,19 +275,20 @@ const char *terminal_port_property_name(const char *id, int index);
 const char *terminal_port_property_value(const char *id, int index);
 int delete_terminal_port(const char *id);
 
-/// @brief Search the TerminalPorts whose Terminal belongs to the current
-/// view's Abstract - see get_terminals_cmd's own comment for the filter
-/// grammar/"*"/scoping contract. Unlike get_terminals_cmd, this stays a
-/// single space-separated-string return: every token is a purely numeric
-/// `"terminal_port:N"` id, never LEF-authored text, so joining is provably safe
-/// (already a well-formed Tcl list - see this header's own "property
-/// tables and search results" comment). Empty string on no match, no
-/// current design selected, or a parse error - check message_count().
-const char *get_terminal_ports(const char *filter_expression);
+/// @brief Search TerminalPorts. `of_terminal_token` (a friendly
+/// `"terminal:NAME"` id, or "" for the default scope - every
+/// TerminalPort under every Terminal of the current view, see
+/// le_get_terminal_ports' own api.hpp comment). TerminalPort has no name
+/// field, so there is no name-expression axis, only `filter_expression`.
+/// Returns a space-separated string of friendly `"terminal_port:N"` ids
+/// (provably a well-formed Tcl list, see this header's own "property
+/// tables and search results" comment) - "" on no match or a parse/
+/// validation error (check message_count() to distinguish).
+const char *get_terminal_ports_cmd(const char *of_terminal_token, const char *filter_expression);
 
 /// @brief Space-separated string of friendly `"shape:N"` ids owned by
 /// the TerminalPort at `id` - same "already a well-formed Tcl list"
-/// reasoning as get_terminal_ports' own comment.
+/// reasoning as get_terminal_ports_cmd's own comment.
 const char *terminal_port_shapes(const char *id);
 
 // --- Obstruction CRUD + search ---
@@ -234,12 +302,27 @@ const char *obstruction_property_name(const char *id, int index);
 const char *obstruction_property_value(const char *id, int index);
 int delete_obstruction(const char *id);
 
-/// @brief Search the Obstructions belonging to the current view's
-/// Abstract - see get_terminal_ports' own comment for the full contract
-/// (grammar/"*"/space-joined-is-safe reasoning), identical here, just
-/// scoped to Obstruction; tokens are purely numeric `"obstruction:N"`.
-const char *get_obstructions(const char *filter_expression);
+/// @brief Search Obstructions. `of_abstract_token` (a friendly
+/// `"abstract:N"` id, or "" for the default scope - the current view,
+/// see le_get_obstructions' own api.hpp comment) - see
+/// get_terminal_ports_cmd's own comment for the full contract, identical
+/// here, just scoped to Obstruction; tokens are purely numeric
+/// `"obstruction:N"`.
+const char *get_obstructions_cmd(const char *of_abstract_token, const char *filter_expression);
 const char *obstruction_shapes(const char *id);
+
+// --- Shape search (UPDATES.md item 19.1 - CRUD is further below) ---
+
+/// @brief Search Shapes. `of_terminal_port_token`/`of_obstruction_token`
+/// (friendly `"terminal_port:N"`/`"obstruction:N"` ids, "" for whichever
+/// doesn't apply) each independently scope to that parent's own Shapes -
+/// if *both* are "", the default scope is every Shape reachable from the
+/// current view (see le_get_shapes' own api.hpp comment). Shape has no
+/// name field, so there is no name-expression axis, only
+/// `filter_expression`. Returns a space-separated string of friendly
+/// `"shape:N"` ids - "" on no match or a parse/validation error (check
+/// message_count() to distinguish).
+const char *get_shapes_cmd(const char *of_terminal_port_token, const char *of_obstruction_token, const char *filter_expression);
 
 // --- Abstract boundary ---
 
