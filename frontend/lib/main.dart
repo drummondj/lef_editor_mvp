@@ -19,7 +19,20 @@ class MyApp extends StatelessWidget {
         home: const Home(),
         debugShowCheckedModeBanner: false,
         themeMode: .dark,
-        darkTheme: ThemeData(brightness: .dark, fontFamily: 'JetBrains Mono'),
+        darkTheme: ThemeData(
+          fontFamily: 'JetBrains Mono',
+          colorScheme: ColorScheme(
+            brightness: .dark,
+            primary: const Color.fromARGB(255, 220, 220, 220),
+            onPrimary: Colors.black,
+            secondary: Colors.orange,
+            onSecondary: Colors.black,
+            error: Colors.red,
+            onError: Colors.black,
+            surface: Color.fromARGB(255, 30, 30, 30),
+            onSurface: Color.fromARGB(255, 220, 220, 220),
+          ),
+        ),
         theme: ThemeData(brightness: .light, fontFamily: 'JetBrains Mono'),
       ),
     );

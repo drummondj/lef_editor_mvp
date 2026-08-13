@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.22.0",
+    version="0.23.0",
     classes=[
         Klass(
             name="Technology",
@@ -111,6 +111,58 @@ schema = Schema(
                     type="str",
                     example="/",
                 ),
+                Field(
+                    name="fixed_mask",
+                    description="Top-level LEF FIXEDMASK was specified - distinct from Abstract.is_fixed_mask (LEF MACRO ... FIXEDMASK)",
+                    type="bool",
+                    example=False,
+                ),
+                Field(
+                    name="use_min_spacing_obs",
+                    description="LEF USEMINSPACING OBS ON|OFF - unset if the LEF file never declared it",
+                    type="bool",
+                    example=True,
+                    is_optional=True,
+                ),
+                Field(
+                    name="use_min_spacing_pin",
+                    description="LEF USEMINSPACING PIN ON|OFF - unset if the LEF file never declared it",
+                    type="bool",
+                    example=True,
+                    is_optional=True,
+                ),
+                Field(
+                    name="clearance_measure",
+                    description="LEF CLEARANCEMEASURE (EUCLIDEAN or MAXXY) - empty string if never read",
+                    type="str",
+                    example="EUCLIDEAN",
+                ),
+                Field(
+                    name="manufacturing_grid",
+                    description="LEF MANUFACTURINGGRID, in microns (declared in the file's own units, like database_units_microns - not itself a dbu value) - unset if never read",
+                    type="double",
+                    example=3.5,
+                    is_optional=True,
+                ),
+                Field(
+                    name="max_via_stack",
+                    description="LEF MAXVIASTACK value - unset if never read",
+                    type="int",
+                    example=4,
+                    is_optional=True,
+                ),
+                Field(
+                    name="max_via_stack_bottom_layer",
+                    description="LEF MAXVIASTACK ... RANGE bottomLayer - empty string if the RANGE clause was omitted",
+                    type="str",
+                    example="M1",
+                ),
+                Field(
+                    name="max_via_stack_top_layer",
+                    description="LEF MAXVIASTACK ... RANGE topLayer - empty string if the RANGE clause was omitted",
+                    type="str",
+                    example="M7",
+                ),
             ],
         ),
         Klass(
@@ -134,6 +186,8 @@ schema = Schema(
                 Field(name="data_type", description="The vendored parser's own single-character data type code (lefiProp::dataType()) - I(nteger), R(eal), S(tring), or Q(uoted string)", type="str", example="I"),
                 Field(name="range_min", description="RANGE lower bound, in the property's own units", type="double", example=0.0, is_optional=True),
                 Field(name="range_max", description="RANGE upper bound, in the property's own units", type="double", example=10.0, is_optional=True),
+                Field(name="default_number", description="Default value, if data_type is I(nteger)/R(eal) - unset if none was declared", type="double", example=20.0, is_optional=True),
+                Field(name="default_string", description="Default value, if data_type is S(tring)/Q(uoted string) - empty if none was declared", type="str", example="Cadence96"),
             ],
         ),
         Klass(

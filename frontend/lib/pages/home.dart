@@ -4,7 +4,6 @@ import 'package:lef_editor/components/layer_manager.dart';
 import 'package:lef_editor/components/layout_editor.dart';
 import 'package:lef_editor/components/main_menu.dart';
 import 'package:lef_editor/components/property_viewer.dart';
-import 'package:lef_editor/components/right_sidebar/right_sidebar.dart';
 import 'package:lef_editor/components/status_bar.dart';
 import 'package:lef_editor/components/terminal/terminal.dart';
 import 'package:lef_editor/components/widget_card.dart';
@@ -34,7 +33,14 @@ class _HomeState extends State<Home> {
         DockingColumn([
           DockingItem(
             name: 'Layout',
-            widget: WidgetCard(child: LayoutEditor()),
+            widget: WidgetCard(
+              child: Column(
+                children: [
+                  Expanded(child: LayoutEditor()),
+                  StatusBar(),
+                ],
+              ),
+            ),
             closable: false,
             keepAlive: true,
           ),
@@ -75,7 +81,7 @@ class _HomeState extends State<Home> {
       child: TabbedViewTheme(
         data: TabbedViewThemeData.dark(colorSet: Colors.blueGrey)
           ..tab.selectedStatus.innerBottomBorder = BorderSide(
-            color: Colors.blueAccent,
+            color: Theme.of(context).colorScheme.secondary,
             width: 3,
           )
           ..tabsArea.color = Colors.black
@@ -100,24 +106,3 @@ class _HomeState extends State<Home> {
     );
   }
 }
-
-
-// TabbedViewThemeData.dark(colorSet: Colors.blueGrey)
-//           ..tab.selectedStatus.innerBottomBorder = BorderSide(
-//             color: Colors.blueAccent,
-//             width: 3,
-//           )
-//           ..tabsArea.color = Colors.black
-//           ..tab.selectedStatus.decoration = BoxDecoration(
-//             color: const Color.fromARGB(255, 35, 35, 35),
-//           )
-//           ..tab.decoration = BoxDecoration(color: Colors.black)
-//           ..contentArea.decoration = BoxDecoration(
-//             border: BoxBorder.all(
-//               color: Color.fromARGB(255, 35, 35, 35),
-//               width: 1,
-//             ),
-//           )
-//           ..contentArea.padding = EdgeInsets.all(2),
-//         child: docking,
-//       );

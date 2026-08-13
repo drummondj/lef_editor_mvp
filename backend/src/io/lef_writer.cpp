@@ -135,11 +135,11 @@ namespace le
             // form; the writer always quotes string values regardless -
             // see lefwStringProperty's own "%s \"%s\"" format).
             if (def.data_type == "I")
-                status = lefwIntPropDef(owner_type.c_str(), def.name.c_str(), left, right, 0);
+                status = lefwIntPropDef(owner_type.c_str(), def.name.c_str(), left, right, static_cast<int>(def.default_number.value_or(0.0)));
             else if (def.data_type == "R")
-                status = lefwRealPropDef(owner_type.c_str(), def.name.c_str(), left, right, 0.0);
+                status = lefwRealPropDef(owner_type.c_str(), def.name.c_str(), left, right, def.default_number.value_or(0.0));
             else
-                status = lefwStringPropDef(owner_type.c_str(), def.name.c_str(), left, right, nullptr);
+                status = lefwStringPropDef(owner_type.c_str(), def.name.c_str(), left, right, def.default_string.empty() ? nullptr : def.default_string.c_str());
             if (status)
                 return status;
         }
@@ -1238,9 +1238,23 @@ namespace le
                         return status;
                 }
 
-                for (size_t i = 0; i < via_rule->layers.size() && i < 2; i++)
+                // The cut layer (RECT + SPACING x BY y, GENERATE only) isn't
+                // always via_rule->layers[2] - lefiViaRuleLayer's own file
+                // order is preserved as-is by the reader (see
+                // lefrViaRuleCbkFn above), and complete.5.8.lef's own
+                // VIAGEN3T lists its cut layer (v3) second, not third
+                // (metal/cut/metal, not metal/metal/cut). Identify it by
+                // which layer actually has a rect instead of assuming a
+                // fixed index - the two "regular" (ENCLOSURE-bearing) layers
+                // are whichever ones don't.
+                size_t regular_written = 0;
+                for (const ViaRuleLayer &layer : via_rule->layers)
                 {
-                    const ViaRuleLayer &layer = via_rule->layers[i];
+                    if (layer.rect)
+                        continue;
+                    if (regular_written >= 2)
+                        continue;
+                    regular_written++;
                     // lefwViaRuleGenLayer's DIRECTION/OVERHANG/METALOVERHANG
                     // args are rejected with LEFW_OBSOLETE for any version
                     // >= 5.6 (see lefwWriter.cpp's shared lefwViaRulePrtLayer
@@ -1257,9 +1271,10 @@ namespace le
                         return status;
                 }
 
-                if (via_rule->layers.size() >= 3 && via_rule->layers[2].rect)
+                for (const ViaRuleLayer &cut_layer : via_rule->layers)
                 {
-                    const ViaRuleLayer &cut_layer = via_rule->layers[2];
+                    if (!cut_layer.rect)
+                        continue;
                     status = lefwViaRuleGenLayer3(cut_layer.layer_name.c_str(),
                                                    to_um(cut_layer.rect->ll.x), to_um(cut_layer.rect->ll.y),
                                                    to_um(cut_layer.rect->ur.x), to_um(cut_layer.rect->ur.y),
@@ -1267,6 +1282,7 @@ namespace le
                                                    cut_layer.resistance.value_or(0.0));
                     if (status)
                         return status;
+                    break;
                 }
 
                 status = lefwEndViaRuleGen(via_rule->name.c_str());
@@ -1275,43 +1291,28 @@ namespace le
             }
             else
             {
-                status = lefwStartViaRule(via_rule->name.c_str());
-                if (status)
-                    return status;
-
-                for (size_t i = 0; i < via_rule->layers.size() && i < 2; i++)
-                {
-                    const ViaRuleLayer &layer = via_rule->layers[i];
-                    // Same LEFW_OBSOLETE-at-5.6+ restriction as the
-                    // GENERATE branch above - lefwViaRuleLayer shares the
-                    // same lefwViaRulePrtLayer helper, so DIRECTION/
-                    // OVERHANG/METALOVERHANG can't be written here either
-                    // at this writer's fixed VERSION 5.8.
-                    status = lefwViaRuleLayer(layer.layer_name.c_str(), nullptr, to_um_opt(layer.width_min), to_um_opt(layer.width_max), 0.0, 0.0);
-                    if (status)
-                        return status;
-                }
-
-                for (const std::string &via_name : via_rule->via_names)
-                {
-                    status = lefwViaRuleVia(via_name.c_str());
-                    if (status)
-                        return status;
-                }
-
-                // GENERATE via rules never reach here (see the branch
-                // above) - the vendored writer's generic property
-                // functions accept LEFW_VIARULE/_START but not
-                // LEFW_VIARULEGEN/_START, so GENERATE VIARULE properties
-                // are readable but not writable via this API (see
-                // lef_writer.hpp's own class-level comment).
-                status = write_properties(via_rule->properties);
-                if (status)
-                    return status;
-
-                status = lefwEndViaRule(via_rule->name.c_str());
-                if (status)
-                    return status;
+                // KNOWN VENDORED-LIBRARY DEAD END (see LEFDEF_BUGS.md): a
+                // non-GENERATE VIARULE's LAYER requires exactly 2 LAYER
+                // sub-statements (lef.y's own grammar - an empty VIARULE is
+                // a fatal LEFPARS-1), each requiring a DIRECTION construct
+                // - but lefwViaRuleLayer (shared lefwViaRulePrtLayer helper)
+                // hard-rejects direction/overhang/metalOverhang with
+                // LEFW_OBSOLETE at this writer's fixed VERSION 5.8. There
+                // is no version this writer can pick that satisfies both
+                // sides, and no alternate API. Writing the LAYER
+                // sub-statements without DIRECTION anyway (the previous
+                // behavior) doesn't just lose this VIARULE's own data - a
+                // real LEFPARS-1705 re-parsing it also silently truncates
+                // lefdiff's own comparison for everything written after it
+                // in the same file (confirmed: NONDEFAULTRULE/SITE, which
+                // round-trip correctly on their own, disappeared from the
+                // diff purely because of this). So the whole non-GENERATE
+                // VIARULE is skipped here, not just DIRECTION - same
+                // "vendored writer literally cannot produce valid output,
+                // skip and mark read-only" treatment as this file's other
+                // dead ends, chosen deliberately over "write something
+                // broken" because broken here doesn't stay contained to
+                // just this construct.
             }
         }
 
@@ -2027,6 +2028,15 @@ namespace le
         // `mode` - these are top-level header statements, not layer/macro
         // content, and there's no case where writing a legal LEF file
         // should omit them if we have them.
+        if (technology && technology->fixed_mask)
+        {
+            status = lefwFixedMask();
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: lefwFixedMask failed with status {}.", status));
+                return status;
+            }
+        }
         if (technology && !technology->bus_bit_chars.empty())
         {
             status = lefwBusBitChars(technology->bus_bit_chars.c_str());
@@ -2045,6 +2055,33 @@ namespace le
                 return status;
             }
         }
+        if (technology && technology->use_min_spacing_obs)
+        {
+            status = lefwUseMinSpacing("OBS", *technology->use_min_spacing_obs ? "ON" : "OFF");
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: lefwUseMinSpacing(OBS) failed with status {}.", status));
+                return status;
+            }
+        }
+        if (technology && technology->use_min_spacing_pin)
+        {
+            status = lefwUseMinSpacing("PIN", *technology->use_min_spacing_pin ? "ON" : "OFF");
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: lefwUseMinSpacing(PIN) failed with status {}.", status));
+                return status;
+            }
+        }
+        if (technology && !technology->clearance_measure.empty())
+        {
+            status = lefwClearanceMeasure(technology->clearance_measure.c_str());
+            if (status)
+            {
+                messages_.push_back(fmt::format("ERROR: lefwClearanceMeasure failed with status {}.", status));
+                return status;
+            }
+        }
 
         if (technology_id.valid() && mode != LayerWriteMode::None)
         {
@@ -2053,6 +2090,16 @@ namespace le
             {
                 messages_.push_back(fmt::format("ERROR: Writing UNITS failed with status {}.", status));
                 return status;
+            }
+
+            if (technology->manufacturing_grid)
+            {
+                status = lefwManufacturingGrid(*technology->manufacturing_grid);
+                if (status)
+                {
+                    messages_.push_back(fmt::format("ERROR: lefwManufacturingGrid failed with status {}.", status));
+                    return status;
+                }
             }
 
             // After UNITS, before LAYER/VIA/... - matches complete.5.8.lef's
@@ -2071,6 +2118,22 @@ namespace le
             {
                 messages_.push_back(fmt::format("ERROR: Writing LAYERs failed with status {}.", status));
                 return status;
+            }
+
+            // lefwMaxviastack's own doc comment: "must be called only once
+            // after all the layers" - matches complete.5.8.lef's own
+            // MAXVIASTACK placement (mid-LAYER-section in the source, but
+            // the vendored writer's own ordering requirement wins here).
+            if (technology->max_via_stack)
+            {
+                status = lefwMaxviastack(*technology->max_via_stack,
+                                          technology->max_via_stack_bottom_layer.empty() ? nullptr : technology->max_via_stack_bottom_layer.c_str(),
+                                          technology->max_via_stack_top_layer.empty() ? nullptr : technology->max_via_stack_top_layer.c_str());
+                if (status)
+                {
+                    messages_.push_back(fmt::format("ERROR: lefwMaxviastack failed with status {}.", status));
+                    return status;
+                }
             }
 
             // After LAYER (VIA/VIARULE reference layers by name), before

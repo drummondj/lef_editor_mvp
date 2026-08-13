@@ -110,6 +110,11 @@ namespace le
         lefrSetNonDefaultCbk(lefrNonDefaultCbkFn);
         lefrSetDensityCbk(lefrDensityCbkFn);
         lefrSetPropCbk(lefrPropCbkFn);
+        lefrSetFixedMaskCbk(lefrFixedMaskCbkFn);
+        lefrSetUseMinSpacingCbk(lefrUseMinSpacingCbkFn);
+        lefrSetClearanceMeasureCbk(lefrClearanceMeasureCbkFn);
+        lefrSetManufacturingCbk(lefrManufacturingCbkFn);
+        lefrSetMaxStackViaCbk(lefrMaxStackViaCbkFn);
         lefrSetRegisterUnusedCallbacks();
         lefrSetLogFunction(&LEFReader::lefrLogFn);
         lefrSetWarningLogFunction(&LEFReader::lefrLogFn);
@@ -745,6 +750,52 @@ namespace le
         auto reader = static_cast<LEFReader *>(user_data);
         if (divider_char)
             reader->technology_->divider_char = divider_char;
+        return 0;
+    }
+
+    int LEFReader::lefrFixedMaskCbkFn(lefrCallbackType_e typ, int fixed_mask, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->fixed_mask = static_cast<bool>(fixed_mask);
+        return 0;
+    }
+
+    int LEFReader::lefrUseMinSpacingCbkFn(lefrCallbackType_e typ, lefiUseMinSpacing *lef_use_min_spacing, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        const std::string type = lef_use_min_spacing->name();
+        const bool on = static_cast<bool>(lef_use_min_spacing->value());
+        if (type == "OBS")
+            reader->technology_->use_min_spacing_obs = on;
+        else if (type == "PIN")
+            reader->technology_->use_min_spacing_pin = on;
+        return 0;
+    }
+
+    int LEFReader::lefrClearanceMeasureCbkFn(lefrCallbackType_e typ, const char *clearance_measure, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        if (clearance_measure)
+            reader->technology_->clearance_measure = clearance_measure;
+        return 0;
+    }
+
+    int LEFReader::lefrManufacturingCbkFn(lefrCallbackType_e typ, double manufacturing_grid, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->manufacturing_grid = manufacturing_grid;
+        return 0;
+    }
+
+    int LEFReader::lefrMaxStackViaCbkFn(lefrCallbackType_e typ, lefiMaxStackVia *lef_max_stack_via, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->technology_->max_via_stack = lef_max_stack_via->maxStackVia();
+        if (lef_max_stack_via->hasMaxStackViaRange())
+        {
+            reader->technology_->max_via_stack_bottom_layer = lef_max_stack_via->maxStackViaBottomLayer();
+            reader->technology_->max_via_stack_top_layer = lef_max_stack_via->maxStackViaTopLayer();
+        }
         return 0;
     }
 
@@ -1505,6 +1556,10 @@ namespace le
             def.range_min = lef_prop->left();
             def.range_max = lef_prop->right();
         }
+        if (lef_prop->hasNumber())
+            def.default_number = lef_prop->number();
+        if (lef_prop->hasString())
+            def.default_string = lef_prop->string();
 
         reader->technology_->property_definitions.push_back(std::move(def));
 

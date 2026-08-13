@@ -64,6 +64,11 @@ namespace le
         static int lefrNonDefaultCbkFn(lefrCallbackType_e typ, lefiNonDefault *lef_non_default, void *user_data);
         static int lefrDensityCbkFn(lefrCallbackType_e typ, lefiDensity *lef_density, void *user_data);
         static int lefrPropCbkFn(lefrCallbackType_e typ, lefiProp *lef_prop, void *user_data);
+        static int lefrFixedMaskCbkFn(lefrCallbackType_e typ, int fixed_mask, void *user_data);
+        static int lefrUseMinSpacingCbkFn(lefrCallbackType_e typ, lefiUseMinSpacing *lef_use_min_spacing, void *user_data);
+        static int lefrClearanceMeasureCbkFn(lefrCallbackType_e typ, const char *clearance_measure, void *user_data);
+        static int lefrManufacturingCbkFn(lefrCallbackType_e typ, double manufacturing_grid, void *user_data);
+        static int lefrMaxStackViaCbkFn(lefrCallbackType_e typ, lefiMaxStackVia *lef_max_stack_via, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through

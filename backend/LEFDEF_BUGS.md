@@ -50,13 +50,21 @@ affected path fails to re-parse, not just loses information.
   contradiction inside the vendored library itself — the writer's own
   version gate and the reader's own grammar disagree about whether
   `DIRECTION` is allowed at LEF 5.8, with no version this project's writer
-  can pick that satisfies both. Non-fatal (unlike the two bugs above,
-  parsing continues past it), but it does mean every non-GENERATE
-  `VIARULE`'s `LAYER` block round-trips as a real (recoverable) parse
-  error, and `overhang`/`metal_overhang` are read-only for GENERATE
-  VIARULE layers too (ENCLOSURE, LEF 5.5's replacement, still works and is
-  written when present). Not called; `ViaRuleLayer.direction`/`overhang`/
-  `metal_overhang` are read-only at this writer version.
+  can pick that satisfies both, and a non-GENERATE `VIARULE`'s `LAYER`
+  requires exactly 2 `LAYER` sub-statements per `lef.y` (an empty
+  `VIARULE` is a *fatal* `LEFPARS-1`), so there's no partial-data fallback
+  either. Confirmed the recoverable `LEFPARS-1705` error still has an
+  outsized blast radius: `write_via_rules` skips the entire non-GENERATE
+  `VIARULE` now (not just `DIRECTION`) precisely because leaving it
+  half-written was worse than dropping it - `lefdiff`'s own comparison
+  silently stopped accumulating *everything* written after the errored
+  VIARULE in the same file, so `NONDEFAULTRULE`/`SITE` (which round-trip
+  correctly on their own) looked missing purely because of this one
+  upstream error, not because they were actually broken. `overhang`/
+  `metal_overhang` are read-only for GENERATE VIARULE layers too
+  (ENCLOSURE, LEF 5.5's replacement, still works and is written when
+  present). Not called for non-GENERATE; `ViaRule`s with `is_generate ==
+  false` are entirely read-only for writing.
 - **`lefwLayerRoutingSpacingEndOfLine`** unconditionally flushes (`;\n`)
   whatever `SPACING` statement is still open *before* writing `ENDOFLINE
   ...`, producing an orphaned top-level `ENDOFLINE` statement — but
@@ -166,6 +174,17 @@ and the vendored *reader* both accept.
   (confirmed against `lefwWriter.hpp` — only width/minSpacing/
   wireExtension/resistance/capacitance/edgeCap) — a NONDEFAULTRULE LAYER's
   `DIAGWIDTH` is readable but has nowhere to go on write.
+- **`lefwNonDefaultRuleLayer`** also writes `WIDTH`/`SPACING` *unconditionally*
+  (`fprintf(..., "WIDTH %.11g ;\n", width)`/`"SPACING %.11g ;\n"`, no `if`
+  guard at all - unlike every other numeric parameter in the same
+  function, which all check truthiness first) - a rule whose LAYER only
+  ever specified `WIDTH` (`complete.5.8.lef`'s own `clock`/`clock1`/
+  `clock2`/`wide1_5x`/`wide3x`) gets a spurious `SPACING 0 ;` it never
+  asked for. `NonDefaultRuleLayer.spacing` stays correctly `is_optional`
+  in the database (the reader only sets it when `hasSpacing()` is real),
+  but there's no way to tell this writer function "omit SPACING
+  entirely" - passing `0.0` for "unset" and a real `0.0` look identical to
+  it either way.
 - **`lefwMacroExceptPGNet`** only accepts `!lefwIsMacroObs` — it cannot be
   called from a PIN PORT context at all, even though `lef.y`'s own
   `layer_exceptpgnet` grammar rule is shared by both PORT and OBS geometry
