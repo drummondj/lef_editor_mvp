@@ -1761,6 +1761,21 @@ namespace le
         // (confirmed by grep) even though lefiPin fully reads all three -
         // no vendored writer entry point exists at all, same class of gap
         // as split_wire_width.
+        // terminal doesn't have power/leakage/pin_capacitance/
+        // pin_resistance/pulldown_resistance/tie_off_resistance/vhi/vlo/
+        // rise_voltage_threshold/fall_voltage_threshold/rise_thresh/
+        // fall_thresh/rise_sat_cur/fall_sat_cur/current_source fields at
+        // all - this project only supports LEF >= 5.4 (read_lef's own
+        // version check), and lef.y's own grammar action for every one of
+        // those only calls its setter when versionNum < 5.4, so the
+        // vendored reader itself can never populate them for a file this
+        // project would accept. See LEFDEF_BUGS.md's "Reader-side:
+        // intentional version-obsolescence".
+        // terminal->max_delay (MAXDELAY) is deliberately never written -
+        // no lefwMacroPinMaxdelay exists in lefwWriter.hpp/.cpp at all
+        // (confirmed by grep), same "fully readable, no vendored writer
+        // entry point" gap as rise_slew_limit/fall_slew_limit/max_load
+        // just above.
 
         // Flat pre-5.5 (value, layer) antenna fields - AntennaGateArea has
         // no such flat form (see lefrPinCbkFn's own comment), only the

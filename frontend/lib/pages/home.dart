@@ -73,26 +73,28 @@ class _HomeState extends State<Home> {
       data: MultiSplitViewThemeData(
         dividerThickness: 16,
         dividerPainter: DividerPainters.grooved2(
-          backgroundColor: Colors.black,
-          color: Colors.grey[400]!,
-          highlightedColor: Colors.white,
+          backgroundColor: Theme.of(context).colorScheme.surfaceDim,
+          color: Theme.of(context).colorScheme.secondary,
+          highlightedColor: Theme.of(context).colorScheme.primary,
         ),
       ),
       child: TabbedViewTheme(
-        data: TabbedViewThemeData.dark(colorSet: Colors.blueGrey)
+        data: TabbedViewThemeData.dark()
           ..tab.selectedStatus.innerBottomBorder = BorderSide(
             color: Theme.of(context).colorScheme.secondary,
             width: 3,
           )
-          ..tabsArea.color = Colors.black
+          ..tabsArea.color = Theme.of(context).colorScheme.surfaceDim
           ..tab.selectedStatus.decoration = BoxDecoration(
-            color: const Color.fromARGB(255, 35, 35, 35),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
           )
-          ..tab.decoration = BoxDecoration(color: Colors.black)
+          ..tab.decoration = BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceDim,
+          )
           ..contentArea.decoration = BoxDecoration(
             border: BoxBorder.all(
-              color: Color.fromARGB(255, 35, 35, 35),
-              width: 1,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              width: 3,
             ),
           )
           ..contentArea.padding = EdgeInsets.all(2),

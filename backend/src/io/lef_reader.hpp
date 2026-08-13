@@ -72,6 +72,7 @@ namespace le
         static int lefrAntennaInputCbkFn(lefrCallbackType_e typ, double antenna_input_gate_area, void *user_data);
         static int lefrAntennaInoutCbkFn(lefrCallbackType_e typ, double antenna_inout_diff_area, void *user_data);
         static int lefrAntennaOutputCbkFn(lefrCallbackType_e typ, double antenna_output_diff_area, void *user_data);
+        static int lefrVersionCbkFn(lefrCallbackType_e typ, double version, void *user_data);
 
         // Registered for *both* lefrSetLogFunction (errors) and
         // lefrSetWarningLogFunction (warnings and info both route through
@@ -122,5 +123,17 @@ namespace le
         // nonzero from a callback actually stops the vendored parser -
         // simpler to reason about and test.
         bool used_dbu_before_units_declared_ = false;
+
+        // Set by lefrVersionCbkFn from the file's own VERSION statement,
+        // 0.0 if never read (a missing VERSION statement is itself a
+        // separate lefrRead() parse error, not something this needs to
+        // handle). Checked once at the end of read_lef, same
+        // not-aborted-mid-parse convention as
+        // used_dbu_before_units_declared_ above - this project only
+        // supports LEF >= 5.4 (see UPDATES.md item 12 - a deliberate
+        // decision not to carry read/write support for the pre-5.4
+        // PIN electrical-characteristics fields lef.y itself obsoletes
+        // at >= 5.4 anyway).
+        double version_ = 0.0;
     };
 }

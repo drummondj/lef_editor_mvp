@@ -513,6 +513,26 @@ TEST(LEFReaderErrors, GeometryBeforeDatabaseMicronsEverDeclaredIsAnError)
     EXPECT_NE(reader.messages().back().find("DATABASE MICRONS"), std::string::npos);
 }
 
+TEST(LEFReaderErrors, VersionBelow5_4IsAnError)
+{
+    // UPDATES.md item 12: this project only supports LEF >= 5.4 - several
+    // PIN-level statements (POWER/LEAKAGE/CAPACITANCE/etc., not modeled at
+    // all - see LEFDEF_BUGS.md's "Reader-side: intentional version-
+    // obsolescence") are silently discarded by the vendored reader itself
+    // at >= 5.4, so accepting an older file would mean this project's own
+    // database silently disagrees with what a real pre-5.4-reading tool
+    // would see for those fields. Caught once at the end of read_lef (not
+    // mid-parse), same convention as used_dbu_before_units_declared_.
+    Root root;
+    LEFReader reader;
+    const int result = reader.read_lef(fixture_path("version_5_3.lef"), root, "test_lib");
+    EXPECT_EQ(result, 4);
+
+    ASSERT_FALSE(reader.messages().empty());
+    EXPECT_NE(reader.messages().back().find("ERROR"), std::string::npos);
+    EXPECT_NE(reader.messages().back().find("VERSION"), std::string::npos);
+}
+
 TEST(LEFReaderErrors, GeometryAfterAnEarlierReadAlreadyDeclaredDatabaseMicronsIsFine)
 {
     // The same no-UNITS macro file, but read into a Root that already has

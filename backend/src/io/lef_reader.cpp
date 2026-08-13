@@ -94,8 +94,10 @@ namespace le
         messages_.clear();
         g_pending_lef_messages.clear();
         used_dbu_before_units_declared_ = false;
+        version_ = 0.0;
 
         // Setup callbacks
+        lefrSetVersionCbk(lefrVersionCbkFn);
         lefrSetUnitsCbk(lefrUnitsCbkFn);
         lefrSetLayerCbk(lefrLayerCbkFn);
         lefrSetMacroBeginCbk(lefrMacroBeginCbkFn);
@@ -161,6 +163,24 @@ namespace le
             return 2;
         }
         lefrPrintUnusedCallbacks(stdout);
+
+        // Checked once here, same not-aborted-mid-parse convention as
+        // used_dbu_before_units_declared_ below - this project only
+        // supports LEF >= 5.4 (UPDATES.md item 12), so a version below
+        // that is a real error, not a silent downgrade to reading it
+        // partially (the vendored parser itself would already be
+        // discarding several PIN-level statements at >= 5.4 that it
+        // wouldn't at, say, 5.3 - see LEFDEF_BUGS.md's "Reader-side:
+        // intentional version-obsolescence" - accepting < 5.4 input would
+        // just mean this project's own database silently disagrees with
+        // what a real 5.3-reading tool would see).
+        if (version_ > 0.0 && version_ < 5.4)
+        {
+            const std::string msg = fmt::format("ERROR: {} declares VERSION {:.1f}, but this project only supports LEF 5.4 and later.", filename, version_);
+            spdlog::error("{}", msg);
+            messages_.push_back(msg);
+            return 4;
+        }
 
         // Checked once here, not aborted mid-parse from inside a callback
         // (see used_dbu_before_units_declared_'s own comment) - the file
@@ -705,6 +725,13 @@ namespace le
 
         reader->root_->create_layer(std::move(layer));
 
+        return 0;
+    }
+
+    int LEFReader::lefrVersionCbkFn(lefrCallbackType_e typ, double version, void *user_data)
+    {
+        auto reader = static_cast<LEFReader *>(user_data);
+        reader->version_ = version;
         return 0;
     }
 
@@ -1424,6 +1451,18 @@ namespace le
             terminal.fall_slew_limit = lef_pin->fallSlewLimit();
         if (lef_pin->hasMaxload())
             terminal.max_load = lef_pin->maxload();
+        // POWER/LEAKAGE/CAPACITANCE/RESISTANCE/PULLDOWNRES/TIEOFFR/VHI/VLO/
+        // RISEVOLTAGETHRESHOLD/FALLVOLTAGETHRESHOLD/RISETHRESH/FALLTHRESH/
+        // RISESATCUR/FALLSATCUR/CURRENTSOURCE are deliberately not read here
+        // (even though lefiPin has working has*()/value() accessors for
+        // all of them) - lef.y's own grammar action for every one only
+        // calls the matching setter when versionNum < 5.4; this project
+        // only supports LEF >= 5.4 (see read_lef's own version check), so
+        // the vendored reader itself would always discard these before
+        // this callback ever runs. See LEFDEF_BUGS.md's "Reader-side:
+        // intentional version-obsolescence".
+        if (lef_pin->hasMaxdelay())
+            terminal.max_delay = lef_pin->maxdelay();
 
         // lefiPin's own accessors are numProperties()/propNum(), matching
         // lefiMacro's own naming quirk (see lefrMacroCbkFn's own comment).

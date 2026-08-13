@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.25.0",
+    version="0.27.0",
     classes=[
         Klass(
             name="Technology",
@@ -1859,6 +1859,7 @@ schema = Schema(
                 Field(name="rise_slew_limit", description="LEF PIN RISESLEWLIMIT, declared units - read-only (no vendored writer function exists) - 0 means unset (deliberately not is_optional: Terminal is passed directly to the generic le::to_properties() by src/api/api.cpp, and cmg's generated code calls std::optional::value() unconditionally on is_optional scalars regardless of has_value() - confirmed the hard way, crashed the API's own selected-object-properties tests)", type="double", example=0.01),
                 Field(name="fall_slew_limit", description="LEF PIN FALLSLEWLIMIT, declared units - read-only, same gap and 0-means-unset reasoning as rise_slew_limit", type="double", example=0.02),
                 Field(name="max_load", description="LEF PIN MAXLOAD, declared units - read-only, same gap and 0-means-unset reasoning as rise_slew_limit", type="double", example=0.1),
+                Field(name="max_delay", description="LEF PIN MAXDELAY, in the LEF file's own declared units - unlike POWER/LEAKAGE/CAPACITANCE/RESISTANCE/PULLDOWNRES/TIEOFFR/VHI/VLO/RISEVOLTAGETHRESHOLD/FALLVOLTAGETHRESHOLD/RISETHRESH/FALLTHRESH/RISESATCUR/FALLSATCUR/CURRENTSOURCE (all removed - lef.y's own grammar action for every one of those only calls its setter when versionNum < 5.4, and this project only reads/writes LEF >= 5.4, so they could never be populated - see LEFDEF_BUGS.md's 'Reader-side: intentional version-obsolescence'), MAXDELAY has no version gate at all in lef.y (always read, any version) - genuinely read-only only because no vendored writer function exists (same writer gap as rise_slew_limit/fall_slew_limit/max_load) - unset if never read", type="double", example=21.0, is_optional=True),
             ],
         ),
         Klass(

@@ -9,9 +9,11 @@ own `LICENSE.TXT`) — never hand-edited, per CLAUDE.md's own rule — so every
 entry here is worked around in `src/io/lef_writer.cpp`/`.hpp`, not fixed at
 the source. Each workaround site has its own `KNOWN VENDORED-LIBRARY
 BUG`/`GAP`/`EDGE CASE` comment in the code; this file is the consolidated
-index. All are on the **writer** (`lefw*`) side — no reader (`lefr*`) bugs
-have been found; every reader asymmetry traced back to a real writer defect
-below, not a parsing error.
+index. Almost all are on the **writer** (`lefw*`) side — most reader
+asymmetries trace back to a real writer defect below, not a parsing error.
+The one exception is a real reader-side finding, not a bug but a deliberate
+library behavior worth knowing about before spending time on it again - see
+"Reader-side: intentional version-obsolescence" at the end of this file.
 
 ## Bugs that produce unparseable output
 
@@ -207,3 +209,38 @@ and the vendored *reader* both accept.
   statement written after a `SPACINGTABLE`. Confirmed against the
   vendored sample driver `src/lefdef/lef/lefwrite/lefwrite.cpp`, the only
   other place this misspelled name turns up.
+
+## Reader-side: intentional version-obsolescence
+
+Not a bug — the vendored *reader*'s own grammar (`lef.y`) deliberately
+discards these statements at LEF `versionNum >= 5.4`, emitting an
+"obsolete ... will ignore this statement" warning instead of ever calling
+the corresponding `lefiPin::set*()`. Every writer function for these
+*does* exist and work (confirmed) - the block is entirely on the read
+side, and it's unconditional on version, not on whether a real value was
+present. This project only reads/writes LEF `>= 5.4` (`read_lef` rejects
+anything older - see `LEFReaderErrors.VersionBelow5_4IsAnError`), so a
+caller can never observe `hasPower()`/etc. return true for any file this
+project would accept at all - confirmed by reading `lef.y` directly
+(search each field's own `K_*` token), not inferred from behavior alone;
+a naive test (checking `hasPower()` after reading a real `POWER 2.0 ;`
+PIN statement, expecting it to round-trip) is what surfaced this, after
+first suspecting a bug in this project's own reader/writer code.
+
+- **`POWER`/`LEAKAGE`/`CAPACITANCE`/`RESISTANCE`/`PULLDOWNRES`/`TIEOFFR`/
+  `VHI`/`VLO`/`RISEVOLTAGETHRESHOLD`/`FALLVOLTAGETHRESHOLD`/`RISETHRESH`/
+  `FALLTHRESH`/`RISESATCUR`/`FALLSATCUR`/`CURRENTSOURCE`** (PIN-scoped)
+  all gate on `lefData->versionNum < 5.4` in `lef.y`. Not modeled in
+  `schema.py` at all (removed after initially being added and fully
+  wired up, both directions - real, correct plumbing, it just could never
+  observe a value) - there's no point carrying fields that can never be
+  populated for any file this project will ever accept.
+- **`INPUTNOISEMARGIN`/`OUTPUTNOISEMARGIN`/`OUTPUTRESISTANCE`/`IV_TABLES`**
+  (PIN-scoped) have the exact same `versionNum < 5.4` gate - never added
+  to `schema.py` in the first place, same reasoning.
+- The one genuine exception in this whole PIN-electrical-fields family:
+  **`MAXDELAY`**/**`MAXLOAD`** have *no* version gate in `lef.y` at
+  all - always read, any version - which is exactly why
+  `Terminal.max_load`/`max_delay` are kept, genuinely readable, just
+  read-only for writing (no `lefwMacroPinMaxdelay`/`*Maxload` function
+  exists at all, a plain missing-API gap, not a version gate).
