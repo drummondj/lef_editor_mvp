@@ -127,6 +127,49 @@ TEST(SessionHandle, ReadLefThroughTclFirstDoesNotCrash)
 // le_shell (Tcl_Main - also exactly one Tcl_Interp per process) are
 // actually used, so it isn't chased further - each ctest case already
 // runs in its own process anyway (see this file's header comment).
+// Regression check for a reported get_shapes crash (investigated after
+// the fact - not reproduced from scratch even before the fix, see
+// le_tcl_unexported_symbols.txt's own comment in CMakeLists.txt for the
+// full writeup). le::Root's generated accessors (get_terminal_port_shapes,
+// get_obstruction_shapes, get_abstract_terminals, get_terminal_ports, ...)
+// are header-only and each return a function-local `static const ... empty;`
+// sentinel - the exact bug shape ReadLefThroughTclFirstDoesNotCrash above
+// already covers for LefDefParser::lefGetKeyword's keyword table, just in
+// a second place. This drives every one of get_shapes' own call-chain
+// accessors (via a real Terminal/TerminalPort/Shape and an Obstruction/
+// Shape, so both the TerminalPort and Obstruction branches run) through
+// Tcl first, matching "get_shapes on an open abstract" as reported.
+TEST(SessionHandle, GetShapesThroughTclDoesNotCrash)
+{
+    LeHandle *handle = le_create();
+    ASSERT_NE(handle, nullptr);
+    ASSERT_EQ(le_read_lef(handle, API_TEST_FIXTURES_DIR "/testcell.lef"), 0);
+
+    Tcl_FindExecutable(nullptr);
+    Tcl_Interp *interp = Tcl_CreateInterp();
+    ASSERT_NE(interp, nullptr);
+    ASSERT_EQ(Tcl_Init(interp), TCL_OK) << Tcl_GetStringResult(interp);
+
+    const std::string load_command = std::string("load {") + LE_TCL_MODULE_PATH + "} le_tcl";
+    ASSERT_EQ(Tcl_Eval(interp, load_command.c_str()), TCL_OK) << Tcl_GetStringResult(interp);
+
+    const std::string inject_command =
+        "set_session_handle " + std::to_string(reinterpret_cast<int64_t>(handle));
+    ASSERT_EQ(Tcl_Eval(interp, inject_command.c_str()), TCL_OK) << Tcl_GetStringResult(interp);
+
+    ASSERT_EQ(Tcl_Eval(interp, "source " LE_TCL_PROCS_PATH), TCL_OK) << Tcl_GetStringResult(interp);
+    ASSERT_EQ(Tcl_Eval(interp, "open_design TESTCELL"), TCL_OK) << Tcl_GetStringResult(interp);
+
+    ASSERT_EQ(Tcl_Eval(interp, "get_terminal_ports"), TCL_OK) << Tcl_GetStringResult(interp);
+    ASSERT_EQ(Tcl_Eval(interp, "get_shapes"), TCL_OK) << Tcl_GetStringResult(interp);
+    EXPECT_STRNE(Tcl_GetStringResult(interp), "");
+    ASSERT_EQ(Tcl_Eval(interp, "get_shapes -filter {.layer_name == M1}"), TCL_OK) << Tcl_GetStringResult(interp);
+    ASSERT_EQ(Tcl_Eval(interp, "get_properties shape:0"), TCL_OK) << Tcl_GetStringResult(interp);
+
+    Tcl_DeleteInterp(interp);
+    le_destroy(handle);
+}
+
 TEST(SessionHandle, DirectReadThenSingleTclInterpReadBothSucceed)
 {
     LeHandle *handle = le_create();

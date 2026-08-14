@@ -258,6 +258,64 @@ if(SWIG_FOUND AND TCL_FOUND)
     #   std:: template instantiated with a LefDefParser:: type as a
     #   parameter (e.g. exception guards for vector<lefrOBSSpacing>),
     #   keeps its normal default visibility and stays coalescable.
+    #
+    # Investigating a reported get_shapes crash (mutex::lock() throwing
+    # system_error inside le_get_shapes) found the exact same bug SHAPE in
+    # a second place: le::Root (src/database/generated/root.hpp, header-
+    # only/inline, so - like LefDefParser:: - compiled separately into
+    # this target and into whatever else statically links `api`) has ~10
+    # accessors (get_terminal_port_shapes, get_obstruction_shapes,
+    # get_abstract_terminals, get_terminal_ports, get_technology_layers,
+    # etc.) that return `static const std::vector<X> empty;`/`static
+    # const XxxId empty;` as their "not found" sentinel - a function-local
+    # magic static, exported with default visibility exactly like
+    # lefGetKeyword's keyword table was (confirmed via `nm` that both this
+    # target's build/le_tcl.so and build_release/libapi.a export the same
+    # symbol names before this fix). `__Z*2le4Root*` closes it the same
+    # way - confirmed via `nm` that the ::empty statics and their guard
+    # variables are local (t/b) afterward, not just the accessors
+    # themselves. `2le4Root` (not e.g. `le4Root`) is the exact Itanium
+    # mangling substring for the `le::Root::` scope prefix - confirmed by
+    # grepping both built libraries' full symbol dumps that it doesn't
+    # false-match symbols merely mentioning Root as a template argument
+    # (those use mangling substitution compression instead of re-spelling
+    # `2le4Root`) or any typeinfo/vtable symbol (Root isn't part of any
+    # exception/RTTI hierarchy). Note: a from-scratch repro (this
+    # target's Debug build force-loaded alongside build_release's Release
+    # libapi.a in one process, driving get_shapes/get_terminal_ports/
+    # get_properties through Tcl repeatedly, including through two
+    # independent Tcl_Interps loading the already-resident module) did
+    # NOT reproduce an actual crash from this gap even before this fix -
+    # most of these sentinels are all-zero-safe (an empty std::vector's
+    # default-constructed bit pattern is valid regardless of which
+    # image's copy of the guard "wins" a coalescing race), so this closes
+    # a real, confirmed-duplicated hazard without itself being confirmed
+    # as the original report's actual cause.
+    #
+    # Second gotcha: editing le_tcl_unexported_symbols.txt alone does not
+    # reliably trigger a relink - it's passed to the linker as a raw path
+    # inside a string here, so CMake/ninja/make don't know to treat it as
+    # a build dependency and can report `le_tcl` "up to date" (skipping
+    # the link step and its `nm`-visible effect entirely) after only the
+    # list file changed. `rm build*/le_tcl.so` (or touch
+    # src/tcl/le_tcl_shim.cpp) before rebuilding this target if a change
+    # here doesn't seem to take effect.
+    #
+    # Third gotcha hit while verifying this: running
+    # src/tcl/tests/session_handle_test.cpp's binary directly (all 4
+    # TEST()s in one process) makes ReadLefThroughTclFirstDoesNotCrash and
+    # DirectReadThenSingleTclInterpReadBothSucceed fail with "Unknown C++
+    # exception thrown" - looking like this fix broke RTTI coalescing
+    # exactly like the "blanket allowlist" mistake above. It didn't - that
+    # file's own header comment already explains why: each TEST() is
+    # meant to run as its own ctest case via gtest_discover_tests, in its
+    # own fresh process, specifically because chaining several of these
+    # handle-inject/destroy sequences in one process corrupts the shared
+    # session()/injected_handle() state in le_tcl_shim.cpp (an
+    # anonymous-namespace static, process-wide, not per-Tcl_Interp) -
+    # unrelated to this fix and reproducible identically without it. Use
+    # `ctest --test-dir build -R SessionHandle`, not the raw binary, to
+    # get a real signal - confirmed clean (4/4) with this fix applied.
     target_link_options(le_tcl PRIVATE
         "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_unexported_symbols.txt"
     )
@@ -325,6 +383,7 @@ if(SWIG_FOUND AND TCL_FOUND)
     target_compile_definitions(le_tcl_session_test PRIVATE
         API_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures"
         LE_TCL_MODULE_PATH="$<TARGET_FILE:le_tcl>"
+        LE_TCL_PROCS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl"
     )
     add_dependencies(le_tcl_session_test le_tcl)
     gtest_discover_tests(le_tcl_session_test)
