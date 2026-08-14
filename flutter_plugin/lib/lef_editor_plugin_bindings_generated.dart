@@ -706,6 +706,90 @@ class LefEditorPluginBindings {
   late final _le_set_mode = _le_set_modePtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
 
+  /// @brief Number of rulers (UPDATES.md item 13) - multiple can exist
+  /// at once, since starting a new one never clears an existing one.
+  /// Indexes le_ruler_point_count()/le_ruler_point_at()'s own
+  /// `ruler_index` parameter, 0..this-1, in the order each ruler was
+  /// started. Returns 0 if handle is null.
+  int le_ruler_count(ffi.Pointer<LeHandle> handle) {
+    return _le_ruler_count(handle);
+  }
+
+  late final _le_ruler_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_ruler_count',
+      );
+  late final _le_ruler_count = _le_ruler_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Number of committed points on the ruler at `ruler_index`
+  /// (0..le_ruler_count()-1) - indexes le_ruler_point_at()'s own
+  /// `point_index` parameter. Returns 0 if handle is null or
+  /// ruler_index is out of range.
+  int le_ruler_point_count(ffi.Pointer<LeHandle> handle, int ruler_index) {
+    return _le_ruler_point_count(handle, ruler_index);
+  }
+
+  late final _le_ruler_point_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_ruler_point_count');
+  late final _le_ruler_point_count = _le_ruler_point_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief The point at `point_index` (0..le_ruler_point_count(ruler_index)-1)
+  /// on the ruler at `ruler_index`, converted to microns. Returns
+  /// {0.0, 0.0} if handle is null, either index is out of range, or no
+  /// Technology has been read yet to convert with.
+  LeRulerPoint le_ruler_point_at(
+    ffi.Pointer<LeHandle> handle,
+    int ruler_index,
+    int point_index,
+  ) {
+    return _le_ruler_point_at(handle, ruler_index, point_index);
+  }
+
+  late final _le_ruler_point_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeRulerPoint Function(ffi.Pointer<LeHandle>, ffi.Int32, ffi.Int32)
+        >
+      >('le_ruler_point_at');
+  late final _le_ruler_point_at = _le_ruler_point_atPtr
+      .asFunction<LeRulerPoint Function(ffi.Pointer<LeHandle>, int, int)>();
+
+  /// @brief Finishes the active ruler, if any (Scene::finish_active_ruler) -
+  /// the next click in Ruler mode starts a new ruler instead of
+  /// appending to this one, subject to Scene::add_ruler_point's own
+  /// minimum-distance guard against restarting too close to the point
+  /// this call just finished at. Called by the frontend on a
+  /// double-click (UPDATES.md item 13) - see flutter_plugin's
+  /// LeEditor.registerClickAndCheckDoubleClick. A no-op if handle is
+  /// null or there's no active ruler.
+  void le_finish_ruler(ffi.Pointer<LeHandle> handle) {
+    return _le_finish_ruler(handle);
+  }
+
+  late final _le_finish_rulerPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_finish_ruler',
+      );
+  late final _le_finish_ruler = _le_finish_rulerPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Removes every ruler (finished or not). A no-op if handle
+  /// is null.
+  void le_clear_rulers(ffi.Pointer<LeHandle> handle) {
+    return _le_clear_rulers(handle);
+  }
+
+  late final _le_clear_rulersPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_clear_rulers',
+      );
+  late final _le_clear_rulers = _le_clear_rulersPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
   /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
   /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
   /// general row/column model this mirrors. Selectable by default until
@@ -937,6 +1021,37 @@ class LefEditorPluginBindings {
       >('le_set_major_grid_spacing');
   late final _le_set_major_grid_spacing = _le_set_major_grid_spacingPtr
       .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief On-screen text size (px) for every ruler label - tick
+  /// values, each segment's own point-to-point distance, and a
+  /// ruler's running total (UPDATES.md item 13). Mirrors
+  /// Scene::ruler_label_size_px directly. Defaults to 11.0. Returns 0
+  /// if handle is null.
+  double le_ruler_label_size(ffi.Pointer<LeHandle> handle) {
+    return _le_ruler_label_size(handle);
+  }
+
+  late final _le_ruler_label_sizePtr =
+      _lookup<ffi.NativeFunction<ffi.Double Function(ffi.Pointer<LeHandle>)>>(
+        'le_ruler_label_size',
+      );
+  late final _le_ruler_label_size = _le_ruler_label_sizePtr
+      .asFunction<double Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Set the ruler label text size (px). Mirrors
+  /// Scene::set_ruler_label_size_px directly (affects rendering) -
+  /// values <= 0 are ignored, same guard as le_set_minor_grid_spacing.
+  /// A no-op if handle is null.
+  void le_set_ruler_label_size(ffi.Pointer<LeHandle> handle, double px) {
+    return _le_set_ruler_label_size(handle, px);
+  }
+
+  late final _le_set_ruler_label_sizePtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Double)>
+      >('le_set_ruler_label_size');
+  late final _le_set_ruler_label_size = _le_set_ruler_label_sizePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, double)>();
 
   /// @brief Set the current mouse position, in the same pixel space as
   /// le_render_pixel_buffer()'s output image (top-left origin, y
@@ -3556,12 +3671,19 @@ final class LeSnappedMousePosition extends ffi.Struct {
 /// is the only mode where le_mouse_up's mouse clicks/drags change the
 /// current selection - Edit mode restricts mouse interaction to
 /// editing whatever is already selected (behavior TBD, a later item).
-/// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (keyboard)
-/// or le_set_mode (a Flutter UI event) - both paths converge on the
-/// same Scene::Mode state.
+/// Ruler mode (UPDATES.md item 13) is where le_mouse_up's clicks
+/// place ruler points instead - see le_finish_ruler/le_clear_rulers.
+/// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE/
+/// LE_KEY_RULER_MODE (keyboard) or le_set_mode (a Flutter UI event) -
+/// both paths converge on the same Scene::Mode state. Switching to
+/// LE_MODE_RULER either way always finishes whatever ruler was
+/// already in progress first (Scene::reset_ruler_mode), including
+/// when the mode is already Ruler - so re-selecting Ruler mode is
+/// itself a way to abandon an in-progress ruler.
 enum LeMode {
   LE_MODE_SELECT(0),
-  LE_MODE_EDIT(1);
+  LE_MODE_EDIT(1),
+  LE_MODE_RULER(2);
 
   final int value;
   const LeMode(this.value);
@@ -3569,8 +3691,19 @@ enum LeMode {
   static LeMode fromValue(int value) => switch (value) {
     0 => LE_MODE_SELECT,
     1 => LE_MODE_EDIT,
+    2 => LE_MODE_RULER,
     _ => throw ArgumentError('Unknown value for LeMode: $value'),
   };
+}
+
+/// @brief One ruler point, in microns (UPDATES.md item 13) - see
+/// le_ruler_point_at.
+final class LeRulerPoint extends ffi.Struct {
+  @ffi.Double()
+  external double x_um;
+
+  @ffi.Double()
+  external double y_um;
 }
 
 /// @brief Named logical keys this API tracks the held/released state
@@ -3661,7 +3794,28 @@ enum LeKeyCode {
   /// LE_KEY_SELECT_MODE, calling Scene::set_mode(Scene::Mode::EDIT).
   /// While in Edit mode, le_mouse_up no longer changes the current
   /// selection - see its own doc comment.
-  LE_KEY_EDIT_MODE(22);
+  LE_KEY_EDIT_MODE(22),
+
+  /// Switch to Ruler mode (UPDATES.md item 13) - same idempotent
+  /// action-code shape as LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE, but
+  /// calls Scene::reset_ruler_mode() rather than a plain
+  /// set_mode(): every call - including when already in Ruler
+  /// mode, and including key-repeat - finishes whatever ruler was
+  /// in progress, so re-pressing 'r' doubles as an explicit
+  /// "abandon the current ruler" shortcut. While in Ruler mode,
+  /// le_mouse_up's clicks place ruler points instead of changing
+  /// the selection - see le_finish_ruler/le_clear_rulers.
+  LE_KEY_RULER_MODE(23),
+
+  /// Finishes the active ruler, if any (UPDATES.md item 13, see
+  /// le_finish_ruler) - the Esc key. Idempotent/safe to fire on
+  /// every call including key-repeat, same as every other action
+  /// code here: Scene::finish_active_ruler() is already a no-op
+  /// once there's nothing active to finish, and there's no active
+  /// ruler at all outside Ruler mode (leaving it already finishes
+  /// whatever was in progress - see Scene::set_mode), so this
+  /// never needs mode-gating at the call site either.
+  LE_KEY_FINISH_RULER(24);
 
   final int value;
   const LeKeyCode(this.value);
@@ -3689,6 +3843,8 @@ enum LeKeyCode {
     20 => LE_KEY_0,
     21 => LE_KEY_SELECT_MODE,
     22 => LE_KEY_EDIT_MODE,
+    23 => LE_KEY_RULER_MODE,
+    24 => LE_KEY_FINISH_RULER,
     _ => throw ArgumentError('Unknown value for LeKeyCode: $value'),
   };
 }

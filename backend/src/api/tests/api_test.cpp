@@ -258,6 +258,14 @@ TEST_F(ApiFixture, TooltipMessageReflectsEditMode)
     EXPECT_EQ(std::string(tooltip).find("Left click to select"), std::string::npos);
 }
 
+TEST_F(ApiFixture, TooltipMessageReflectsRulerMode)
+{
+    le_set_mode(handle, LE_MODE_RULER);
+    const char *tooltip = le_tooltip_message(handle);
+    ASSERT_NE(tooltip, nullptr);
+    EXPECT_NE(std::string(tooltip).find("Esc"), std::string::npos);
+}
+
 // le_get_mode/le_set_mode (UPDATES.md item 11).
 TEST_F(ApiFixture, GetModeDefaultsToSelectMode)
 {
@@ -281,6 +289,50 @@ TEST_F(ApiFixture, GetModeWithNullHandleReturnsSelectMode)
 TEST_F(ApiFixture, SetModeWithNullHandleDoesNotCrash)
 {
     le_set_mode(nullptr, LE_MODE_EDIT);
+}
+
+TEST_F(ApiFixture, SetModeToRulerDoesNotEagerlyCreateARuler)
+{
+    le_set_mode(handle, LE_MODE_RULER);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_RULER);
+    // Rulers start lazily on the first click (Scene::add_ruler_point) -
+    // entering Ruler mode alone doesn't create an empty one.
+    EXPECT_EQ(le_ruler_count(handle), 0);
+}
+
+TEST_F(ApiFixture, LeRulerCountWithNullHandleReturnsZero)
+{
+    EXPECT_EQ(le_ruler_count(nullptr), 0);
+}
+
+TEST_F(ApiFixture, LeRulerPointCountWithNullHandleOrOutOfRangeReturnsZero)
+{
+    le_set_mode(handle, LE_MODE_RULER);
+    EXPECT_EQ(le_ruler_point_count(nullptr, 0), 0);
+    EXPECT_EQ(le_ruler_point_count(handle, -1), 0);
+    EXPECT_EQ(le_ruler_point_count(handle, 5), 0);
+}
+
+TEST_F(ApiFixture, LeRulerPointAtWithNullHandleOrOutOfRangeReturnsZeroPoint)
+{
+    le_set_mode(handle, LE_MODE_RULER);
+    const LeRulerPoint p1 = le_ruler_point_at(nullptr, 0, 0);
+    EXPECT_DOUBLE_EQ(p1.x_um, 0.0);
+    EXPECT_DOUBLE_EQ(p1.y_um, 0.0);
+
+    const LeRulerPoint p2 = le_ruler_point_at(handle, 0, 0); // no points yet
+    EXPECT_DOUBLE_EQ(p2.x_um, 0.0);
+    EXPECT_DOUBLE_EQ(p2.y_um, 0.0);
+}
+
+TEST_F(ApiFixture, LeFinishRulerWithNullHandleDoesNotCrash)
+{
+    le_finish_ruler(nullptr);
+}
+
+TEST_F(ApiFixture, LeClearRulersWithNullHandleDoesNotCrash)
+{
+    le_clear_rulers(nullptr);
 }
 
 TEST_F(ApiFixture, DesignCountAndNameAreZeroOrNullForNullHandle)
@@ -937,6 +989,31 @@ TEST_F(ApiFixture, GridSpacingWithNullHandleReturnsZeroAndDoesNotCrash)
     le_set_major_grid_spacing(nullptr, 100);
 }
 
+TEST_F(ApiFixture, RulerLabelSizeDefaultsMatchesScene)
+{
+    EXPECT_DOUBLE_EQ(le_ruler_label_size(handle), 11.0);
+}
+
+TEST_F(ApiFixture, RulerLabelSizeRoundTrips)
+{
+    le_set_ruler_label_size(handle, 20.0);
+    EXPECT_DOUBLE_EQ(le_ruler_label_size(handle), 20.0);
+}
+
+TEST_F(ApiFixture, RulerLabelSizeIgnoresNonPositiveValues)
+{
+    le_set_ruler_label_size(handle, 20.0);
+    le_set_ruler_label_size(handle, 0.0);
+    le_set_ruler_label_size(handle, -5.0);
+    EXPECT_DOUBLE_EQ(le_ruler_label_size(handle), 20.0); // unchanged
+}
+
+TEST_F(ApiFixture, RulerLabelSizeWithNullHandleReturnsZeroAndDoesNotCrash)
+{
+    EXPECT_DOUBLE_EQ(le_ruler_label_size(nullptr), 0.0);
+    le_set_ruler_label_size(nullptr, 20.0);
+}
+
 TEST_F(ApiFixture, MousePositionWithNullHandleDoesNotCrash)
 {
     le_set_mouse_position(nullptr, 10, 10);
@@ -1393,6 +1470,40 @@ TEST_F(ApiFixture, MouseMoveOverASelectableShapeShowsAYellowHoverOutline)
     LePixelBuffer buffer = le_render_pixel_buffer(handle);
     ASSERT_NE(buffer.data, nullptr);
     EXPECT_TRUE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52)); // left edge of the hovered pin's outline
+}
+
+TEST_F(ApiFixture, MouseMoveOverAShapeInRulerModeDoesNotShowAHoverOutline)
+{
+    // Regression: the hover outline is a Select-mode-only affordance -
+    // it was left on unconditionally, so it kept highlighting shapes
+    // under the cursor while placing ruler points too.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    le_set_mode(handle, LE_MODE_RULER);
+    le_set_mouse_position(handle, 50, 50); // well inside PIN A's rect
+
+    LePixelBuffer buffer = le_render_pixel_buffer(handle);
+    ASSERT_NE(buffer.data, nullptr);
+    EXPECT_FALSE(region_has_yellow_hover_pixel(buffer, 18, 48, 22, 52));
+}
+
+TEST_F(ApiFixture, SwitchingToRulerModeClearsAnAlreadyShownHoverOutline)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    le_set_mouse_position(handle, 50, 50); // over the pin, in Select mode
+    ASSERT_TRUE(region_has_yellow_hover_pixel(le_render_pixel_buffer(handle), 18, 48, 22, 52));
+
+    le_set_mode(handle, LE_MODE_RULER); // no further mouse movement
+    EXPECT_FALSE(region_has_yellow_hover_pixel(le_render_pixel_buffer(handle), 18, 48, 22, 52));
 }
 
 TEST_F(ApiFixture, MouseMoveAwayFromAnyShapeClearsTheHoverOutline)
@@ -1884,6 +1995,157 @@ TEST_F(ApiFixture, MouseUpInEditModeStillEndsDragging)
     le_set_mode(handle, LE_MODE_SELECT);
     le_mouse_up(handle, 175, 25); // no preceding mouse-down - a no-op if dragging really ended
     EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+// Ruler mode (UPDATES.md item 13).
+TEST_F(ApiFixture, ClickInRulerModeCommitsAPointAndLeavesSelectionUntouched)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A, in Select mode
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_set_mode(handle, LE_MODE_RULER);
+    le_set_mouse_position(handle, 100, 100); // real UI drives this via hover/move events before a click
+    le_mouse_down(handle, 100, 100);
+    le_mouse_up(handle, 100, 100);
+
+    EXPECT_EQ(le_ruler_point_count(handle, 0), 1);
+    EXPECT_EQ(le_selection_count(handle), 1); // unchanged
+}
+
+TEST_F(ApiFixture, DragInRulerModeDoesNotCommitAPoint)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 0, 200);
+    le_mouse_down(handle, 0, 200);
+    le_mouse_up(handle, 200, 0); // well beyond the click/drag threshold
+
+    EXPECT_EQ(le_ruler_point_count(handle, 0), 0);
+}
+
+TEST_F(ApiFixture, ShiftHeldClickInRulerModeAllowsANonOrthogonalPoint)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 20, 180);
+    le_mouse_down(handle, 20, 180);
+    le_mouse_up(handle, 20, 180);
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 1);
+
+    // Without shift, this would snap orthogonal (whichever axis moved
+    // more wins, per Scene::ruler_next_point).
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_set_mouse_position(handle, 60, 140);
+    le_mouse_down(handle, 60, 140);
+    le_mouse_up(handle, 60, 140);
+    le_key_up(handle, LE_KEY_SHIFT);
+
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 2);
+    const LeRulerPoint p0 = le_ruler_point_at(handle, 0, 0);
+    const LeRulerPoint p1 = le_ruler_point_at(handle, 0, 1);
+    EXPECT_NE(p0.x_um, p1.x_um);
+    EXPECT_NE(p0.y_um, p1.y_um);
+}
+
+TEST_F(ApiFixture, RulerPointsComeBackMicronConverted)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 25, 175); // same device position as PIN A's center
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 1);
+    const LeRulerPoint p = le_ruler_point_at(handle, 0, 0);
+    // load_two_shapes_at_known_scale's own comment: device (25,175) is
+    // ~2.5 micron in from the macro's origin - just check it landed in
+    // a sane, non-zero range rather than pin an exact grid-snapped value.
+    EXPECT_GT(p.x_um, 0.0);
+    EXPECT_GT(p.y_um, 0.0);
+    EXPECT_LT(p.x_um, 10.0);
+    EXPECT_LT(p.y_um, 10.0);
+}
+
+TEST_F(ApiFixture, EscKeyFinishesTheRulerKeepingEveryCommittedPoint)
+{
+    // UPDATES.md item 13 - Esc (LE_KEY_FINISH_RULER) finishes the active
+    // ruler without touching any of its already-committed points, unlike
+    // the earlier double-click design this replaced.
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 20, 180);
+    le_mouse_down(handle, 20, 180);
+    le_mouse_up(handle, 20, 180);
+    le_set_mouse_position(handle, 150, 30);
+    le_mouse_down(handle, 150, 30);
+    le_mouse_up(handle, 150, 30);
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 2);
+
+    le_key_down(handle, LE_KEY_FINISH_RULER);
+
+    EXPECT_EQ(le_ruler_point_count(handle, 0), 2); // both points survive
+    EXPECT_EQ(le_ruler_count(handle), 1); // still just the one ruler
+}
+
+TEST_F(ApiFixture, EscKeyWithNoActiveRulerIsANoOp)
+{
+    le_key_down(handle, LE_KEY_FINISH_RULER); // no crash, nothing to finish
+    EXPECT_EQ(le_ruler_count(handle), 0);
+}
+
+TEST_F(ApiFixture, FinishRulerThenNewRulerRequiresTheMinimumDistanceGuard)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 20, 180);
+    le_mouse_down(handle, 20, 180);
+    le_mouse_up(handle, 20, 180);
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 1);
+
+    le_finish_ruler(handle);
+    ASSERT_EQ(le_ruler_count(handle), 1);
+
+    // Only 1 device px away - well under the distance guard.
+    le_set_mouse_position(handle, 21, 180);
+    le_mouse_down(handle, 21, 180);
+    le_mouse_up(handle, 21, 180);
+    EXPECT_EQ(le_ruler_count(handle), 1);
+    EXPECT_EQ(le_ruler_point_count(handle, 0), 1);
+
+    // Far enough away - starts a new ruler, leaving the first untouched.
+    le_set_mouse_position(handle, 60, 180);
+    le_mouse_down(handle, 60, 180);
+    le_mouse_up(handle, 60, 180);
+    EXPECT_EQ(le_ruler_count(handle), 2);
+    EXPECT_EQ(le_ruler_point_count(handle, 0), 1);
+    EXPECT_EQ(le_ruler_point_count(handle, 1), 1);
+}
+
+TEST_F(ApiFixture, ZoomStillWorksInRulerModeMidRulerAndDoesNotMoveCommittedPoints)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_RULER);
+
+    le_set_mouse_position(handle, 20, 180);
+    le_mouse_down(handle, 20, 180);
+    le_mouse_up(handle, 20, 180);
+    ASSERT_EQ(le_ruler_point_count(handle, 0), 1);
+    const LeRulerPoint before = le_ruler_point_at(handle, 0, 0);
+
+    le_set_mouse_position(handle, 20, 180);
+    le_key_down(handle, LE_KEY_ZOOM); // zooms in, anchored at the current mouse position
+
+    const LeRulerPoint after = le_ruler_point_at(handle, 0, 0);
+    EXPECT_DOUBLE_EQ(before.x_um, after.x_um);
+    EXPECT_DOUBLE_EQ(before.y_um, after.y_um);
 }
 
 TEST_F(ApiFixture, MouseDownAloneDoesNotChangeTheSelection)

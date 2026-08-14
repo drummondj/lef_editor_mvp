@@ -596,9 +596,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     // Post-flip (see the Y-flip comment on
     // ComposeWithOverlaysReflectsASelectionChangeEvenWhenComposedOnceBefore) -
@@ -632,9 +632,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     // Same square as the rect-piece tests above (10,10)-(30,30) - left
     // edge preflip (9,20) -> post-flip y = 100-20 = 80.
@@ -674,9 +674,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithN
         const auto &shapes = pipeline.run(root, scene, view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        return renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        return renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
     };
 
     // M1's OBSTRUCTION outline color - looked up directly (not via an
@@ -733,9 +733,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -776,9 +776,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     auto is_white = [&](int x, int y)
     {
@@ -994,7 +994,7 @@ TEST_F(RenderFixture, BuildOverlayPictureDrawsAFixedSizeBoxCenteredOnTheSnappedM
     // covered.
     scene.set_mouse_position(40, 40);
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 36, 60)), 0); // left edge of the fixed-size box
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 40, 60)), 0); // interior (stroke only, no fill) - where the grid dot itself shows through
@@ -1019,7 +1019,7 @@ TEST_F(RenderFixture, BuildOverlayPictureBoxStaysFixedPixelSizeAtHighZoomInstead
     // covered pixel (210,200); the new fixed-size box does not.
     scene.set_mouse_position(200, 200);
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 400, 400, 196, 200)), 0); // just inside the fixed box's edge
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 400, 400, 210, 200)), 0); // far outside the fixed box, but well within where the old dbu-sized box would have drawn
@@ -1031,7 +1031,7 @@ TEST_F(RenderFixture, BuildOverlayPictureIsEmptyWhenNoMousePositionSet)
     scene.set_current_abstract(abstract_id);
     scene.set_viewport_size(100, 100);
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 50, 50)), 0);
 }
 
@@ -1050,7 +1050,7 @@ TEST_F(RenderFixture, BuildOverlayPictureDrawsEvenWhenTheMinorGridIsTooDenseToSh
     // a multiple of the default 5dbu minor spacing, so it snaps to itself.
     scene.set_mouse_position(50, 50);
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 46, 50)), 0); // left edge of the fixed-size box
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 50, 50)), 0); // interior (stroke only, no fill)
@@ -1068,7 +1068,7 @@ TEST_F(RenderFixture, BuildOverlayPictureDrawsHoverOutlineAroundTheHoveredShape)
     outline.rects.push_back(Rect{.ll = {10, 10}, .ur = {20, 20}});
     scene.set_hover(HoverTarget{.origin = TerminalId{1, 0}, .outline = outline});
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     // dbu rect (10,10)-(20,20) -> pixel (20,20)-(40,40) at this pan/scale
     // (build_overlay_picture's own pre-flip pixel space). Sampled on the
@@ -1091,7 +1091,7 @@ TEST_F(RenderFixture, BuildOverlayPictureHasNoHoverOutlineWhenNothingIsHovered)
     scene.set_viewport_size(100, 100);
     scene.set_mouse_position(50, 50); // mouse set, but no hover target
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     // Would show a yellow outline at this pixel if a stale hover target
     // leaked through - nothing here, since scene.hover() is unset.
@@ -1109,7 +1109,7 @@ TEST_F(RenderFixture, BuildOverlayPictureDrawsTheLiveDragRectangleWhileDragging)
     scene.begin_drag(40, 160);        // dbu (20, 20)
     scene.set_mouse_position(160, 40); // dbu (80, 80)
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
 
     // Normalized drag rect dbu (20,20)-(80,80) -> pixel (40,40)-(160,160)
     // at this pan/scale (build_overlay_picture's own pre-flip pixel
@@ -1133,7 +1133,7 @@ TEST_F(RenderFixture, BuildOverlayPictureHasNoDragRectangleWhenNotDragging)
     scene.set_viewport_size(200, 200);
     scene.set_mouse_position(160, 40); // mouse set, but no drag in progress
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 200, 200, 100, 100)), 0);
 }
 
@@ -1146,8 +1146,278 @@ TEST_F(RenderFixture, BuildOverlayPictureHasNoDragRectangleWhileDraggingWithoutA
     scene.set_viewport_size(200, 200);
     scene.begin_drag(40, 160); // drag started, but set_mouse_position was never called
 
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 200, 200, 100, 100)), 0);
+}
+
+// Rulers (UPDATES.md item 13).
+TEST_F(RenderFixture, BuildRulerOverlayPictureDoesNotRecomputeWhenOnlyMouseMoves)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(false);
+
+    renderer.build_ruler_overlay_picture(scene, 1000.0);
+    ASSERT_EQ(renderer.ruler_overlay_picture_calls(), 1u);
+
+    scene.set_mouse_position(5, 5);
+    renderer.build_ruler_overlay_picture(scene, 1000.0);
+    scene.set_mouse_position(6, 6);
+    renderer.build_ruler_overlay_picture(scene, 1000.0);
+    EXPECT_EQ(renderer.ruler_overlay_picture_calls(), 1u); // never recomputed - no ruler change
+
+    scene.set_mouse_position(20, 80); // dbu (20, 20)
+    scene.add_ruler_point(false); // a real ruler change
+    renderer.build_ruler_overlay_picture(scene, 1000.0);
+    EXPECT_EQ(renderer.ruler_overlay_picture_calls(), 2u);
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureRecomputesTheGhostSegmentWhenRulerVersionChangesEvenIfMouseDidNotMove)
+{
+    // Regression the exact staleness case build_overlay_picture's
+    // extended cache key (adding ruler_version() alongside
+    // mouse_version()) fixes: the ghost segment's anchor is the active
+    // ruler's *last committed* point, which only changes on a click, not
+    // a mouse move - without ruler_version in the key, adding a point
+    // with no subsequent mouse move would leave the ghost rendering
+    // stale for a frame.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.reset_ruler_mode();
+
+    scene.set_mouse_position(10, 90);
+    renderer.build_overlay_picture(scene, 1000.0);
+    ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
+
+    scene.add_ruler_point(false); // mouse position untouched, but ruler_version bumps
+    renderer.build_overlay_picture(scene, 1000.0);
+    EXPECT_EQ(renderer.overlay_picture_calls(), 2u);
+}
+
+TEST_F(RenderFixture, BuildRulerOverlayPictureDrawsTheCommittedSegment)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 50); // dbu (10, 50)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(50, 50); // dbu (50, 50) - horizontal from the first point
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u);
+
+    const auto &ruler_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+    EXPECT_GT(SkColorGetA(sample_pixel(ruler_picture, 100, 100, 30, 50)), 0);  // on the line's midpoint
+    EXPECT_EQ(SkColorGetA(sample_pixel(ruler_picture, 100, 100, 30, 90)), 0); // well off the line
+}
+
+TEST_F(RenderFixture, RulerLabelSizeAffectsRenderedGlyphSize)
+{
+    // Confirms Scene::ruler_label_size_px isn't just plumbing - a bigger
+    // setting really does produce a wider rendered label. Big viewport
+    // and a generous safety margin between the two checked windows since
+    // exact glyph width depends on font metrics this test doesn't
+    // otherwise know.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(400, 400);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 200); // dbu (10, 200)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(30, 200); // dbu (30, 200) - short horizontal segment
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+
+    // Well beyond where the default (~11px) font's label text should
+    // reach, but well within where a much larger font's would.
+    const int x0 = 150, y0 = 195, x1 = 160, y1 = 225;
+
+    const auto &default_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+    EXPECT_FALSE(region_shows_color(rasterize(default_picture, 400, 400), x0, y0, x1, y1, to_sk_color(kRulerColor)));
+
+    scene.set_ruler_label_size_px(60.0);
+    const auto &large_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+    EXPECT_TRUE(region_shows_color(rasterize(large_picture, 400, 400), x0, y0, x1, y1, to_sk_color(kRulerColor)));
+}
+
+TEST_F(RenderFixture, TotalLabelSurvivesADuplicateClickAndDoesNotOverlapTheDistanceLabel)
+{
+    // Regression for two real reported bugs: (1) the "total: " label used
+    // to disappear entirely after finishing a ruler via double-click,
+    // because the second click of the double-click landed on the same
+    // grid point as the first, producing a zero-length final segment
+    // whose degenerate direction made draw_ruler_polyline bail out before
+    // drawing the total label at all (fixed at the Scene level - see
+    // Scene.AddRulerPointIdenticalToTheLastCommittedPointIsANoOp); (2)
+    // even when it did draw, it sometimes overlapped the last segment's
+    // own point-to-point distance label, since both were offset along the
+    // same perpendicular direction by only a small gap, easily smaller
+    // than typical label text width. Both labels now render, on opposite
+    // sides of the line.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 50); // dbu (10, 50)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(50, 50); // dbu (50, 50) - horizontal from the first point
+    scene.add_ruler_point(false);
+    // Simulates a double-click's second click landing on the same grid
+    // point as the point it just placed.
+    scene.set_mouse_position(50, 50);
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u); // the duplicate was rejected
+
+    const auto &ruler_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+    SkBitmap bitmap = rasterize(ruler_picture, 100, 100);
+
+    // For this horizontal segment, perp = (0, 1) - the distance label
+    // sits at p1 + perp*8 (~y=58), the total label at p1 - perp*8
+    // (~y=42) - opposite sides of the line, well clear of each other.
+    EXPECT_TRUE(region_shows_color(bitmap, 45, 54, 95, 80, to_sk_color(kRulerColor))); // distance label region
+    EXPECT_TRUE(region_shows_color(bitmap, 45, 20, 95, 46, to_sk_color(kRulerColor))); // total label region
+}
+
+TEST_F(RenderFixture, TotalLabelDoesNotOverlapTheDistanceLabelOnAVerticalClosingSegment)
+{
+    // Regression: the horizontal-segment case above (opposite
+    // perpendicular sides) wasn't the whole fix - for a *vertical*
+    // segment the perpendicular offset is itself roughly horizontal, and
+    // text always reads left-to-right in local space regardless of the
+    // segment's own angle (labels are never rotated) - so a label
+    // anchored to the *left* of its point still grew rightward, straight
+    // back across it. This is exactly what a user hit closing a ruler
+    // into a rectangle: the closing edge is vertical, and its own
+    // distance label collided with the ruler's total label at that
+    // corner even after the opposite-sides fix above. Fixed by
+    // right-aligning any label whose anchor was offset leftward
+    // (draw_ruler_label), so it grows away from its point instead of
+    // back across it, symmetric with a rightward-offset label's default
+    // growth direction.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(50, 70); // dbu (50, 30)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(50, 30); // dbu (50, 70) - vertical from the first point
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u);
+
+    const auto &ruler_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+    SkBitmap bitmap = rasterize(ruler_picture, 100, 100);
+
+    // perp = (-1, 0) for this vertical segment - the distance label
+    // anchors at p1 + perp*8 = (42, 70) and now grows further left
+    // (away from x=50); the total label anchors at p1 - perp*8 =
+    // (58, 70) and grows further right - clearly separated on either
+    // side of the endpoint instead of both reaching back across it.
+    EXPECT_TRUE(region_shows_color(bitmap, 0, 60, 42, 82, to_sk_color(kRulerColor)));  // distance label region
+    EXPECT_TRUE(region_shows_color(bitmap, 58, 60, 99, 82, to_sk_color(kRulerColor))); // total label region
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeRulersWhenOnlyMouseMoves)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(20, 80);
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    auto compose_once = [&]
+    {
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, 1000.0);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &ruler_overlay_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+        renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
+    };
+
+    scene.set_mouse_position(1, 1);
+    compose_once();
+    ASSERT_EQ(renderer.rasterize_ruler_overlay_calls(), 1u);
+
+    scene.set_mouse_position(2, 2);
+    compose_once();
+    scene.set_mouse_position(3, 3);
+    compose_once();
+
+    EXPECT_EQ(renderer.compose_calls(), 3u);                    // cheap composite did recompute every time
+    EXPECT_EQ(renderer.rasterize_ruler_overlay_calls(), 1u);    // ruler raster reused, not recomputed
+}
+
+TEST_F(RenderFixture, ComposeWithOverlaysReflectsARulerChangeEvenWhenComposedOnceBefore)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    auto compose_and_sample = [&]
+    {
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, 1000.0);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &ruler_overlay_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
+        // dbu (30,50) at pan(0,0)/scale(1.0)/viewport 100x100 -> pre-flip
+        // pixel (30,50) -> post Y-flip row (100-1-50)=49, column 30 (same
+        // Y-flip convention as every other buffer-sampling test in this file).
+        const uint8_t *p = buffer.data + static_cast<size_t>(49) * buffer.row_bytes + static_cast<size_t>(30) * 4;
+        return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};
+    };
+
+    const auto before = compose_and_sample();
+    EXPECT_EQ(before[3], 0); // nothing drawn there yet
+
+    scene.set_mouse_position(10, 50); // dbu (10, 50)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(50, 50); // dbu (50, 50)
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+
+    const auto after = compose_and_sample();
+    EXPECT_GT(after[3], 0); // the ruler segment now covers this pixel
 }
 
 TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseMoves)
@@ -1175,19 +1445,19 @@ TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseM
     scene.select(terminal_id, path_piece);
 
     renderer.build_selection_overlay_picture(scene);
-    renderer.build_overlay_picture(scene);
+    renderer.build_overlay_picture(scene, std::nullopt);
     ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
 
     // Move the mouse several times - selection is untouched throughout.
     scene.set_mouse_position(5, 5);
-    renderer.build_overlay_picture(scene);
+    renderer.build_overlay_picture(scene, std::nullopt);
     renderer.build_selection_overlay_picture(scene);
     scene.set_mouse_position(6, 6);
-    renderer.build_overlay_picture(scene);
+    renderer.build_overlay_picture(scene, std::nullopt);
     renderer.build_selection_overlay_picture(scene);
     scene.set_mouse_position(7, 7);
-    renderer.build_overlay_picture(scene);
+    renderer.build_overlay_picture(scene, std::nullopt);
     renderer.build_selection_overlay_picture(scene);
 
     EXPECT_EQ(renderer.overlay_picture_calls(), 4u);           // recomputed on every mouse move, as intended - cheap
@@ -1230,9 +1500,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
 
     auto compose_once = [&]
     {
-        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
     };
 
     scene.set_mouse_position(1, 1);
@@ -1270,9 +1540,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
 
     scene.set_mouse_position(10, 10);
-    const auto &overlay_picture_1 = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture_1 = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, scene);
+    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, sk_sp<SkPicture>{}, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
@@ -1281,9 +1551,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     // Move the mouse only - viewport/visibility versions (and therefore
     // the design content itself) are untouched.
     scene.set_mouse_position(20, 20);
-    const auto &overlay_picture_2 = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture_2 = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene);
-    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, scene);
+    renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, sk_sp<SkPicture>{}, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
     EXPECT_EQ(renderer.overlay_picture_calls(), 2u); // cheap overlay picture did recompute
@@ -1315,13 +1585,13 @@ TEST_F(RenderFixture, ComposeWithOverlaysRecomputesWhenOnlyTheTinyShapesPictureC
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-    const auto &overlay_picture = renderer.build_overlay_picture(scene);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
     const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
     const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
     const auto &tiny_shapes_picture_1 = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
-    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_1, overlay_picture, selection_overlay_picture, scene);
+    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_1, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
     ASSERT_EQ(renderer.compose_calls(), 1u);
 
     // Toggle M1 invisible: tiny_shapes_by_layer_visibility drops the whole
@@ -1335,7 +1605,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysRecomputesWhenOnlyTheTinyShapesPictureC
     ASSERT_TRUE(tiny_shapes_after.empty());
     const auto &tiny_pixel_shapes_after = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes_after, scene);
     const auto &tiny_shapes_picture_2 = renderer.build_tiny_shapes_picture(root, tiny_pixel_shapes_after, scene, view_layers);
-    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_2, overlay_picture, selection_overlay_picture, scene);
+    renderer.compose_with_overlays(root, design_picture, tiny_shapes_picture_2, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     EXPECT_EQ(renderer.compose_calls(), 2u);
 }
@@ -1368,9 +1638,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
         const auto &shapes = pipeline.run(root, scene, view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
-        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
         // Same Y-flip as rasterize() - see BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges's comment.
         const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
         return std::array<uint8_t, 4>{p[0], p[1], p[2], p[3]};

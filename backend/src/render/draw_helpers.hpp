@@ -18,9 +18,11 @@
 #include "include/core/SkSurface.h"
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
+#include <fmt/format.h>
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -188,6 +190,26 @@ namespace le
     // based on Scene::drag_kind().
     inline constexpr Color kZoomDragRectFillColor = {80, 255, 160, 60};
     inline constexpr Color kZoomDragRectStrokeColor = {80, 255, 160, 220};
+
+    // Ruler (UPDATES.md item 13) - opaque orange, a color family not
+    // already used by the grid/origin marker/cursor box/hover/selection/
+    // drag-rect overlays above. The ghost (not-yet-committed) segment
+    // uses the same hue at lower alpha so it visually reads as "not
+    // committed yet" without a completely different color.
+    inline constexpr Color kRulerColor = {255, 140, 0, 255};
+    inline constexpr Color kRulerGhostColor = {255, 140, 0, 140};
+    inline constexpr float kRulerStrokeWidth = 1.5f;
+    inline constexpr float kRulerPointRadius = 3.0f;
+    inline constexpr float kRulerMajorTickLengthPx = 8.0f;
+    inline constexpr float kRulerMinorTickLengthPx = 4.0f;
+
+    // Below this on-screen pixel spacing, a ruler tick tier (minor or
+    // major, checked independently) is hidden - same "avoid smearing
+    // into a solid wash" reasoning as kMinGridDotPixelSpacing, but a
+    // larger floor for the major tier since it needs room for a text
+    // label, not just a dot. Placeholder defaults, easily tuned.
+    inline constexpr double kMinRulerMajorTickPixelSpacing = 40.0;
+    inline constexpr double kMinRulerMinorTickPixelSpacing = 6.0;
 
     // Renders one FillPattern into a small transparent-background tile
     // and wraps it in a kRepeat/kRepeat SkShader - this project's
@@ -607,6 +629,237 @@ namespace le
         stroke.setStrokeWidth(kDragRectStrokeWidth);
         stroke.setColor(to_sk_color(is_zoom ? kZoomDragRectStrokeColor : kDragRectStrokeColor));
         canvas.drawRect(rect, stroke);
+    }
+
+    // The Technology's dbu-per-micron scale (UPDATES.md item 13's ruler
+    // distance/tick labels need microns) - mirrors api.cpp's own private
+    // database_units_microns(root) lookup exactly, deliberately
+    // duplicated rather than shared across the render/api module
+    // boundary (render doesn't and shouldn't link api). Assumed stable
+    // for a handle's lifetime (no "re-read Technology" API exists), so
+    // callers may treat it as effectively constant across a session.
+    inline std::optional<double> technology_dbu_per_um(const Root &root)
+    {
+        const auto technology_ids = root.get_technology_ids();
+        if (technology_ids.empty())
+            return std::nullopt;
+
+        const TechnologyData *technology = root.get_technology(technology_ids.front());
+        if (!technology || technology->database_units_microns <= 0.0)
+            return std::nullopt;
+
+        return technology->database_units_microns;
+    }
+
+    // The largest-precision (smallest) power-of-ten micron spacing (...,
+    // 0.01, 0.1, 1, 10, 100, ...) whose on-screen pixel spacing is still
+    // >= kMinRulerMajorTickPixelSpacing, given pixels_per_um
+    // (Scene::scale() * dbu_per_um). Minor spacing is always exactly
+    // this / 10 (UPDATES.md item 13's own "ten minor ticks for every
+    // major tick").
+    inline double ruler_major_tick_spacing_um(double pixels_per_um)
+    {
+        if (pixels_per_um <= 0.0)
+            return 1.0;
+        const double min_spacing_um = kMinRulerMajorTickPixelSpacing / pixels_per_um;
+        return std::pow(10.0, std::ceil(std::log10(min_spacing_um)));
+    }
+
+    // Draws one ruler label (a tick value, a segment's own point-to-point
+    // distance, or a ruler's running total) at `anchor_px`, offset along
+    // the segment's own perpendicular unit vector by `offset_px` so it
+    // doesn't sit on top of the line/tick it belongs to - same
+    // save/translate/scale(1,-1)-counter-flip/drawString/restore idiom
+    // draw_group uses for every other label in this codebase, so text
+    // stays upright regardless of the segment's own angle.
+    inline void draw_ruler_label(SkCanvas &canvas, const Scene &scene, SkPoint anchor_px, double perp_x, double perp_y, float offset_px, const std::string &text)
+    {
+        SkPaint text_paint;
+        text_paint.setAntiAlias(true);
+        text_paint.setColor(to_sk_color(kRulerColor));
+
+        SkFont font(default_typeface(), static_cast<SkScalar>(scene.ruler_label_size_px()));
+
+        canvas.save();
+        canvas.translate(anchor_px.x() + static_cast<SkScalar>(perp_x * offset_px), anchor_px.y() + static_cast<SkScalar>(perp_y * offset_px));
+        canvas.scale(1, -1);
+
+        // Text always reads left-to-right in local (post-flip) space
+        // regardless of the segment's own angle - labels are never
+        // rotated to match it (see draw_ruler_segment's own comment). For
+        // a near-vertical segment the perpendicular offset above is
+        // mostly horizontal, so a label anchored to the left of its point
+        // (perp_x < 0) would otherwise still grow *rightward*, straight
+        // back across that point - exactly what made a closed ruler
+        // polyline's corner labels (the closing segment's own distance
+        // label and the ruler's total label, both anchored at nearly the
+        // same corner) collide regardless of being offset to opposite
+        // sides. Right-align instead whenever the anchor was offset
+        // leftward, so the text grows further left - away from the
+        // point - the same as text offset rightward already grows away
+        // from it by default.
+        const SkScalar text_width = font.measureText(text.c_str(), text.size(), SkTextEncoding::kUTF8);
+        const SkScalar x0 = perp_x < 0.0 ? -text_width : 0.0f;
+        canvas.drawString(text.c_str(), x0, 0, font, text_paint);
+        canvas.restore();
+    }
+
+    // Draws one ruler segment (UPDATES.md item 13): the line itself, a
+    // point marker at each end (p1's only if not a ghost - the ghost's
+    // leading end is already marked by draw_cursor's own snap box),
+    // dynamic major/minor tick marks measured relative to the segment's
+    // own start (tape-measure semantics, not the absolute background
+    // grid draw_grid uses), and the segment's own point-to-point
+    // distance label near p1. Perpendicular direction is computed in
+    // *pixel* space so tick length/spacing reads consistently on screen
+    // regardless of the segment's angle - this is what lets a free-form
+    // (shift-held, non-orthogonal) segment get the exact same treatment
+    // as an orthogonal one, no special-casing needed. No-op if
+    // Scene::scale()/dbu_per_um aren't available, or the segment is
+    // degenerate (zero length).
+    inline void draw_ruler_segment(SkCanvas &canvas, const Scene &scene, std::optional<double> dbu_per_um, Point p0_dbu, Point p1_dbu, bool is_ghost)
+    {
+        const double scale = scene.scale();
+        if (scale <= 0.0 || !dbu_per_um || *dbu_per_um <= 0.0)
+            return;
+
+        const Point pan = scene.pan();
+        auto to_pixel = [&](const Point &p)
+        {
+            return SkPoint::Make(
+                static_cast<SkScalar>((static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale),
+                static_cast<SkScalar>((static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale));
+        };
+
+        const SkPoint p0_px = to_pixel(p0_dbu);
+        const SkPoint p1_px = to_pixel(p1_dbu);
+
+        const double seg_dx_px = static_cast<double>(p1_px.x()) - static_cast<double>(p0_px.x());
+        const double seg_dy_px = static_cast<double>(p1_px.y()) - static_cast<double>(p0_px.y());
+        const double seg_len_px = std::sqrt(seg_dx_px * seg_dx_px + seg_dy_px * seg_dy_px);
+        if (seg_len_px <= 0.0)
+            return;
+        const double ux = seg_dx_px / seg_len_px;
+        const double uy = seg_dy_px / seg_len_px;
+        const double perp_x = -uy;
+        const double perp_y = ux;
+
+        const Color color = is_ghost ? kRulerGhostColor : kRulerColor;
+
+        SkPaint line_paint;
+        line_paint.setAntiAlias(true);
+        line_paint.setStyle(SkPaint::kStroke_Style);
+        line_paint.setStrokeWidth(kRulerStrokeWidth);
+        line_paint.setColor(to_sk_color(color));
+        canvas.drawLine(p0_px, p1_px, line_paint);
+
+        SkPaint point_paint;
+        point_paint.setAntiAlias(true);
+        point_paint.setStyle(SkPaint::kFill_Style);
+        point_paint.setColor(to_sk_color(color));
+        canvas.drawCircle(p0_px, kRulerPointRadius, point_paint);
+        if (!is_ghost)
+            canvas.drawCircle(p1_px, kRulerPointRadius, point_paint);
+
+        const double dx_dbu = static_cast<double>(p1_dbu.x - p0_dbu.x);
+        const double dy_dbu = static_cast<double>(p1_dbu.y - p0_dbu.y);
+        const double length_um = std::sqrt(dx_dbu * dx_dbu + dy_dbu * dy_dbu) / *dbu_per_um;
+        const double pixels_per_um = scale * *dbu_per_um;
+
+        const double major_um = ruler_major_tick_spacing_um(pixels_per_um);
+        const double minor_um = major_um / 10.0;
+        const bool major_visible = major_um * pixels_per_um >= kMinRulerMajorTickPixelSpacing;
+        const bool minor_visible = minor_um * pixels_per_um >= kMinRulerMinorTickPixelSpacing;
+
+        if (minor_um > 0.0)
+        {
+            const int64_t max_k = static_cast<int64_t>(std::floor(length_um / minor_um));
+            for (int64_t k = 1; k <= max_k; ++k)
+            {
+                const bool is_major = (k % 10 == 0);
+                if (is_major ? !major_visible : !minor_visible)
+                    continue;
+
+                const double t = (k * minor_um) / length_um;
+                const SkPoint tick_center = SkPoint::Make(
+                    static_cast<SkScalar>(static_cast<double>(p0_px.x()) + t * seg_dx_px),
+                    static_cast<SkScalar>(static_cast<double>(p0_px.y()) + t * seg_dy_px));
+                const float half_len = (is_major ? kRulerMajorTickLengthPx : kRulerMinorTickLengthPx) / 2.0f;
+
+                SkPaint tick_paint;
+                tick_paint.setAntiAlias(true);
+                tick_paint.setStyle(SkPaint::kStroke_Style);
+                tick_paint.setStrokeWidth(kRulerStrokeWidth);
+                tick_paint.setColor(to_sk_color(color));
+                canvas.drawLine(
+                    tick_center.x() + static_cast<SkScalar>(perp_x * half_len), tick_center.y() + static_cast<SkScalar>(perp_y * half_len),
+                    tick_center.x() - static_cast<SkScalar>(perp_x * half_len), tick_center.y() - static_cast<SkScalar>(perp_y * half_len),
+                    tick_paint);
+
+                if (is_major)
+                {
+                    const int decimals = std::max(0, -static_cast<int>(std::floor(std::log10(minor_um))));
+                    draw_ruler_label(canvas, scene, tick_center, perp_x, perp_y, half_len + 4.0f, fmt::format("{:.{}f}", k * minor_um, decimals));
+                }
+            }
+        }
+
+        draw_ruler_label(canvas, scene, p1_px, perp_x, perp_y, kRulerMajorTickLengthPx, fmt::format("{:.3f} um", length_um));
+    }
+
+    // Draws every committed segment of `ruler` (UPDATES.md item 13),
+    // plus - once it has 2+ points - a "total: " running-length label
+    // at its own last point, offset further out than that last
+    // segment's own distance label so the two don't overlap. Draws
+    // identically whether the ruler is finished or still active.
+    inline void draw_ruler_polyline(SkCanvas &canvas, const Scene &scene, std::optional<double> dbu_per_um, const Scene::Ruler &ruler)
+    {
+        if (ruler.points.size() < 2)
+            return;
+
+        double total_um = 0.0;
+        if (dbu_per_um && *dbu_per_um > 0.0)
+        {
+            for (size_t i = 0; i + 1 < ruler.points.size(); ++i)
+            {
+                const double dx = static_cast<double>(ruler.points[i + 1].x - ruler.points[i].x);
+                const double dy = static_cast<double>(ruler.points[i + 1].y - ruler.points[i].y);
+                total_um += std::sqrt(dx * dx + dy * dy) / *dbu_per_um;
+            }
+        }
+
+        for (size_t i = 0; i + 1 < ruler.points.size(); ++i)
+            draw_ruler_segment(canvas, scene, dbu_per_um, ruler.points[i], ruler.points[i + 1], /*is_ghost=*/false);
+
+        const double scale = scene.scale();
+        if (scale <= 0.0 || !dbu_per_um)
+            return;
+
+        const Point pan = scene.pan();
+        const Point &last = ruler.points.back();
+        const Point &second_last = ruler.points[ruler.points.size() - 2];
+        const SkPoint last_px = SkPoint::Make(
+            static_cast<SkScalar>((static_cast<double>(last.x) - static_cast<double>(pan.x)) * scale),
+            static_cast<SkScalar>((static_cast<double>(last.y) - static_cast<double>(pan.y)) * scale));
+
+        const double seg_dx = static_cast<double>(last.x - second_last.x);
+        const double seg_dy = static_cast<double>(last.y - second_last.y);
+        const double seg_len = std::sqrt(seg_dx * seg_dx + seg_dy * seg_dy);
+        // Scene::add_ruler_point rejects a point identical to the ruler's
+        // last one, so seg_len should never be <= 0 in practice - but
+        // degrade gracefully with a fixed fallback direction rather than
+        // silently dropping the label entirely if it somehow is.
+        const double perp_x = seg_len > 0.0 ? -(seg_dy / seg_len) : 0.0;
+        const double perp_y = seg_len > 0.0 ? (seg_dx / seg_len) : 1.0;
+
+        // Opposite side from the last segment's own point-to-point
+        // distance label (drawn inside draw_ruler_segment, offset along
+        // +perp) - text always reads left-to-right in screen space
+        // regardless of the segment's angle (this label isn't rotated),
+        // so two labels sharing the same side and a small offset gap can
+        // overlap once text width is accounted for; opposite sides never
+        // compete for the same space.
+        draw_ruler_label(canvas, scene, last_px, -perp_x, -perp_y, kRulerMajorTickLengthPx, fmt::format("total: {:.3f} um", total_um));
     }
 
     // Draws an X spanning `bounds` - CUT layers' FillPattern::CROSS,

@@ -383,6 +383,46 @@ TEST(Scene, GridSpacingSettersBumpVisibilityVersion)
     EXPECT_EQ(scene.visibility_version(), 2u);
 }
 
+TEST(Scene, RulerLabelSizeDefaultsToElevenPixels)
+{
+    Scene scene;
+    EXPECT_DOUBLE_EQ(scene.ruler_label_size_px(), 11.0);
+}
+
+TEST(Scene, RulerLabelSizeRoundTrips)
+{
+    Scene scene;
+    scene.set_ruler_label_size_px(20.0);
+    EXPECT_DOUBLE_EQ(scene.ruler_label_size_px(), 20.0);
+}
+
+TEST(Scene, RulerLabelSizeIgnoresNonPositiveValues)
+{
+    Scene scene;
+    scene.set_ruler_label_size_px(20.0);
+
+    scene.set_ruler_label_size_px(0.0);
+    scene.set_ruler_label_size_px(-5.0);
+    EXPECT_DOUBLE_EQ(scene.ruler_label_size_px(), 20.0); // unchanged
+}
+
+TEST(Scene, RulerLabelSizeSetterBumpsVisibilityVersionOnlyOnAnActualChange)
+{
+    // Both new/changed ruler overlay stages already key on
+    // visibility_version() alongside ruler_version() - reusing this
+    // signal (like grid spacing does) invalidates them with no new
+    // plumbing.
+    Scene scene;
+    EXPECT_EQ(scene.visibility_version(), 0u);
+
+    scene.set_ruler_label_size_px(20.0);
+    EXPECT_EQ(scene.visibility_version(), 1u);
+
+    // A rejected (non-positive) value must not bump it.
+    scene.set_ruler_label_size_px(-5.0);
+    EXPECT_EQ(scene.visibility_version(), 1u);
+}
+
 TEST(Scene, MousePositionDefaultsToUnset)
 {
     Scene scene;
@@ -657,6 +697,30 @@ TEST(Scene, ClearHoverResetsToUnset)
     EXPECT_FALSE(scene.hover().has_value());
 }
 
+TEST(Scene, SetModeLeavingSelectClearsHover)
+{
+    // Regression: the hover outline is a Select-mode-only affordance
+    // (see set_mode's own comment) - a stale highlight from just before
+    // switching mode must not linger.
+    Scene scene;
+    Shape outline;
+    scene.set_hover(HoverTarget{.origin = ObstructionId{2, 0}, .outline = outline});
+    ASSERT_TRUE(scene.hover().has_value());
+
+    scene.set_mode(Scene::Mode::RULER);
+    EXPECT_FALSE(scene.hover().has_value());
+}
+
+TEST(Scene, SetModeStayingInOrReturningToSelectDoesNotClearHover)
+{
+    Scene scene;
+    Shape outline;
+    scene.set_hover(HoverTarget{.origin = ObstructionId{2, 0}, .outline = outline});
+
+    scene.set_mode(Scene::Mode::SELECT); // already SELECT - no-op, no change
+    EXPECT_TRUE(scene.hover().has_value());
+}
+
 TEST(Scene, SetHoverAndClearHoverDoNotBumpViewportOrVisibilityVersion)
 {
     // Hover is driven by every pointer-move event (see le_set_mouse_position)
@@ -821,6 +885,294 @@ TEST(Scene, SetModeChangesMode)
 
     scene.set_mode(Scene::Mode::SELECT);
     EXPECT_EQ(scene.mode(), Scene::Mode::SELECT);
+}
+
+TEST(Scene, SetModeOnlyBumpsMouseVersionOnAnActualChange)
+{
+    Scene scene;
+    const uint64_t baseline = scene.mouse_version();
+
+    scene.set_mode(Scene::Mode::SELECT); // already SELECT - no-op
+    EXPECT_EQ(scene.mouse_version(), baseline);
+
+    scene.set_mode(Scene::Mode::EDIT);
+    EXPECT_NE(scene.mouse_version(), baseline);
+}
+
+// --- Rulers (UPDATES.md item 13) ---
+
+TEST(Scene, RulerModeDefaultsToNoRulers)
+{
+    Scene scene;
+    EXPECT_TRUE(scene.rulers().empty());
+    EXPECT_EQ(scene.ruler_version(), 0u);
+    EXPECT_FALSE(scene.ruler_free_form());
+}
+
+TEST(Scene, AddRulerPointWithNoMousePositionIsNoOp)
+{
+    Scene scene;
+    scene.add_ruler_point(false);
+    EXPECT_TRUE(scene.rulers().empty());
+    EXPECT_EQ(scene.ruler_version(), 0u);
+}
+
+TEST(Scene, AddRulerPointAppendsTheSnappedMousePosition)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(23, 27); // dbu (23, 73)
+    scene.add_ruler_point(false);
+
+    ASSERT_EQ(scene.rulers().size(), 1u);
+    ASSERT_EQ(scene.rulers()[0].points.size(), 1u);
+    EXPECT_EQ(scene.rulers()[0].points[0].x, 23);
+    EXPECT_EQ(scene.rulers()[0].points[0].y, 73);
+    EXPECT_FALSE(scene.rulers()[0].finished);
+    EXPECT_NE(scene.ruler_version(), 0u);
+}
+
+TEST(Scene, AddRulerPointIdenticalToTheLastCommittedPointIsANoOp)
+{
+    // Regression: a double-click's second click can easily snap to the
+    // exact same grid point as its first (the double-click distance
+    // threshold is typically smaller than the grid spacing on screen) -
+    // without this guard, that appended a zero-length final segment,
+    // which broke the "total: " label's own perpendicular-direction math
+    // (see draw_ruler_polyline in draw_helpers.hpp).
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(23, 27); // dbu (23, 73)
+    scene.add_ruler_point(false);
+    const uint64_t after_first = scene.ruler_version();
+
+    scene.set_mouse_position(23, 27); // same snapped point again
+    scene.add_ruler_point(false);
+
+    EXPECT_EQ(scene.rulers()[0].points.size(), 1u); // not appended
+    EXPECT_EQ(scene.ruler_version(), after_first);
+}
+
+TEST(Scene, AddRulerPointConstrainsOrthogonalByDefault)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(false);
+
+    scene.set_mouse_position(40, 70); // dbu (40, 30) - diagonal from (10,10)
+    scene.add_ruler_point(false);
+
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u);
+    const Point &second = scene.rulers()[0].points[1];
+    // dx (30) > dy (20), so the second point pins y to the first point's y.
+    EXPECT_EQ(second.x, 40);
+    EXPECT_EQ(second.y, 10);
+}
+
+TEST(Scene, AddRulerPointFreeFormIgnoresOrthogonalConstraint)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(true);
+
+    scene.set_mouse_position(40, 70); // dbu (40, 30)
+    scene.add_ruler_point(true);
+
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u);
+    const Point &second = scene.rulers()[0].points[1];
+    EXPECT_EQ(second.x, 40);
+    EXPECT_EQ(second.y, 30);
+}
+
+TEST(Scene, FinishActiveRulerMarksItFinishedAndBumpsVersion)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    const uint64_t before = scene.ruler_version();
+
+    scene.finish_active_ruler();
+    EXPECT_TRUE(scene.rulers()[0].finished);
+    EXPECT_NE(scene.ruler_version(), before);
+}
+
+TEST(Scene, FinishActiveRulerWithNoneActiveIsNoOp)
+{
+    Scene scene;
+    scene.finish_active_ruler();
+    EXPECT_EQ(scene.ruler_version(), 0u);
+    EXPECT_TRUE(scene.rulers().empty());
+}
+
+TEST(Scene, ClickAfterFinishFarEnoughAwayStartsASecondRulerLeavingTheFirstIntact)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(false);
+    scene.set_mouse_position(20, 90); // dbu (20, 10)
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+    ASSERT_EQ(scene.rulers().size(), 1u);
+    ASSERT_EQ(scene.rulers()[0].points.size(), 2u);
+
+    // Well beyond kNewRulerMinDistancePx (20px, scale 1.0) from (20, 10).
+    scene.set_mouse_position(80, 90); // dbu (80, 10)
+    scene.add_ruler_point(false);
+
+    ASSERT_EQ(scene.rulers().size(), 2u);
+    EXPECT_EQ(scene.rulers()[0].points.size(), 2u); // first ruler untouched
+    EXPECT_TRUE(scene.rulers()[0].finished);
+    ASSERT_EQ(scene.rulers()[1].points.size(), 1u);
+    EXPECT_FALSE(scene.rulers()[1].finished);
+}
+
+TEST(Scene, ClickTooCloseToAJustFinishedRulerIsANoOp)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(false);
+    scene.finish_active_ruler();
+    ASSERT_EQ(scene.rulers().size(), 1u);
+    const uint64_t before = scene.ruler_version();
+
+    // Only 5 dbu (= 5px at scale 1.0) away - under kNewRulerMinDistancePx.
+    scene.set_mouse_position(15, 90); // dbu (15, 10)
+    scene.add_ruler_point(false);
+
+    EXPECT_EQ(scene.rulers().size(), 1u); // no second ruler started
+    EXPECT_EQ(scene.rulers()[0].points.size(), 1u);
+    EXPECT_EQ(scene.ruler_version(), before);
+}
+
+TEST(Scene, ResetRulerModeFinishesAnInProgressRulerAndEnsuresRulerMode)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.reset_ruler_mode();
+    EXPECT_EQ(scene.mode(), Scene::Mode::RULER);
+
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    ASSERT_FALSE(scene.rulers()[0].finished);
+
+    // Calling again while already in Ruler mode with an in-progress
+    // ruler finishes it - this is what lets 'r' double as "abandon the
+    // current ruler".
+    scene.reset_ruler_mode();
+    EXPECT_EQ(scene.mode(), Scene::Mode::RULER);
+    EXPECT_TRUE(scene.rulers()[0].finished);
+}
+
+TEST(Scene, SetModeLeavingRulerFinishesTheActiveRuler)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.reset_ruler_mode();
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    ASSERT_FALSE(scene.rulers()[0].finished);
+
+    scene.set_mode(Scene::Mode::SELECT);
+    EXPECT_TRUE(scene.rulers()[0].finished);
+}
+
+TEST(Scene, RulerVersionIsNotBumpedByMouseMoveAlone)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    const uint64_t after_add = scene.ruler_version();
+
+    scene.set_mouse_position(50, 50);
+    scene.set_mouse_position(20, 20);
+    EXPECT_EQ(scene.ruler_version(), after_add);
+}
+
+TEST(Scene, SetRulerFreeFormDedupsItsVersionBump)
+{
+    Scene scene;
+    const uint64_t baseline = scene.mouse_version();
+
+    scene.set_ruler_free_form(true);
+    const uint64_t after_first = scene.mouse_version();
+    EXPECT_NE(after_first, baseline);
+
+    scene.set_ruler_free_form(true); // same value again - no-op
+    EXPECT_EQ(scene.mouse_version(), after_first);
+
+    scene.set_ruler_free_form(false);
+    EXPECT_NE(scene.mouse_version(), after_first);
+}
+
+TEST(Scene, ClearRulersEmptiesAndBumpsVersion)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90);
+    scene.add_ruler_point(false);
+    ASSERT_FALSE(scene.rulers().empty());
+    const uint64_t before = scene.ruler_version();
+
+    scene.clear_rulers();
+    EXPECT_TRUE(scene.rulers().empty());
+    EXPECT_NE(scene.ruler_version(), before);
+}
+
+TEST(Scene, ClearRulersOnAnEmptyListIsANoOp)
+{
+    Scene scene;
+    scene.clear_rulers();
+    EXPECT_EQ(scene.ruler_version(), 0u);
 }
 
 TEST(Scene, SelectDeselectAndClear)

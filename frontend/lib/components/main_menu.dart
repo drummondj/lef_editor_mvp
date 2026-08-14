@@ -86,6 +86,17 @@ class _MainMenuState extends State<MainMenu> {
                 context.read<LeProvider>().setMode(LeMode.LE_MODE_EDIT),
             label: Text("Edit Mode"),
           ),
+          TextButton.icon(
+            icon: Icon(Icons.straighten),
+            onPressed: () =>
+                context.read<LeProvider>().setMode(LeMode.LE_MODE_RULER),
+            label: Text("Ruler Mode"),
+          ),
+          TextButton.icon(
+            icon: Icon(Icons.layers_clear),
+            onPressed: () => context.read<LeProvider>().clearRulers(),
+            label: Text("Clear Rulers"),
+          ),
         ],
       ),
     );

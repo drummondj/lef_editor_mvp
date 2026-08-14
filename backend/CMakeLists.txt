@@ -158,7 +158,7 @@ endif()
 # that can't be a header-only detail. ---
 add_library(render STATIC src/render/render.cpp)
 target_include_directories(render PUBLIC src)
-target_link_libraries(render PUBLIC database geometry scene view_style core skia)
+target_link_libraries(render PUBLIC database geometry scene view_style core skia fmt::fmt)
 
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp src/io/lef_writer.cpp)

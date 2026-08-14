@@ -5,6 +5,7 @@
 #include "../view_style/view_style.hpp"
 #include "stages/build_overlay_picture_stage.hpp"
 #include "stages/build_picture_stage.hpp"
+#include "stages/build_ruler_overlay_picture_stage.hpp"
 #include "stages/build_selection_overlay_picture_stage.hpp"
 #include "stages/build_tiny_shapes_picture_stage.hpp"
 #include "stages/compose_with_overlays_stage.hpp"
@@ -23,8 +24,9 @@ namespace le
     /// frame); a fresh instance recomputes everything on its first call.
     ///
     ///   TransformToPixelsStage -> BuildPictureStage -> RasterizeStage (design)            \
-    ///   TransformTinyShapesToPixelsStage -> BuildTinyShapesPictureStage -> RasterizeStage   -> ComposeWithOverlaysStage
-    ///   BuildSelectionOverlayPictureStage -> RasterizeStage (selection)                    /
+    ///   TransformTinyShapesToPixelsStage -> BuildTinyShapesPictureStage -> RasterizeStage   \
+    ///   BuildSelectionOverlayPictureStage -> RasterizeStage (selection)                      -> ComposeWithOverlaysStage
+    ///   BuildRulerOverlayPictureStage -> RasterizeStage (rulers, UPDATES.md item 13)         /
     ///   BuildOverlayPictureStage (drawn directly, not rasterized) ------------------------/
     ///
     /// Every public method below keeps the exact signature it had before
@@ -63,9 +65,9 @@ namespace le
             return build_picture_stage_.run(transform_stage_, shapes, scene, view_layers, root);
         }
 
-        const sk_sp<SkPicture> &build_overlay_picture(const Scene &scene)
+        const sk_sp<SkPicture> &build_overlay_picture(const Scene &scene, std::optional<double> dbu_per_um)
         {
-            return build_overlay_picture_stage_.run(scene);
+            return build_overlay_picture_stage_.run(scene, dbu_per_um);
         }
 
         const sk_sp<SkPicture> &build_tiny_shapes_picture(const Root &root, const std::map<ViewLayerId, std::vector<PixelPoint>> &tiny_pixel_shapes, const Scene &scene, const ViewLayerSet &view_layers)
@@ -76,6 +78,14 @@ namespace le
         const sk_sp<SkPicture> &build_selection_overlay_picture(const Scene &scene)
         {
             return build_selection_overlay_picture_stage_.run(scene);
+        }
+
+        /// @brief Finalized (committed) rulers only - not the live ghost
+        /// segment, which is part of build_overlay_picture (UPDATES.md
+        /// item 13) - see BuildRulerOverlayPictureStage's own doc comment.
+        const sk_sp<SkPicture> &build_ruler_overlay_picture(const Scene &scene, std::optional<double> dbu_per_um)
+        {
+            return build_ruler_overlay_picture_stage_.run(scene, dbu_per_um);
         }
 
         /// @brief Rasterize `picture` into a raw RGBA8888 PixelBuffer sized
@@ -89,12 +99,12 @@ namespace le
             return rasterize_design_stage_.run(build_picture_stage_.version(), picture, scene).buffer;
         }
 
-        const PixelBuffer &compose_with_overlays(const Root &root, const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &tiny_shapes_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const Scene &scene)
+        const PixelBuffer &compose_with_overlays(const Root &root, const sk_sp<SkPicture> &design_picture, const sk_sp<SkPicture> &tiny_shapes_picture, const sk_sp<SkPicture> &overlay_picture, const sk_sp<SkPicture> &selection_overlay_picture, const sk_sp<SkPicture> &ruler_overlay_picture, const Scene &scene)
         {
             (void)root;
-            return compose_stage_.run(rasterize_design_stage_, rasterize_tiny_stage_, rasterize_selection_stage_, build_overlay_picture_stage_,
-                                       build_picture_stage_.version(), build_tiny_shapes_picture_stage_.version(), build_selection_overlay_picture_stage_.version(),
-                                       design_picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, scene);
+            return compose_stage_.run(rasterize_design_stage_, rasterize_tiny_stage_, rasterize_selection_stage_, rasterize_ruler_stage_, build_overlay_picture_stage_,
+                                       build_picture_stage_.version(), build_tiny_shapes_picture_stage_.version(), build_selection_overlay_picture_stage_.version(), build_ruler_overlay_picture_stage_.version(),
+                                       design_picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
         }
 
         /// @brief Run the full render chain for a frame - transform_to_pixels
@@ -118,13 +128,15 @@ namespace le
         /// convenience wrapper alongside them, not a replacement.
         const PixelBuffer &render(const Root &root, const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes, const std::map<ViewLayerId, std::vector<Point>> &tiny_shapes, const Scene &scene, const ViewLayerSet &view_layers)
         {
+            const std::optional<double> dbu_per_um = technology_dbu_per_um(root);
             const auto &pixel_shapes = transform_to_pixels(root, shapes, scene);
             const auto &picture = build_picture(pixel_shapes, scene, view_layers, root);
             const auto &tiny_pixel_shapes = transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
             const auto &tiny_shapes_picture = build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
-            const auto &overlay_picture = build_overlay_picture(scene);
+            const auto &overlay_picture = build_overlay_picture(scene, dbu_per_um);
             const auto &selection_overlay_picture = build_selection_overlay_picture(scene);
-            return compose_with_overlays(root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, scene);
+            const auto &ruler_overlay_picture = build_ruler_overlay_picture(scene, dbu_per_um);
+            return compose_with_overlays(root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
         }
 
         // Number of times each stage actually recomputed - exposed purely
@@ -135,9 +147,11 @@ namespace le
         uint64_t tiny_shapes_picture_calls() const { return build_tiny_shapes_picture_stage_.call_count(); }
         uint64_t overlay_picture_calls() const { return build_overlay_picture_stage_.call_count(); }
         uint64_t selection_overlay_picture_calls() const { return build_selection_overlay_picture_stage_.call_count(); }
+        uint64_t ruler_overlay_picture_calls() const { return build_ruler_overlay_picture_stage_.call_count(); }
         uint64_t rasterize_calls() const { return rasterize_design_stage_.call_count(); }
         uint64_t rasterize_tiny_shapes_calls() const { return rasterize_tiny_stage_.call_count(); }
         uint64_t rasterize_selection_overlay_calls() const { return rasterize_selection_stage_.call_count(); }
+        uint64_t rasterize_ruler_overlay_calls() const { return rasterize_ruler_stage_.call_count(); }
         uint64_t compose_calls() const { return compose_stage_.call_count(); }
 
     private:
@@ -147,9 +161,11 @@ namespace le
         BuildOverlayPictureStage build_overlay_picture_stage_;
         BuildTinyShapesPictureStage build_tiny_shapes_picture_stage_;
         BuildSelectionOverlayPictureStage build_selection_overlay_picture_stage_;
+        BuildRulerOverlayPictureStage build_ruler_overlay_picture_stage_;
         RasterizeStage rasterize_design_stage_;
         RasterizeStage rasterize_tiny_stage_;
         RasterizeStage rasterize_selection_stage_;
+        RasterizeStage rasterize_ruler_stage_;
         ComposeWithOverlaysStage compose_stage_;
     };
 }

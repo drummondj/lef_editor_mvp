@@ -459,11 +459,49 @@ class LeEditor {
   }
 
   /// Switches the current interaction mode - see [mode]. Also reachable
-  /// via [LeEditorInput.handleKeyEvent]'s 's'/'e' shortcuts
-  /// (LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE).
+  /// via [LeEditorInput.handleKeyEvent]'s 's'/'e'/'r' shortcuts
+  /// (LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE/LE_KEY_RULER_MODE).
   void setMode(LeMode mode) {
     _checkNotDisposed();
     _bindings.le_set_mode(_handle, mode.value);
+  }
+
+  /// Number of rulers (UPDATES.md item 13) - multiple can exist at once,
+  /// since starting a new one never clears an existing one. Indexes
+  /// [rulerPointCount]/[rulerPointAt]'s own `rulerIndex` parameter.
+  int get rulerCount {
+    _checkNotDisposed();
+    return _bindings.le_ruler_count(_handle);
+  }
+
+  /// Number of committed points on the ruler at [rulerIndex]
+  /// (0..[rulerCount]-1) - indexes [rulerPointAt]'s own `pointIndex`
+  /// parameter.
+  int rulerPointCount(int rulerIndex) {
+    _checkNotDisposed();
+    return _bindings.le_ruler_point_count(_handle, rulerIndex);
+  }
+
+  /// The point at `pointIndex` (0..[rulerPointCount] - 1) on the ruler
+  /// at [rulerIndex], in microns.
+  Offset rulerPointAt(int rulerIndex, int pointIndex) {
+    _checkNotDisposed();
+    final p = _bindings.le_ruler_point_at(_handle, rulerIndex, pointIndex);
+    return Offset(p.x_um, p.y_um);
+  }
+
+  /// Finishes the active ruler, if any - the next click in Ruler mode
+  /// starts a new ruler instead of appending to this one. Reachable via
+  /// the Esc key (LE_KEY_FINISH_RULER) - see [LeEditorInput.handleKeyEvent].
+  void finishRuler() {
+    _checkNotDisposed();
+    _bindings.le_finish_ruler(_handle);
+  }
+
+  /// Removes every ruler (finished or not).
+  void clearRulers() {
+    _checkNotDisposed();
+    _bindings.le_clear_rulers(_handle);
   }
 
   /// Whether every ViewLayer named [layerName] is currently selectable -
@@ -584,6 +622,21 @@ class LeEditor {
   set majorGridSpacing(int dbu) {
     _checkNotDisposed();
     _bindings.le_set_major_grid_spacing(_handle, dbu);
+  }
+
+  /// On-screen text size (px) for every ruler label - tick values, each
+  /// segment's own point-to-point distance, and a ruler's running total
+  /// (UPDATES.md item 13). Defaults to 11.0.
+  double get rulerLabelSize {
+    _checkNotDisposed();
+    return _bindings.le_ruler_label_size(_handle);
+  }
+
+  /// Sets the ruler label text size (px). Affects rendering; values <= 0
+  /// are ignored, same guard as [minorGridSpacing].
+  set rulerLabelSize(double px) {
+    _checkNotDisposed();
+    _bindings.le_set_ruler_label_size(_handle, px);
   }
 
   /// Sets the current mouse position, in the same pixel space as

@@ -534,7 +534,7 @@ static void BM_ComposeWithOverlays_PanOnly_ZoomedOut_NoTinyShapes(benchmark::Sta
         const auto &shapes = pipeline.run(data.root, scene, data.view_layers);
         const auto &pixel_shapes = renderer.transform_to_pixels(data.root, shapes, scene);
         const auto &picture = renderer.build_picture(pixel_shapes, scene, data.view_layers, data.root);
-        const auto &buffer = renderer.compose_with_overlays(data.root, picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -561,7 +561,7 @@ static void BM_RenderReusedWithTinyShapes_PanOnly_ZoomedOut(benchmark::State &st
         const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(data.root, tiny_shapes, scene);
         const auto &tiny_shapes_picture = renderer.build_tiny_shapes_picture(data.root, tiny_pixel_shapes, scene, data.view_layers);
 
-        const auto &buffer = renderer.compose_with_overlays(data.root, picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, picture, tiny_shapes_picture, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }
@@ -691,9 +691,9 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
     for (auto _ : state)
     {
         scene.set_mouse_position(x++ % 2000, 0);
-        const auto &overlay_picture = renderer.build_overlay_picture(scene);
+        const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
         const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
-        const auto &buffer = renderer.compose_with_overlays(data.root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, scene);
+        const auto &buffer = renderer.compose_with_overlays(data.root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
     }

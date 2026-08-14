@@ -216,9 +216,15 @@ class LeProvider extends ChangeNotifier {
   }
 
   /// Switches the current interaction mode (UPDATES.md item 11) - also
-  /// reachable via the 's'/'e' keyboard shortcuts (see handleKeyEvent).
+  /// reachable via the 's'/'e'/'r' keyboard shortcuts (see handleKeyEvent).
   Future<void> setMode(LeMode mode) async {
     _editor.setMode(mode);
+    refreshAndNotify();
+  }
+
+  /// Removes every ruler, finished or not (UPDATES.md item 13).
+  Future<void> clearRulers() async {
+    _editor.clearRulers();
     refreshAndNotify();
   }
 

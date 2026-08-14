@@ -361,17 +361,223 @@ namespace le
         // interaction to editing whatever is already selected (behavior
         // TBD - UPDATES.md item 11's own "Details of how objects are
         // edited to follow"), so the selection can only change back in
-        // Select mode. No cached stage depends on this yet, so no version
-        // bump on change - matches layer selectability's own precedent,
-        // not layer visibility's (visibility_version_).
+        // Select mode. Ruler mode (UPDATES.md item 13) is documented in
+        // the Rulers section below.
         enum class Mode
         {
             SELECT,
             EDIT,
+            RULER,
         };
 
-        void set_mode(Mode mode) { mode_ = mode; }
+        // Leaving Ruler mode always finishes whatever ruler was active
+        // (see finish_active_ruler) - keeps "an active ruler exists only
+        // in Ruler mode" an invariant callers (render, tests) can rely on
+        // rather than a coincidence. The hover outline (draw_hover_outline)
+        // is a Select-mode-only affordance - it signals "this is a
+        // selection candidate", which isn't meaningful while placing
+        // ruler points or (Edit mode's own interaction, still TBD) - so
+        // leaving SELECT clears it immediately, rather than leaving a
+        // stale highlight visible until the next mouse move happens to
+        // land somewhere with nothing under it (le_set_mouse_position
+        // additionally gates *computing* a fresh hover on SELECT mode
+        // going forward - see its own comment). Bumps mouse_version_ on
+        // an actual mode change only - the ghost-ruler overlay's content
+        // is mode-dependent (BuildOverlayPictureStage) and needs to
+        // invalidate on mode switch.
+        void set_mode(Mode mode)
+        {
+            if (mode == mode_)
+                return;
+            if (mode_ == Mode::RULER)
+                finish_active_ruler();
+            mode_ = mode;
+            if (mode_ != Mode::SELECT)
+                clear_hover();
+            ++mouse_version_;
+        }
         Mode mode() const { return mode_; }
+
+        // --- Rulers (UPDATES.md item 13) ---
+        // A ruler is a polyline of already-committed (grid-snapped)
+        // points; `finished` is set once the user presses Esc to stop
+        // adding to it (see le_finish_ruler) or leaves Ruler mode (see
+        // set_mode above). Multiple rulers can exist at once - starting
+        // a new one never clears an existing one (resolved design
+        // decision, UPDATES.md item 13). The *last* entry is "the active
+        // ruler" new clicks append to, if and only if it exists and
+        // isn't finished - this class maintains that as an invariant
+        // rather than something callers have to check for themselves.
+        struct Ruler
+        {
+            std::vector<Point> points;
+            bool finished = false;
+        };
+
+        // The point a click would commit right now (or the ghost
+        // preview should show) - grid-snapped (snapped_mouse_position()),
+        // then unless `free_form` or there's no active ruler with a
+        // prior committed point, constrained to whichever axis has the
+        // larger delta from that point (the other axis pinned to it
+        // exactly) - UPDATES.md item 13's "orthogonal by default, shift
+        // for non-orthogonal". `free_form` is passed in rather than read
+        // from held keys internally - see set_ruler_free_form's own
+        // comment for why this class stays agnostic of api.hpp's
+        // LE_KEY_SHIFT value.
+        std::optional<Point> ruler_next_point(bool free_form) const
+        {
+            const std::optional<Point> snapped = snapped_mouse_position();
+            if (!snapped)
+                return std::nullopt;
+
+            const bool has_active_last_point = !rulers_.empty() && !rulers_.back().finished && !rulers_.back().points.empty();
+            if (free_form || !has_active_last_point)
+                return snapped;
+
+            const Point &last = rulers_.back().points.back();
+            const int64_t dx = std::llabs(snapped->x - last.x);
+            const int64_t dy = std::llabs(snapped->y - last.y);
+            return dx >= dy ? Point{snapped->x, last.y} : Point{last.x, snapped->y};
+        }
+
+        // Commits ruler_next_point(free_form). If there's no active
+        // ruler (none exist yet, or the last one is finished), this
+        // starts a new one - unless the most recently finished ruler
+        // exists and its own last point is within
+        // kNewRulerMinDistancePx (converted through the current scale)
+        // of the new point, in which case this is a no-op: a guard
+        // against a stray click landing so close to where the last ruler
+        // just finished that it would spawn a spurious near-zero-length
+        // new ruler right on top of it.
+        void add_ruler_point(bool free_form)
+        {
+            const std::optional<Point> point = ruler_next_point(free_form);
+            if (!point)
+                return;
+
+            const bool has_active = !rulers_.empty() && !rulers_.back().finished;
+            if (has_active && !rulers_.back().points.empty())
+            {
+                const Point &last = rulers_.back().points.back();
+                if (last.x == point->x && last.y == point->y)
+                    return; // identical to the last committed point - a
+                            // no-op rather than growing the polyline with
+                            // a zero-length final segment (a real observed
+                            // case: it broke the "total: " label, whose
+                            // own perpendicular-direction math degenerates
+                            // for a zero-length last segment).
+            }
+
+            if (!has_active)
+            {
+                if (!rulers_.empty() && !rulers_.back().points.empty())
+                {
+                    const Point &last_finished = rulers_.back().points.back();
+                    const double dx = static_cast<double>(point->x - last_finished.x);
+                    const double dy = static_cast<double>(point->y - last_finished.y);
+                    const double pixel_distance = std::sqrt(dx * dx + dy * dy) * scale_;
+                    if (pixel_distance < kNewRulerMinDistancePx)
+                        return;
+                }
+                rulers_.emplace_back();
+            }
+            rulers_.back().points.push_back(*point);
+            ++ruler_version_;
+        }
+
+        // Marks the active ruler (if any) finished - a no-op if there
+        // isn't one. Called both by the Esc-to-finish gesture
+        // (le_finish_ruler) and by set_mode when leaving Ruler mode.
+        void finish_active_ruler()
+        {
+            if (!rulers_.empty() && !rulers_.back().finished)
+            {
+                rulers_.back().finished = true;
+                ++ruler_version_;
+            }
+        }
+
+        // Ensures Ruler mode is active and finishes whatever ruler was
+        // already in progress, ready for the next click to start a
+        // fresh one (still subject to add_ruler_point's own distance
+        // guard against restarting too close to the just-abandoned
+        // ruler). Called for every LE_KEY_RULER_MODE / le_set_mode(RULER)
+        // - including when mode is already RULER, which is what lets
+        // 'r' double as an explicit "abandon the current ruler"
+        // shortcut (a plain set_mode(RULER) would no-op when the mode
+        // doesn't actually change) - this is also why hover needs its
+        // own explicit clear here rather than relying on set_mode's own
+        // (mode may already be RULER, so set_mode's own early-return
+        // would never run its hover-clearing side effect for a re-entry).
+        void reset_ruler_mode()
+        {
+            finish_active_ruler();
+            clear_hover();
+            if (mode_ != Mode::RULER)
+            {
+                mode_ = Mode::RULER;
+                ++mouse_version_;
+            }
+        }
+
+        void clear_rulers()
+        {
+            if (!rulers_.empty())
+            {
+                rulers_.clear();
+                ++ruler_version_;
+            }
+        }
+
+        const std::vector<Ruler> &rulers() const { return rulers_; }
+
+        // Bumped only on a real ruler change (a point added, a ruler
+        // finished, rulers cleared) - never on mouse move alone, so a
+        // cached stage keyed on this doesn't have to re-walk every
+        // ruler's geometry on every pointer event (same reasoning as
+        // selection_version()).
+        uint64_t ruler_version() const { return ruler_version_; }
+
+        // Whether the current/next ruler point should ignore the
+        // orthogonal constraint - a plain, key-code-agnostic flag;
+        // api.cpp resyncs it (from its own knowledge of LE_KEY_SHIFT,
+        // which this class doesn't know the meaning of) on every key
+        // event, so render-side code can read "free-form active right
+        // now" every frame without needing to know what LE_KEY_SHIFT
+        // means. Dedups (only bumps mouse_version_ on an actual change)
+        // since a resync happens on every key event, not just shift's.
+        void set_ruler_free_form(bool free_form)
+        {
+            if (free_form != ruler_free_form_)
+            {
+                ruler_free_form_ = free_form;
+                ++mouse_version_;
+            }
+        }
+        bool ruler_free_form() const { return ruler_free_form_; }
+
+        // The on-screen text size (px) for every ruler label - tick
+        // values, each segment's own point-to-point distance, and a
+        // ruler's running total. Runtime-configurable (le_ruler_label_size/
+        // le_set_ruler_label_size) rather than a fixed style constant,
+        // since legible label size varies with display/preferences.
+        // Bumps visibility_version_ (not a dedicated counter), the same
+        // signal set_minor_grid_spacing/set_major_grid_spacing already
+        // use for "affects rendered content" - both ruler overlay stages
+        // (BuildOverlayPictureStage/BuildRulerOverlayPictureStage) already
+        // key on visibility_version() alongside ruler_version(), so this
+        // invalidates them correctly with no new plumbing. Non-positive
+        // values are rejected (keeps the last valid size), same guard as
+        // set_minor_grid_spacing.
+        void set_ruler_label_size_px(double px)
+        {
+            if (px > 0.0)
+            {
+                ruler_label_size_px_ = px;
+                ++visibility_version_;
+            }
+        }
+        double ruler_label_size_px() const { return ruler_label_size_px_; }
 
         // --- Held keys (UPDATES.md 7) ---
         // A generic set of currently-held key codes, set by the frontend
@@ -701,6 +907,15 @@ namespace le
         bool has_mouse_position_ = false;
         uint64_t mouse_version_ = 0;
         Mode mode_ = Mode::SELECT;
+        std::vector<Ruler> rulers_;
+        uint64_t ruler_version_ = 0;
+        bool ruler_free_form_ = false;
+        double ruler_label_size_px_ = 11.0;
+        // Minimum on-screen distance (px, converted via the current
+        // scale) a new ruler's first point must be from the most
+        // recently finished ruler's last point - see add_ruler_point.
+        // A placeholder, tunable like every other threshold constant.
+        static constexpr double kNewRulerMinDistancePx = 20.0;
         bool dragging_ = false;
         DragKind drag_kind_ = DragKind::SELECT;
         int32_t drag_start_x_px_ = 0;

@@ -186,6 +186,8 @@ namespace
     // ("Details of how objects are edited to follow"), so this text will
     // need to change once that's defined.
     constexpr const char *kEditModeTooltip = "Edit mode";
+    constexpr const char *kRulerModeTooltip =
+        "Click to add a ruler point. Shift for a non-orthogonal segment. Esc to finish the ruler.";
 
     // Maps le::PropertyValue::Type (generated/property.hpp) to the C API's
     // LePropertyType - kept as an explicit switch rather than a bare
@@ -1477,7 +1479,64 @@ extern "C"
         if (!handle)
             return;
         std::lock_guard<std::mutex> lock(handle->mutex_);
-        handle->scene.set_mode(static_cast<le::Scene::Mode>(mode));
+        if (mode == LE_MODE_RULER)
+            handle->scene.reset_ruler_mode();
+        else
+            handle->scene.set_mode(static_cast<le::Scene::Mode>(mode));
+    }
+
+    int32_t le_ruler_count(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return static_cast<int32_t>(handle->scene.rulers().size());
+    }
+
+    int32_t le_ruler_point_count(LeHandle *handle, int32_t ruler_index)
+    {
+        if (!handle || ruler_index < 0)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        const auto &rulers = handle->scene.rulers();
+        if (static_cast<size_t>(ruler_index) >= rulers.size())
+            return 0;
+        return static_cast<int32_t>(rulers[ruler_index].points.size());
+    }
+
+    LeRulerPoint le_ruler_point_at(LeHandle *handle, int32_t ruler_index, int32_t point_index)
+    {
+        constexpr LeRulerPoint kInvalid{.x_um = 0.0, .y_um = 0.0};
+        if (!handle || ruler_index < 0 || point_index < 0)
+            return kInvalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        const auto &rulers = handle->scene.rulers();
+        if (static_cast<size_t>(ruler_index) >= rulers.size())
+            return kInvalid;
+        const auto &points = rulers[ruler_index].points;
+        if (static_cast<size_t>(point_index) >= points.size())
+            return kInvalid;
+        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
+        if (!dbu_per_um)
+            return kInvalid;
+        const le::Point &p = points[point_index];
+        return LeRulerPoint{.x_um = static_cast<double>(p.x) / *dbu_per_um, .y_um = static_cast<double>(p.y) / *dbu_per_um};
+    }
+
+    void le_finish_ruler(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.finish_active_ruler();
+    }
+
+    void le_clear_rulers(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.clear_rulers();
     }
 
     int32_t le_is_layer_name_selectable(LeHandle *handle, const char *layer_name)
@@ -1576,6 +1635,22 @@ extern "C"
         handle->scene.set_major_grid_spacing(dbu);
     }
 
+    double le_ruler_label_size(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        return handle->scene.ruler_label_size_px();
+    }
+
+    void le_set_ruler_label_size(LeHandle *handle, double px)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.set_ruler_label_size_px(px);
+    }
+
     void le_set_mouse_position(LeHandle *handle, int32_t x, int32_t y)
     {
         if (!handle)
@@ -1584,8 +1659,19 @@ extern "C"
 
         handle->scene.set_mouse_position(x, y);
 
-        const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
-        handle->scene.set_hover(le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, *handle->scene.mouse_dbu_position()));
+        // The hover outline is a Select-mode-only affordance (see
+        // Scene::set_mode's own comment) - skip the hit-test entirely
+        // outside Select mode rather than computing and immediately
+        // discarding it.
+        if (handle->scene.mode() == le::Scene::Mode::SELECT)
+        {
+            const auto &shapes = handle->pipeline.run(handle->root, handle->scene, handle->view_layers);
+            handle->scene.set_hover(le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, *handle->scene.mouse_dbu_position()));
+        }
+        else
+        {
+            handle->scene.clear_hover();
+        }
     }
 
     void le_clear_mouse_position(LeHandle *handle)
@@ -1631,6 +1717,7 @@ extern "C"
             return;
         std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.press_key(key_code);
+        handle->scene.set_ruler_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
 
         switch (key_code)
         {
@@ -1697,6 +1784,12 @@ extern "C"
         case LE_KEY_EDIT_MODE:
             handle->scene.set_mode(le::Scene::Mode::EDIT);
             break;
+        case LE_KEY_RULER_MODE:
+            handle->scene.reset_ruler_mode();
+            break;
+        case LE_KEY_FINISH_RULER:
+            handle->scene.finish_active_ruler();
+            break;
         default:
             break;
         }
@@ -1708,6 +1801,7 @@ extern "C"
             return;
         std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.release_key(key_code);
+        handle->scene.set_ruler_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
     }
 
     int32_t le_is_key_held(LeHandle *handle, int32_t key_code)
@@ -1807,6 +1901,14 @@ extern "C"
                     handle->scene.select(hit.origin, hit.outline);
             }
         }
+        else if (handle->scene.mode() == le::Scene::Mode::RULER)
+        {
+            // UPDATES.md item 13 - only a click (not a drag) commits a
+            // ruler point; a drag in Ruler mode does nothing beyond
+            // ending the gesture below.
+            if (is_click)
+                handle->scene.add_ruler_point(handle->scene.is_key_held(LE_KEY_SHIFT));
+        }
 
         handle->scene.end_drag();
     }
@@ -1815,7 +1917,16 @@ extern "C"
     {
         if (!handle)
             return nullptr;
-        return handle->scene.mode() == le::Scene::Mode::EDIT ? kEditModeTooltip : kSelectModeTooltip;
+        switch (handle->scene.mode())
+        {
+        case le::Scene::Mode::EDIT:
+            return kEditModeTooltip;
+        case le::Scene::Mode::RULER:
+            return kRulerModeTooltip;
+        case le::Scene::Mode::SELECT:
+        default:
+            return kSelectModeTooltip;
+        }
     }
 
     int32_t le_selection_count(LeHandle *handle)

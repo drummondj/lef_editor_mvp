@@ -18,7 +18,11 @@ class StatusBar extends StatelessWidget {
               SelectableText(provider.tooltipMessage),
               Spacer(),
               SelectableText(
-                "Mode: ${provider.mode == LeMode.LE_MODE_SELECT ? 'Select' : 'Edit'}",
+                "Mode: ${switch (provider.mode) {
+                  LeMode.LE_MODE_SELECT => 'Select',
+                  LeMode.LE_MODE_EDIT => 'Edit',
+                  LeMode.LE_MODE_RULER => 'Ruler',
+                }}",
               ),
               SelectableText(
                 "X: ${provider.snappedMousePosition.dx.toStringAsFixed(3)} Y: ${provider.snappedMousePosition.dy.toStringAsFixed(3)}",

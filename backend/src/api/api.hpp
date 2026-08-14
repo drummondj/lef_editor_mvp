@@ -407,13 +407,20 @@ extern "C"
     /// is the only mode where le_mouse_up's mouse clicks/drags change the
     /// current selection - Edit mode restricts mouse interaction to
     /// editing whatever is already selected (behavior TBD, a later item).
-    /// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (keyboard)
-    /// or le_set_mode (a Flutter UI event) - both paths converge on the
-    /// same Scene::Mode state.
+    /// Ruler mode (UPDATES.md item 13) is where le_mouse_up's clicks
+    /// place ruler points instead - see le_finish_ruler/le_clear_rulers.
+    /// Switched either via LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE/
+    /// LE_KEY_RULER_MODE (keyboard) or le_set_mode (a Flutter UI event) -
+    /// both paths converge on the same Scene::Mode state. Switching to
+    /// LE_MODE_RULER either way always finishes whatever ruler was
+    /// already in progress first (Scene::reset_ruler_mode), including
+    /// when the mode is already Ruler - so re-selecting Ruler mode is
+    /// itself a way to abandon an in-progress ruler.
     typedef enum LeMode
     {
         LE_MODE_SELECT = 0,
         LE_MODE_EDIT = 1,
+        LE_MODE_RULER = 2,
     } LeMode;
 
     /// @brief The current interaction mode (see LeMode). Returns
@@ -423,6 +430,47 @@ extern "C"
     /// @brief Switch the current interaction mode (see LeMode). A no-op
     /// if handle is null.
     void le_set_mode(LeHandle *handle, int32_t mode);
+
+    /// @brief One ruler point, in microns (UPDATES.md item 13) - see
+    /// le_ruler_point_at.
+    typedef struct LeRulerPoint
+    {
+        double x_um;
+        double y_um;
+    } LeRulerPoint;
+
+    /// @brief Number of rulers (UPDATES.md item 13) - multiple can exist
+    /// at once, since starting a new one never clears an existing one.
+    /// Indexes le_ruler_point_count()/le_ruler_point_at()'s own
+    /// `ruler_index` parameter, 0..this-1, in the order each ruler was
+    /// started. Returns 0 if handle is null.
+    int32_t le_ruler_count(LeHandle *handle);
+
+    /// @brief Number of committed points on the ruler at `ruler_index`
+    /// (0..le_ruler_count()-1) - indexes le_ruler_point_at()'s own
+    /// `point_index` parameter. Returns 0 if handle is null or
+    /// ruler_index is out of range.
+    int32_t le_ruler_point_count(LeHandle *handle, int32_t ruler_index);
+
+    /// @brief The point at `point_index` (0..le_ruler_point_count(ruler_index)-1)
+    /// on the ruler at `ruler_index`, converted to microns. Returns
+    /// {0.0, 0.0} if handle is null, either index is out of range, or no
+    /// Technology has been read yet to convert with.
+    LeRulerPoint le_ruler_point_at(LeHandle *handle, int32_t ruler_index, int32_t point_index);
+
+    /// @brief Finishes the active ruler, if any (Scene::finish_active_ruler) -
+    /// the next click in Ruler mode starts a new ruler instead of
+    /// appending to this one, subject to Scene::add_ruler_point's own
+    /// minimum-distance guard against restarting too close to the point
+    /// this call just finished at. Called by the frontend on a
+    /// double-click (UPDATES.md item 13) - see flutter_plugin's
+    /// LeEditor.registerClickAndCheckDoubleClick. A no-op if handle is
+    /// null or there's no active ruler.
+    void le_finish_ruler(LeHandle *handle);
+
+    /// @brief Removes every ruler (finished or not). A no-op if handle
+    /// is null.
+    void le_clear_rulers(LeHandle *handle);
 
     /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
     /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
@@ -509,6 +557,19 @@ extern "C"
     /// Scene::set_major_grid_spacing directly (affects rendering) - values
     /// <= 0 are ignored. A no-op if handle is null.
     void le_set_major_grid_spacing(LeHandle *handle, int64_t dbu);
+
+    /// @brief On-screen text size (px) for every ruler label - tick
+    /// values, each segment's own point-to-point distance, and a
+    /// ruler's running total (UPDATES.md item 13). Mirrors
+    /// Scene::ruler_label_size_px directly. Defaults to 11.0. Returns 0
+    /// if handle is null.
+    double le_ruler_label_size(LeHandle *handle);
+
+    /// @brief Set the ruler label text size (px). Mirrors
+    /// Scene::set_ruler_label_size_px directly (affects rendering) -
+    /// values <= 0 are ignored, same guard as le_set_minor_grid_spacing.
+    /// A no-op if handle is null.
+    void le_set_ruler_label_size(LeHandle *handle, double px);
 
     /// @brief Set the current mouse position, in the same pixel space as
     /// le_render_pixel_buffer()'s output image (top-left origin, y
@@ -624,6 +685,25 @@ extern "C"
         /// While in Edit mode, le_mouse_up no longer changes the current
         /// selection - see its own doc comment.
         LE_KEY_EDIT_MODE = 22,
+        /// Switch to Ruler mode (UPDATES.md item 13) - same idempotent
+        /// action-code shape as LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE, but
+        /// calls Scene::reset_ruler_mode() rather than a plain
+        /// set_mode(): every call - including when already in Ruler
+        /// mode, and including key-repeat - finishes whatever ruler was
+        /// in progress, so re-pressing 'r' doubles as an explicit
+        /// "abandon the current ruler" shortcut. While in Ruler mode,
+        /// le_mouse_up's clicks place ruler points instead of changing
+        /// the selection - see le_finish_ruler/le_clear_rulers.
+        LE_KEY_RULER_MODE = 23,
+        /// Finishes the active ruler, if any (UPDATES.md item 13, see
+        /// le_finish_ruler) - the Esc key. Idempotent/safe to fire on
+        /// every call including key-repeat, same as every other action
+        /// code here: Scene::finish_active_ruler() is already a no-op
+        /// once there's nothing active to finish, and there's no active
+        /// ruler at all outside Ruler mode (leaving it already finishes
+        /// whatever was in progress - see Scene::set_mode), so this
+        /// never needs mode-gating at the call site either.
+        LE_KEY_FINISH_RULER = 24,
     };
 
     /// @brief Mark `key_code` (an LeKeyCode value) as currently held,
