@@ -723,11 +723,10 @@ extern "C"
     /// - LE_KEY_FIT: le_fit_scene() with a fixed padding - or, if
     ///   LE_KEY_CTRL is currently held (UPDATES.md 9.6, "Ctrl-F fit
     ///   selected"), fits the viewport to the current selection's own
-    ///   combined bbox instead (same fixed padding; piece-scoped for any
-    ///   selection entry with a piece set, same scoping
-    ///   build_selected_object_properties's own bbox_um property uses -
-    ///   see api.cpp), leaving the view unchanged if nothing is selected
-    ///   rather than falling back to the whole-content fit.
+    ///   combined bbox instead (same fixed padding, one Shape's own bbox
+    ///   per selection entry - see api.cpp's fit_selected_unlocked),
+    ///   leaving the view unchanged if nothing is selected rather than
+    ///   falling back to the whole-content fit.
     /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
     ///   viewport-fraction step in the corresponding direction.
     /// - LE_KEY_SELECT_ALL (UPDATES.md 9.1): only while LE_KEY_CTRL is
@@ -855,8 +854,7 @@ extern "C"
     const char *le_tooltip_message(LeHandle *handle);
 
     /// @brief Number of currently selected objects (Scene::selection()).
-    /// Indexes the `selection_index` parameter of le_selected_object_kind()/
-    /// le_selected_object_property_count()/le_selected_object_property_at()
+    /// Indexes the `selection_index` parameter of le_selected_object_ref()
     /// below - 0..le_selection_count()-1, in Scene::selection()'s own
     /// (insertion) order. Returns 0 if handle is null.
     int32_t le_selection_count(LeHandle *handle);
@@ -866,27 +864,15 @@ extern "C"
     /// clear_selection() call that isn't a no-op) - a cheap way for a
     /// caller to tell whether anything selection-related has changed
     /// since it last checked, without re-fetching le_selection_count()/
-    /// le_selected_object_kind()/le_selected_object_properties() for
-    /// every selected object on every call (e.g. every mouse-move event -
-    /// a real, measured cost that scales with selection size otherwise,
-    /// see BENCHMARKS.md). Returns 0 if handle is null - a real handle's
-    /// version is never observably 0 forever (any interaction eventually
-    /// changes it), so a caller comparing against a sentinel it
-    /// initialized to a negative value on its own side won't be confused
-    /// by a null-handle 0 looking like "unchanged".
+    /// le_selected_object_ref() for every selected object on every call
+    /// (e.g. every mouse-move event - a real, measured cost that scales
+    /// with selection size otherwise, see BENCHMARKS.md). Returns 0 if
+    /// handle is null - a real handle's version is never observably 0
+    /// forever (any interaction eventually changes it), so a caller
+    /// comparing against a sentinel it initialized to a negative value on
+    /// its own side won't be confused by a null-handle 0 looking like
+    /// "unchanged".
     int64_t le_selection_version(LeHandle *handle);
-
-    /// @brief Which database class the selected object at `selection_index`
-    /// is (Scene::SelectionRef's variant alternative) - lets a caller
-    /// decide how to label/group a row before even looking at its
-    /// properties. Returns -1 if handle is null or selection_index is out
-    /// of range (see le_selection_count).
-    typedef enum LeSelectionKind
-    {
-        LE_SELECTION_KIND_TERMINAL = 0,
-        LE_SELECTION_KIND_OBSTRUCTION = 1,
-    } LeSelectionKind;
-    int32_t le_selected_object_kind(LeHandle *handle, int32_t selection_index);
 
     /// @brief Which field of LeProperty is meaningful for a given row -
     /// see LeProperty's own comment.
@@ -897,18 +883,16 @@ extern "C"
         LE_PROPERTY_TYPE_DOUBLE = 2,
     } LePropertyType;
 
-    /// @brief One name/value row of a selected object's property table
-    /// (UPDATES.md 7.2) - a caller reads `type` to know which of
-    /// string_value/int_value/double_value to use; the other two are
-    /// unspecified. `name`/`string_value` point into memory owned by the
-    /// LeHandle - valid only until the next le_selected_object_property_at()
-    /// or le_selected_object_property_count() call *for the same
-    /// selection_index* (a different selection_index, or a selection
-    /// change, may invalidate them sooner) - same "valid until the next
-    /// call" convention as LePixelBuffer, never owned by the caller and
-    /// never to be freed by it. `name` is null (and every other field 0/
-    /// unspecified) if this row is invalid (out-of-range selection_index/
-    /// property_index or null handle).
+    /// @brief One name/value row of an object's property table - a caller
+    /// reads `type` to know which of string_value/int_value/double_value
+    /// to use; the other two are unspecified. `name`/`string_value` point
+    /// into memory owned by the LeHandle - valid only until the next
+    /// le_object_property_at()/le_object_property_count() call *for the
+    /// same LeObjectRef* (a different ref may invalidate them sooner) -
+    /// same "valid until the next call" convention as LePixelBuffer,
+    /// never owned by the caller and never to be freed by it. `name` is
+    /// null (and every other field 0/unspecified) if this row is invalid
+    /// (out-of-range index or null handle).
     typedef struct LeProperty
     {
         const char *name;
@@ -918,63 +902,81 @@ extern "C"
         double double_value;
     } LeProperty;
 
-    /// @brief Number of property rows the selected object at
-    /// `selection_index` has (see LeProperty) - indexes
-    /// le_selected_object_property_at()'s own `property_index` parameter,
-    /// 0..this-1. Varies by LeSelectionKind and by whether the object has
-    /// any shapes yet (an empty Terminal/Obstruction has no bounding box
-    /// to report - see le_selected_object_property_at). Returns 0 if
-    /// handle is null or selection_index is out of range.
-    int32_t le_selected_object_property_count(LeHandle *handle, int32_t selection_index);
+    /// @brief Which database class an LeObjectRef names - the same seven
+    /// classes get_properties/the friendly-id convention already
+    /// distinguish (le_tcl_shim.cpp's library:/design:/abstract:/
+    /// terminal:/terminal_port:/obstruction:/shape: prefixes), just typed
+    /// instead of stringly-typed, for the GUI's Property Viewer (UPDATES.md
+    /// 7.2's later database-hierarchy redesign).
+    typedef enum LeObjectKind
+    {
+        LE_OBJECT_KIND_LIBRARY = 0,
+        LE_OBJECT_KIND_DESIGN = 1,
+        LE_OBJECT_KIND_ABSTRACT = 2,
+        LE_OBJECT_KIND_TERMINAL = 3,
+        LE_OBJECT_KIND_TERMINAL_PORT = 4,
+        LE_OBJECT_KIND_OBSTRUCTION = 5,
+        LE_OBJECT_KIND_SHAPE = 6,
+    } LeObjectKind;
 
-    /// @brief The property row at `property_index`
-    /// (0..le_selected_object_property_count(selection_index)-1) for the
-    /// selected object at `selection_index`. Per UPDATES.md 7.2: simple
-    /// fields (name, direction, counts of list fields rather than the
-    /// lists themselves) are sent as-is; any coordinate is always
-    /// converted from dbu to microns first (via the same single shared/
-    /// global Technology::database_units_microns as
-    /// le_snapped_mouse_position - omitted if no Technology has been read
-    /// yet). Every plain/enum field on the underlying database class
-    /// itself (e.g. Terminal's "name"/"direction") comes from cmg's
-    /// schema-generated `le::to_properties()` (see schema.py's Field
-    /// reflection helpers and generated/property.hpp) - new plain fields
-    /// added to schema.py appear here automatically, no api.cpp change
-    /// needed. Only what's genuinely derived (not a stored field) is
-    /// hand-appended: a schema-tracked list field's own size, named
-    /// "<field>_count" (e.g. Obstruction's "shapes" list ->
-    /// "shapes_count"), plus a child list that isn't a struct field at
-    /// all in INDEXED_POOLS style (Terminal's "port_count", from Root's
-    /// own port index - "ports" itself never appears), plus "bbox_um"
-    /// (string, "ll_x ll_y ur_x ur_y" space-separated, mirroring how a
-    /// LEF RECT statement itself lists four coordinates, since a bbox is
-    /// computed from nested geometry, never a stored field). Each
-    /// coordinate is formatted with trailing zeros trimmed in whole
-    /// groups of three - never a partial group - down to whichever
-    /// group first has a non-zero digit (or entirely, dropping the
-    /// decimal point, if every digit is zero): 1.0 -> "1", 0.34 ->
-    /// "0.340" (the next group, "340", isn't all zero, so it stays),
-    /// 0.123456 unchanged (no trimmable trailing zero group at all). If
-    /// the
-    /// selection came from a click that hit one specific rect/polygon/
-    /// path (as opposed to a drag-select, which selects whole objects -
-    /// see le_mouse_up), "bbox_um" covers just that piece, not the whole
-    /// object's union, and a "layer_name" (string) row is added for it -
-    /// useful since a Terminal can have ports on different layers.
-    /// Otherwise (drag-select, or no Technology available) "bbox_um"
-    /// covers the whole object and there's no "layer_name" row. Current
-    /// rows:
-    ///
-    /// - LE_SELECTION_KIND_TERMINAL: "name" (string), "direction" (string,
-    ///   e.g. "INPUT"), "port_count" (int), then "bbox_um" (string) and,
-    ///   if piece-scoped, "layer_name" (string), if the Terminal has any
-    ///   shapes and a Technology is available.
-    /// - LE_SELECTION_KIND_OBSTRUCTION: "shapes_count" (int), then the
-    ///   same "bbox_um"/"layer_name" rows under the same conditions.
-    ///
+    /// @brief A generic, typed reference to one database object of any of
+    /// the seven LeObjectKind classes - `index`/`generation` are that
+    /// class's own id fields (e.g. for LE_OBJECT_KIND_SHAPE, the same
+    /// pair LeShapeId carries). Used by le_object_property_count()/_at()/
+    /// le_object_parent()/le_selected_object_ref() below, so a Property
+    /// Viewer can walk the database hierarchy (Shape -> TerminalPort ->
+    /// Terminal -> Abstract -> Design -> Library) generically instead of
+    /// needing a different function per class. An invalid ref (see
+    /// le_object_invalid_ref) has index == UINT32_MAX, mirroring every
+    /// other LeXxxId's own invalid-index convention in this header.
+    typedef struct LeObjectRef
+    {
+        int32_t kind; // LeObjectKind
+        uint32_t index;
+        uint32_t generation;
+    } LeObjectRef;
+
+    /// @brief The sentinel LeObjectRef meaning "no such object" - returned
+    /// by le_object_parent() when a ref has no parent (LE_OBJECT_KIND_LIBRARY)
+    /// or the input ref itself doesn't resolve, and by le_selected_object_ref()
+    /// for an out-of-range selection_index or a null handle.
+    LeObjectRef le_object_invalid_ref(void);
+
+    /// @brief Number of property rows `ref` has (see LeProperty) - indexes
+    /// le_object_property_at()'s own `index` parameter, 0..this-1. Read-
+    /// only: never mutates Scene::selection() or bumps selection_version(),
+    /// so a Property Viewer can call this while navigating parent/child
+    /// links without affecting canvas selection. Dispatches to the same
+    /// by-id property builder each class's own le_X_property_count/_at
+    /// already uses (e.g. LE_OBJECT_KIND_SHAPE reads exactly what
+    /// get_properties shape:<id> shows). Returns 0 if handle is null or
+    /// ref doesn't resolve to a real object.
+    int32_t le_object_property_count(LeHandle *handle, LeObjectRef ref);
+
+    /// @brief The property row at `index` (0..le_object_property_count(ref)-1)
+    /// for `ref`. Read-only, same contract as le_object_property_count().
     /// Returns an all-null/zero row (LeProperty::name == nullptr) if
-    /// handle is null or either index is out of range.
-    LeProperty le_selected_object_property_at(LeHandle *handle, int32_t selection_index, int32_t property_index);
+    /// handle is null, ref doesn't resolve, or index is out of range.
+    LeProperty le_object_property_at(LeHandle *handle, LeObjectRef ref, int32_t index);
+
+    /// @brief `ref`'s immediate parent in the database hierarchy (Shape's
+    /// own terminal_port/obstruction field, TerminalPort's terminal,
+    /// Terminal/Obstruction's abstract, Abstract's design, Design's
+    /// library) - the same parent-hop graph filter_field_tables() already
+    /// declares for -filter validation, exposed here for GUI navigation
+    /// links. Read-only: never mutates Scene::selection(). Returns
+    /// le_object_invalid_ref() for LE_OBJECT_KIND_LIBRARY (no parent), a
+    /// ref that doesn't resolve, or a null handle.
+    LeObjectRef le_object_parent(LeHandle *handle, LeObjectRef ref);
+
+    /// @brief The selected object at `selection_index` (0..le_selection_count()-1),
+    /// as a generic ref usable with le_object_property_count()/_at()/
+    /// le_object_parent() - always LE_OBJECT_KIND_SHAPE (selection is
+    /// shape-granular - see Scene::SelectedObject's own comment). Read-
+    /// only: never mutates Scene::selection() or bumps selection_version().
+    /// Returns le_object_invalid_ref() if handle is null or selection_index
+    /// is out of range.
+    LeObjectRef le_selected_object_ref(LeHandle *handle, int32_t selection_index);
 
     /// @brief Run the full pipeline+render chain (generate -> filter ->
     /// filter -> transform -> picture -> rasterize) for the currently
@@ -1000,9 +1002,9 @@ extern "C"
     // get_field()/match_hop()/search_x, backend/src/database/filter.hpp's
     // parser+evaluator) - see TCL_EXPLORATION.md for the full design.
     // Every id here is addressed directly, not through the current GUI
-    // selection (le_selected_object_property_at's own LeSelectionKind
-    // path stays selection-scoped, unchanged) - the natural fit for a
-    // TCL caller that isn't driving the GUI at all. ---
+    // selection (though le_object_property_count/_at, added later, can
+    // address these same ids generically too - see LeObjectRef) - the
+    // natural fit for a TCL caller that isn't driving the GUI at all. ---
 
     /// @brief Mirrors the database's TerminalId handle - see LeLibraryId's
     /// comment for the general contract.
@@ -1031,7 +1033,7 @@ extern "C"
     /// @brief Mirrors le::SignalDirection (generated/signal_direction.hpp)
     /// field-for-field - kept as an explicit enum (not a bare int) so a
     /// future reordering of either fails to compile instead of silently
-    /// mismatching, same reasoning as LePropertyType/LeSelectionKind.
+    /// mismatching, same reasoning as LePropertyType/LeObjectKind.
     typedef enum LeSignalDirection
     {
         LE_SIGNAL_DIRECTION_INPUT = 0,
@@ -1086,17 +1088,17 @@ extern "C"
     const char *le_terminal_name(LeHandle *handle, LeTerminalId id);
 
     /// @brief Number of property rows for the Terminal at `id` - same
-    /// name/value table shape as le_selected_object_property_at
-    /// (LeProperty), but addressed directly by id rather than by current
-    /// selection index, for a TCL `get_terminal`-style caller that isn't
-    /// working off the current GUI selection. Rows: every plain Terminal
-    /// field from cmg's generated to_properties() ("name", "direction",
-    /// ...), plus "port_count" (int, from Root's own port index -
-    /// "ports" itself isn't a stored field, same as
-    /// le_selected_object_property_at's). No "bbox_um"/"layer_name" rows
-    /// (those are piece-selection-scoped concepts, meaningless for an
-    /// arbitrary id lookup). Returns 0 if handle is null or id doesn't
-    /// name a Terminal on this handle.
+    /// name/value table shape (LeProperty) le_object_property_count/_at
+    /// use for LE_OBJECT_KIND_TERMINAL, but addressed directly by id, for
+    /// a TCL `get_terminal`-style caller that isn't working off the
+    /// current GUI selection. Rows: every plain Terminal field from cmg's
+    /// generated to_properties() ("name", "direction", ...), plus
+    /// "port_count" (int, from Root's own port index - "ports" itself
+    /// isn't a stored field). No "rects"/"polygons"/"paths"/"layer_name"
+    /// rows (those are Shape-level geometry - see le_shape_property_at
+    /// directly, or le_object_property_at with LE_OBJECT_KIND_SHAPE, for
+    /// one Shape's own geometry). Returns 0 if handle is null or id
+    /// doesn't name a Terminal on this handle.
     int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id);
 
     /// @brief The property row at `index`
@@ -1236,7 +1238,7 @@ extern "C"
     /// until the next le_search_terminal call - read them via
     /// le_search_result_terminal_at, same "valid until the next call"
     /// convention as this API's other cached-result accessors
-    /// (le_selected_object_property_at et al).
+    /// (le_object_property_at et al).
     int32_t le_search_terminal(LeHandle *handle, const char *filter_expression);
 
     /// @brief The LeTerminalId at `index` (0..le_search_terminal's last

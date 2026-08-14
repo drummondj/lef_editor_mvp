@@ -2293,47 +2293,118 @@ namespace
         le_zoom(handle, 0.01 - 1.0, 0, 200);
     }
 
-    // Scans a selected object's full property table into a name -> row
-    // map, so a test can look up "does this property exist and does it
-    // have this value" without hard-coding property order.
-    std::map<std::string, LeProperty> selected_object_properties(LeHandle *handle, int32_t selection_index)
+    // Scans an LeObjectRef's full property table into a name -> row map,
+    // so a test can look up "does this property exist and does it have
+    // this value" without hard-coding property order.
+    std::map<std::string, LeProperty> object_properties(LeHandle *handle, LeObjectRef ref)
     {
         std::map<std::string, LeProperty> properties;
-        const int32_t count = le_selected_object_property_count(handle, selection_index);
+        const int32_t count = le_object_property_count(handle, ref);
         for (int32_t i = 0; i < count; ++i)
         {
-            const LeProperty property = le_selected_object_property_at(handle, selection_index, i);
+            const LeProperty property = le_object_property_at(handle, ref, i);
             properties.emplace(property.name, property);
         }
         return properties;
     }
+
+    // Same, but starting from a selection index - the shape-level ref
+    // le_selected_object_ref() reports for it.
+    std::map<std::string, LeProperty> selected_object_properties(LeHandle *handle, int32_t selection_index)
+    {
+        return object_properties(handle, le_selected_object_ref(handle, selection_index));
+    }
 }
 
-TEST_F(ApiFixture, SelectedTerminalReportsItsKindNameDirectionAndPortCount)
+TEST_F(ApiFixture, ClickSelectingAShapeReportsExactlyTheSamePropertiesAsGetPropertiesOnItsShapeId)
 {
+    // The originally reported bug's own regression test: clicking a shape
+    // must report the *exact* same rows le_shape_property_at (TCL's
+    // get_properties shape:<id>) already shows for that same ShapeId -
+    // not a pipeline-merged/derived summary. Selection is shape-granular
+    // (le_selected_object_ref always reports LE_OBJECT_KIND_SHAPE), so
+    // this compares le_object_property_at's LE_OBJECT_KIND_SHAPE branch
+    // directly against le_shape_property_at for the identical id.
     load_pin_and_obstruction_at_known_scale(handle);
 
     le_mouse_down(handle, 25, 175); // PIN A
     le_mouse_up(handle, 25, 175);
     ASSERT_EQ(le_selection_count(handle), 1);
 
-    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    const LeObjectRef ref = le_selected_object_ref(handle, 0);
+    EXPECT_EQ(ref.kind, LE_OBJECT_KIND_SHAPE);
+    ASSERT_NE(ref.index, UINT32_MAX);
 
-    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("name"));
-    EXPECT_EQ(properties.at("name").type, LE_PROPERTY_TYPE_STRING);
-    EXPECT_STREQ(properties.at("name").string_value, "A");
+    const LeShapeId shape_id{.index = ref.index, .generation = ref.generation};
+    const int32_t via_selection_count = le_object_property_count(handle, ref);
+    const int32_t via_shape_id_count = le_shape_property_count(handle, shape_id);
+    ASSERT_EQ(via_selection_count, via_shape_id_count);
 
-    ASSERT_TRUE(properties.contains("direction"));
-    EXPECT_EQ(properties.at("direction").type, LE_PROPERTY_TYPE_STRING);
-    EXPECT_STREQ(properties.at("direction").string_value, "INPUT");
-
-    ASSERT_TRUE(properties.contains("port_count"));
-    EXPECT_EQ(properties.at("port_count").type, LE_PROPERTY_TYPE_INT);
-    EXPECT_EQ(properties.at("port_count").int_value, 1);
+    for (int32_t i = 0; i < via_selection_count; ++i)
+    {
+        const LeProperty via_selection = le_object_property_at(handle, ref, i);
+        const LeProperty via_shape_id = le_shape_property_at(handle, shape_id, i);
+        EXPECT_STREQ(via_selection.name, via_shape_id.name);
+        EXPECT_EQ(via_selection.type, via_shape_id.type);
+        switch (via_selection.type)
+        {
+        case LE_PROPERTY_TYPE_STRING:
+            EXPECT_STREQ(via_selection.string_value, via_shape_id.string_value);
+            break;
+        case LE_PROPERTY_TYPE_INT:
+            EXPECT_EQ(via_selection.int_value, via_shape_id.int_value);
+            break;
+        case LE_PROPERTY_TYPE_DOUBLE:
+            EXPECT_DOUBLE_EQ(via_selection.double_value, via_shape_id.double_value);
+            break;
+        }
+    }
 }
 
-TEST_F(ApiFixture, SelectedTerminalReportsItsBoundingBoxConvertedToMicrons)
+TEST_F(ApiFixture, SelectedShapesParentChainReportsTerminalPortThenTerminal)
+{
+    // Selection reports the exact Shape hit (see the regression test
+    // above) - a Property Viewer walks *up* from there via le_object_parent
+    // to reach the owning TerminalPort/Terminal's own name/direction/
+    // port_count, rather than those rows being folded into the Shape's
+    // own property list the way the old selection-index path used to.
+    load_pin_and_obstruction_at_known_scale(handle);
+
+    le_mouse_down(handle, 25, 175); // PIN A
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    const LeObjectRef shape_ref = le_selected_object_ref(handle, 0);
+    ASSERT_EQ(shape_ref.kind, LE_OBJECT_KIND_SHAPE);
+
+    const LeObjectRef port_ref = le_object_parent(handle, shape_ref);
+    EXPECT_EQ(port_ref.kind, LE_OBJECT_KIND_TERMINAL_PORT);
+    ASSERT_NE(port_ref.index, UINT32_MAX);
+
+    const LeObjectRef terminal_ref = le_object_parent(handle, port_ref);
+    EXPECT_EQ(terminal_ref.kind, LE_OBJECT_KIND_TERMINAL);
+    ASSERT_NE(terminal_ref.index, UINT32_MAX);
+
+    const std::map<std::string, LeProperty> terminal_properties = object_properties(handle, terminal_ref);
+    ASSERT_TRUE(terminal_properties.contains("name"));
+    EXPECT_STREQ(terminal_properties.at("name").string_value, "A");
+    ASSERT_TRUE(terminal_properties.contains("direction"));
+    EXPECT_STREQ(terminal_properties.at("direction").string_value, "INPUT");
+    ASSERT_TRUE(terminal_properties.contains("port_count"));
+    EXPECT_EQ(terminal_properties.at("port_count").int_value, 1);
+
+    // Library has no parent - the chain terminates gracefully.
+    const LeObjectRef abstract_ref = le_object_parent(handle, terminal_ref);
+    EXPECT_EQ(abstract_ref.kind, LE_OBJECT_KIND_ABSTRACT);
+    const LeObjectRef design_ref = le_object_parent(handle, abstract_ref);
+    EXPECT_EQ(design_ref.kind, LE_OBJECT_KIND_DESIGN);
+    const LeObjectRef library_ref = le_object_parent(handle, design_ref);
+    EXPECT_EQ(library_ref.kind, LE_OBJECT_KIND_LIBRARY);
+    const LeObjectRef no_parent = le_object_parent(handle, library_ref);
+    EXPECT_EQ(no_parent.index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, SelectedTerminalReportsItsRectConvertedToMicrons)
 {
     load_pin_and_obstruction_at_known_scale(handle);
 
@@ -2342,12 +2413,16 @@ TEST_F(ApiFixture, SelectedTerminalReportsItsBoundingBoxConvertedToMicrons)
     ASSERT_EQ(le_selection_count(handle), 1);
 
     const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_EQ(properties.at("bbox_um").type, LE_PROPERTY_TYPE_STRING);
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "1 1 4 4");
+    ASSERT_TRUE(properties.contains("rects"));
+    EXPECT_EQ(properties.at("rects").type, LE_PROPERTY_TYPE_STRING);
+    EXPECT_STREQ(properties.at("rects").string_value, "{{1 1} {4 4}}");
+    ASSERT_TRUE(properties.contains("polygons"));
+    EXPECT_STREQ(properties.at("polygons").string_value, "");
+    ASSERT_TRUE(properties.contains("paths"));
+    EXPECT_STREQ(properties.at("paths").string_value, "");
 }
 
-TEST_F(ApiFixture, SelectedTerminalBoundingBoxTrimsTrailingZerosInWholeGroupsOfThree)
+TEST_F(ApiFixture, SelectedTerminalRectTrimsTrailingZerosInWholeGroupsOfThree)
 {
     // MACRO FRACPIN's PIN A is a RECT at (0.34,0.34)-(5.34,5.34) micron
     // (see fractional_pin.lef) - std::to_string would format each as 6
@@ -2365,14 +2440,14 @@ TEST_F(ApiFixture, SelectedTerminalBoundingBoxTrimsTrailingZerosInWholeGroupsOfT
     ASSERT_EQ(le_selection_count(handle), 1);
 
     const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "0.340 0.340 5.340 5.340");
+    ASSERT_TRUE(properties.contains("rects"));
+    EXPECT_STREQ(properties.at("rects").string_value, "{{0.340 0.340} {5.340 5.340}}");
 }
 
-TEST_F(ApiFixture, SelectedTerminalBoundingBoxKeepsFullPrecisionWhenNotAMultipleOfAThousand)
+TEST_F(ApiFixture, SelectedTerminalRectKeepsFullPrecisionWhenNotAMultipleOfAThousand)
 {
     // format_coordinate_um's "leave the value untouched" branch, otherwise
-    // untested - every other bbox_um test uses DATABASE MICRONS 1000,
+    // untested - every other rects test uses DATABASE MICRONS 1000,
     // where um = dbu/1000 is always exactly 3-decimal-precise, so the
     // first trailing-zero-group check always succeeds there. This
     // fixture uses DATABASE MICRONS 2000 (full_precision_pin.lef) with a
@@ -2389,11 +2464,11 @@ TEST_F(ApiFixture, SelectedTerminalBoundingBoxKeepsFullPrecisionWhenNotAMultiple
     ASSERT_EQ(le_selection_count(handle), 1);
 
     const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "0.000500 0.000500 5.000500 5.000500");
+    ASSERT_TRUE(properties.contains("rects"));
+    EXPECT_STREQ(properties.at("rects").string_value, "{{0.000500 0.000500} {5.000500 5.000500}}");
 }
 
-TEST_F(ApiFixture, SelectedObstructionReportsItsKindShapesCountAndBoundingBox)
+TEST_F(ApiFixture, SelectedObstructionPieceReportsItsRectThenParentReportsShapesCount)
 {
     load_pin_and_obstruction_at_known_scale(handle);
 
@@ -2401,18 +2476,22 @@ TEST_F(ApiFixture, SelectedObstructionReportsItsKindShapesCountAndBoundingBox)
     le_mouse_up(handle, 125, 75);
     ASSERT_EQ(le_selection_count(handle), 1);
 
-    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_OBSTRUCTION);
+    const LeObjectRef shape_ref = le_selected_object_ref(handle, 0);
+    EXPECT_EQ(shape_ref.kind, LE_OBJECT_KIND_SHAPE);
 
-    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("shapes_count"));
-    EXPECT_EQ(properties.at("shapes_count").type, LE_PROPERTY_TYPE_INT);
-    EXPECT_EQ(properties.at("shapes_count").int_value, 1);
+    const std::map<std::string, LeProperty> shape_properties = object_properties(handle, shape_ref);
+    ASSERT_TRUE(shape_properties.contains("rects"));
+    EXPECT_STREQ(shape_properties.at("rects").string_value, "{{10 10} {15 15}}");
+    // Terminal/Obstruction-level property, should not leak onto a Shape's table.
+    EXPECT_FALSE(shape_properties.contains("name"));
+    EXPECT_FALSE(shape_properties.contains("shapes_count"));
 
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "10 10 15 15");
-
-    // Terminal-only property, should not leak onto an Obstruction's table.
-    EXPECT_FALSE(properties.contains("name"));
+    const LeObjectRef obstruction_ref = le_object_parent(handle, shape_ref);
+    EXPECT_EQ(obstruction_ref.kind, LE_OBJECT_KIND_OBSTRUCTION);
+    const std::map<std::string, LeProperty> obstruction_properties = object_properties(handle, obstruction_ref);
+    ASSERT_TRUE(obstruction_properties.contains("shapes_count"));
+    EXPECT_EQ(obstruction_properties.at("shapes_count").type, LE_PROPERTY_TYPE_INT);
+    EXPECT_EQ(obstruction_properties.at("shapes_count").int_value, 1);
 }
 
 TEST_F(ApiFixture, SelectedObjectPropertiesDistinguishTwoSelectedObjectsByIndex)
@@ -2426,47 +2505,57 @@ TEST_F(ApiFixture, SelectedObjectPropertiesDistinguishTwoSelectedObjectsByIndex)
     le_mouse_up(handle, 125, 75);
     ASSERT_EQ(le_selection_count(handle), 2);
 
-    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
-    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_OBSTRUCTION);
+    // Both selections are shape-level (LE_OBJECT_KIND_SHAPE) - "distinguish
+    // by index" now means each index's own Shape properties (own rect),
+    // with name/shapes_count reachable one hop up via le_object_parent.
+    const LeObjectRef first_ref = le_selected_object_ref(handle, 0);
+    const LeObjectRef second_ref = le_selected_object_ref(handle, 1);
+    EXPECT_EQ(first_ref.kind, LE_OBJECT_KIND_SHAPE);
+    EXPECT_EQ(second_ref.kind, LE_OBJECT_KIND_SHAPE);
 
-    const std::map<std::string, LeProperty> terminal_properties = selected_object_properties(handle, 0);
+    const LeObjectRef terminal_ref = le_object_parent(handle, le_object_parent(handle, first_ref));
+    EXPECT_EQ(terminal_ref.kind, LE_OBJECT_KIND_TERMINAL);
+    const std::map<std::string, LeProperty> terminal_properties = object_properties(handle, terminal_ref);
     EXPECT_STREQ(terminal_properties.at("name").string_value, "A");
 
-    const std::map<std::string, LeProperty> obstruction_properties = selected_object_properties(handle, 1);
+    const LeObjectRef obstruction_ref = le_object_parent(handle, second_ref);
+    EXPECT_EQ(obstruction_ref.kind, LE_OBJECT_KIND_OBSTRUCTION);
+    const std::map<std::string, LeProperty> obstruction_properties = object_properties(handle, obstruction_ref);
     EXPECT_EQ(obstruction_properties.at("shapes_count").int_value, 1);
 }
 
-TEST_F(ApiFixture, SelectedObjectKindAndPropertiesAreOutOfRangeSafe)
+TEST_F(ApiFixture, SelectedObjectRefAndPropertiesAreOutOfRangeSafe)
 {
     load_pin_and_obstruction_at_known_scale(handle);
 
-    EXPECT_EQ(le_selected_object_kind(handle, 0), -1); // nothing selected
-    EXPECT_EQ(le_selected_object_property_count(handle, 0), 0);
+    EXPECT_EQ(le_selected_object_ref(handle, 0).index, UINT32_MAX); // nothing selected
+    EXPECT_EQ(le_object_property_count(handle, le_object_invalid_ref()), 0);
 
-    const LeProperty invalid = le_selected_object_property_at(handle, 0, 0);
+    const LeProperty invalid = le_object_property_at(handle, le_object_invalid_ref(), 0);
     EXPECT_EQ(invalid.name, nullptr);
 
     le_mouse_down(handle, 25, 175); // select PIN A
     le_mouse_up(handle, 25, 175);
     ASSERT_EQ(le_selection_count(handle), 1);
 
-    EXPECT_EQ(le_selected_object_kind(handle, 1), -1); // out of range
-    EXPECT_EQ(le_selected_object_kind(handle, -1), -1);
-    EXPECT_EQ(le_selected_object_property_count(handle, 1), 0);
+    EXPECT_EQ(le_selected_object_ref(handle, 1).index, UINT32_MAX);  // out of range
+    EXPECT_EQ(le_selected_object_ref(handle, -1).index, UINT32_MAX);
 
-    const LeProperty out_of_range_property = le_selected_object_property_at(handle, 0, 9999);
+    const LeObjectRef ref = le_selected_object_ref(handle, 0);
+    const LeProperty out_of_range_property = le_object_property_at(handle, ref, 9999);
     EXPECT_EQ(out_of_range_property.name, nullptr);
 }
 
-TEST_F(ApiFixture, SelectedObjectKindAndPropertiesWithNullHandleDoNotCrash)
+TEST_F(ApiFixture, SelectedObjectRefAndPropertiesWithNullHandleDoNotCrash)
 {
-    EXPECT_EQ(le_selected_object_kind(nullptr, 0), -1);
-    EXPECT_EQ(le_selected_object_property_count(nullptr, 0), 0);
-    const LeProperty property = le_selected_object_property_at(nullptr, 0, 0);
+    EXPECT_EQ(le_selected_object_ref(nullptr, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_object_property_count(nullptr, le_object_invalid_ref()), 0);
+    const LeProperty property = le_object_property_at(nullptr, le_object_invalid_ref(), 0);
     EXPECT_EQ(property.name, nullptr);
+    EXPECT_EQ(le_object_parent(nullptr, le_object_invalid_ref()).index, UINT32_MAX);
 }
 
-TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsBboxAndLayer)
+TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsRectAndLayer)
 {
     // PIN B has two ports on M1 - (16,1)-(19,4) and (16,16)-(19,19)
     // micron (see pin_and_obstruction.lef) - device (10px/micron,
@@ -2478,20 +2567,25 @@ TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsBb
     le_mouse_down(handle, 175, 175); // PIN B's first port only
     le_mouse_up(handle, 175, 175);
     ASSERT_EQ(le_selection_count(handle), 1);
-    ASSERT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
+    const LeObjectRef shape_ref = le_selected_object_ref(handle, 0);
+    ASSERT_EQ(shape_ref.kind, LE_OBJECT_KIND_SHAPE);
 
-    const std::map<std::string, LeProperty> properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(properties.contains("bbox_um"));
-    EXPECT_STREQ(properties.at("bbox_um").string_value, "16 1 19 4"); // just the clicked port, not the union of both
+    const std::map<std::string, LeProperty> properties = object_properties(handle, shape_ref);
+    ASSERT_TRUE(properties.contains("rects"));
+    EXPECT_STREQ(properties.at("rects").string_value, "{{16 1} {19 4}}"); // just the clicked port, not the union of both
 
     ASSERT_TRUE(properties.contains("layer_name"));
     EXPECT_STREQ(properties.at("layer_name").string_value, "M1");
 
-    // Parent-level context is still present alongside the piece-scoped rows.
-    ASSERT_TRUE(properties.contains("name"));
-    EXPECT_STREQ(properties.at("name").string_value, "B");
-    ASSERT_TRUE(properties.contains("port_count"));
-    EXPECT_EQ(properties.at("port_count").int_value, 2);
+    // Parent-level context (Terminal's own name/port_count) is one hop up
+    // via le_object_parent, not folded into the Shape's own row list.
+    const LeObjectRef terminal_ref = le_object_parent(handle, le_object_parent(handle, shape_ref));
+    ASSERT_EQ(terminal_ref.kind, LE_OBJECT_KIND_TERMINAL);
+    const std::map<std::string, LeProperty> terminal_properties = object_properties(handle, terminal_ref);
+    ASSERT_TRUE(terminal_properties.contains("name"));
+    EXPECT_STREQ(terminal_properties.at("name").string_value, "B");
+    ASSERT_TRUE(terminal_properties.contains("port_count"));
+    EXPECT_EQ(terminal_properties.at("port_count").int_value, 2);
 }
 
 TEST_F(ApiFixture, DragSelectingATwoPortTerminalSelectsBothPortsIndependently)
@@ -2510,23 +2604,23 @@ TEST_F(ApiFixture, DragSelectingATwoPortTerminalSelectsBothPortsIndependently)
     le_mouse_down(handle, 150, 0);
     le_mouse_up(handle, 200, 200);
     ASSERT_EQ(le_selection_count(handle), 2);
-    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
-    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_TERMINAL);
+    EXPECT_EQ(le_selected_object_ref(handle, 0).kind, LE_OBJECT_KIND_SHAPE);
+    EXPECT_EQ(le_selected_object_ref(handle, 1).kind, LE_OBJECT_KIND_SHAPE);
 
     const std::map<std::string, LeProperty> first_properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(first_properties.contains("bbox_um"));
+    ASSERT_TRUE(first_properties.contains("rects"));
     ASSERT_TRUE(first_properties.contains("layer_name"));
-    const std::string first_bbox = first_properties.at("bbox_um").string_value;
+    const std::string first_rects = first_properties.at("rects").string_value;
     const std::string first_layer = first_properties.at("layer_name").string_value;
 
     const std::map<std::string, LeProperty> second_properties = selected_object_properties(handle, 1);
-    ASSERT_TRUE(second_properties.contains("bbox_um"));
+    ASSERT_TRUE(second_properties.contains("rects"));
     ASSERT_TRUE(second_properties.contains("layer_name"));
-    const std::string second_bbox = second_properties.at("bbox_um").string_value;
+    const std::string second_rects = second_properties.at("rects").string_value;
 
-    EXPECT_NE(first_bbox, second_bbox); // each port's own bbox, not the aggregate
-    EXPECT_EQ(first_bbox, "16 1 19 4");
-    EXPECT_EQ(second_bbox, "16 16 19 19");
+    EXPECT_NE(first_rects, second_rects); // each port's own rect, not the aggregate
+    EXPECT_EQ(first_rects, "{{16 1} {19 4}}");
+    EXPECT_EQ(second_rects, "{{16 16} {19 19}}");
     EXPECT_EQ(first_layer, "M1"); // a piece-level selection always reports its own layer_name
 }
 
@@ -2547,26 +2641,25 @@ TEST_F(ApiFixture, ShiftClickingTwoPiecesOfTheSameTerminalSelectsBothIndependent
     le_key_up(handle, LE_KEY_SHIFT);
     ASSERT_EQ(le_selection_count(handle), 2); // both pieces, not one
 
-    EXPECT_EQ(le_selected_object_kind(handle, 0), LE_SELECTION_KIND_TERMINAL);
-    EXPECT_EQ(le_selected_object_kind(handle, 1), LE_SELECTION_KIND_TERMINAL);
+    EXPECT_EQ(le_selected_object_ref(handle, 0).kind, LE_OBJECT_KIND_SHAPE);
+    EXPECT_EQ(le_selected_object_ref(handle, 1).kind, LE_OBJECT_KIND_SHAPE);
 
-    // Copy each bbox_um value out as its own std::string immediately -
+    // Copy each rects value out as its own std::string immediately -
     // LeProperty::string_value is only valid until the next
-    // le_selected_object_property_at()/_count() call *for the same
-    // selection_index* (see its doc comment); querying a different
-    // index (as `second`'s query below does) invalidates `first`'s
-    // pointers.
+    // le_object_property_at()/_count() call *for the same ref* (see its
+    // doc comment); querying a different index (as `second`'s query
+    // below does) invalidates `first`'s pointers.
     const std::map<std::string, LeProperty> first_properties = selected_object_properties(handle, 0);
-    ASSERT_TRUE(first_properties.contains("bbox_um"));
-    const std::string first_bbox = first_properties.at("bbox_um").string_value;
+    ASSERT_TRUE(first_properties.contains("rects"));
+    const std::string first_rects = first_properties.at("rects").string_value;
 
     const std::map<std::string, LeProperty> second_properties = selected_object_properties(handle, 1);
-    ASSERT_TRUE(second_properties.contains("bbox_um"));
-    const std::string second_bbox = second_properties.at("bbox_um").string_value;
+    ASSERT_TRUE(second_properties.contains("rects"));
+    const std::string second_rects = second_properties.at("rects").string_value;
 
-    EXPECT_NE(first_bbox, second_bbox); // genuinely distinct pieces
-    EXPECT_EQ(first_bbox, "16 1 19 4");
-    EXPECT_EQ(second_bbox, "16 16 19 19");
+    EXPECT_NE(first_rects, second_rects); // genuinely distinct pieces
+    EXPECT_EQ(first_rects, "{{16 1} {19 4}}");
+    EXPECT_EQ(second_rects, "{{16 16} {19 19}}");
 }
 
 TEST_F(ApiFixture, ConcurrentRenderAndMousePositionCallsOnTheSameHandleDoNotCrash)

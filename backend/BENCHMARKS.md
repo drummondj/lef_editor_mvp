@@ -901,3 +901,34 @@ does 3 extra cheap (already-cached, O(1) tuple-compare) calls it didn't do
 before - `BM_RenderReused_NoChange` and
 `BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly` are exactly the
 benchmarks that would show this, and both stayed flat.
+
+## 2026-08-14 — Shape-level selection (Property Viewer database-hierarchy redesign)
+
+`Scene::SelectedObject` simplified from `{SelectionRef origin;
+std::optional<Shape> piece;}` (dedup via `piece_signature`/`same_piece`, a
+geometry-hash-bucketed comparison - see the 2026-08-07 entry above) to a
+bare `{ShapeId shape_id;}`, dedup via a plain `std::unordered_set<ShapeId>`
+- selection identity is now just "which ShapeId", no geometry comparison
+at all. Release build, `--benchmark_repetitions=3
+--benchmark_report_aggregates_only=true`, same 1M-shape stress design:
+
+| N pieces | Before (geometry-hash bucket, 2026-08-07) | After (plain ShapeId set) |
+| -------- | ------------------------------------------ | -------------------------- |
+| 1,000    | 0.073 ms                                    | 0.027 ms                   |
+| 5,000    | 0.413 ms                                    | 0.147 ms                   |
+| 20,000   | 1.71 ms                                     | 0.703 ms                   |
+
+~2.4-2.8x faster, as expected - a plain hash-set insert has no geometry to
+hash or compare against a bucket. `BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly`
+(0/100/1k/5k/20k selected) measured flat at 4.21/4.22/4.23/4.27/4.39 ms
+this run (absolute level shifted vs. the 3.2-3.5 ms in the 2026-08 table
+above, attributed to machine load at measurement time, not a regression -
+same machine/design either way; what matters, and held, is that it stays
+flat across selection size, unchanged from before). `BM_BuildSelectionOverlayPicture_ManySelectedPieces`
+(100/1k/5k/20k selected, no prior baseline recorded) measured 0.84/1.75/5.34/20.1 ms -
+this stage now looks up each selected `ShapeId`'s geometry from the
+Pipeline's own generated `shapes` map (a `ShapeId -> RenderedShape*` hash
+map built once per recompute) instead of reading a `Shape` copy stored
+directly on `Scene`; not compared against a "before" number since the
+lookup structure itself is new, but scales linearly with selection size
+as expected, no quadratic behavior reintroduced.

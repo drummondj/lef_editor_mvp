@@ -30,17 +30,17 @@ TEST(Scene, CurrentAbstractRoundTrips)
 
 TEST(Scene, SwitchingToADifferentAbstractClearsSelectionAndHover)
 {
-    // Regression: TerminalId/ObstructionId are plain {index,generation}
-    // pool handles, not namespaced by Abstract - a selection/hover left
-    // over from the old Abstract could otherwise reference nothing (best
-    // case) or an unrelated object that happens to reuse the same pool
-    // slot in the new Abstract (worst case).
+    // Regression: TerminalId/ObstructionId/ShapeId are plain
+    // {index,generation} pool handles, not namespaced by Abstract - a
+    // selection/hover left over from the old Abstract could otherwise
+    // reference nothing (best case) or an unrelated object that happens
+    // to reuse the same pool slot in the new Abstract (worst case).
     Scene scene;
     scene.set_current_abstract(AbstractId{1, 0});
 
     Shape outline;
     outline.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    scene.select(TerminalId{1, 0});
+    scene.select(ShapeId{1, 0});
     scene.set_hover(HoverTarget{.origin = TerminalId{1, 0}, .outline = outline});
     ASSERT_FALSE(scene.selection().empty());
     ASSERT_TRUE(scene.hover().has_value());
@@ -81,7 +81,7 @@ TEST(Scene, SwitchingToADifferentAbstractBumpsSelectionVersionOnlyIfSelectionWas
     scene.set_current_abstract(AbstractId{2, 0});
     EXPECT_EQ(scene.selection_version(), 0u);
 
-    scene.select(TerminalId{1, 0});
+    scene.select(ShapeId{1, 0});
     ASSERT_EQ(scene.selection_version(), 1u);
 
     scene.set_current_abstract(AbstractId{3, 0});
@@ -92,7 +92,7 @@ TEST(Scene, SettingTheSameCurrentAbstractAgainIsANoOp)
 {
     Scene scene;
     scene.set_current_abstract(AbstractId{1, 0});
-    scene.select(TerminalId{1, 0});
+    scene.select(ShapeId{1, 0});
     ASSERT_EQ(scene.selection_version(), 1u);
 
     scene.set_current_abstract(AbstractId{1, 0}); // same Abstract already displayed
@@ -100,214 +100,88 @@ TEST(Scene, SettingTheSameCurrentAbstractAgainIsANoOp)
     EXPECT_EQ(scene.selection_version(), 1u);
 }
 
-TEST(Scene, SelectWithNoPieceLeavesPieceUnset)
+TEST(Scene, SelectRecordsTheShapeId)
 {
     Scene scene;
-    scene.select(TerminalId{1, 0});
+    scene.select(ShapeId{1, 0});
 
-    EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
+    EXPECT_TRUE(scene.is_selected(ShapeId{1, 0}));
     ASSERT_FALSE(scene.selection().empty());
-    EXPECT_FALSE(scene.selection().front().piece.has_value());
+    EXPECT_EQ(scene.selection().front().shape_id, (ShapeId{1, 0}));
 }
 
-TEST(Scene, SelectWithAPieceRecordsThatPiece)
+TEST(Scene, SelectingADifferentShapeAddsASecondEntry)
 {
+    // The actual reported bug's own regression test: shift-clicking a
+    // second shape must add a second selection entry - both shapes end
+    // up independently selected/highlighted/reportable - not replace the
+    // first one or no-op against it.
     Scene scene;
-    Shape piece;
-    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    scene.select(TerminalId{1, 0}, piece);
-
-    EXPECT_TRUE(scene.is_selected(TerminalId{1, 0}));
-    ASSERT_FALSE(scene.selection().empty());
-    ASSERT_TRUE(scene.selection().front().piece.has_value());
-    EXPECT_EQ(to_string(*scene.selection().front().piece), to_string(piece));
-}
-
-TEST(Scene, SelectingADifferentPieceOfAnAlreadySelectedOriginAddsASecondEntry)
-{
-    // The actual reported bug: shift-clicking a second shape within the
-    // same Terminal/Obstruction must add a second selection entry - both
-    // pieces end up independently selected/highlighted/reportable - not
-    // replace the first one or no-op against it.
-    Scene scene;
-    Shape piece_a;
-    piece_a.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    Shape piece_b;
-    piece_b.rects.push_back(Rect{.ll = {20, 20}, .ur = {30, 30}});
-
-    scene.select(TerminalId{1, 0}, piece_a);
+    scene.select(ShapeId{1, 0});
     ASSERT_EQ(scene.selection_version(), 1u);
     ASSERT_EQ(scene.selection().size(), 1u);
 
-    scene.select(TerminalId{1, 0}, piece_b); // shift-clicking a different piece of the same Terminal
+    scene.select(ShapeId{2, 0}); // shift-clicking a different shape
     EXPECT_EQ(scene.selection_version(), 2u);
-    ASSERT_EQ(scene.selection().size(), 2u); // both pieces are now separately selected
+    ASSERT_EQ(scene.selection().size(), 2u); // both shapes are now separately selected
 
-    ASSERT_TRUE(scene.selection()[0].piece.has_value());
-    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(piece_a));
-    ASSERT_TRUE(scene.selection()[1].piece.has_value());
-    EXPECT_EQ(to_string(*scene.selection()[1].piece), to_string(piece_b));
+    EXPECT_EQ(scene.selection()[0].shape_id, (ShapeId{1, 0}));
+    EXPECT_EQ(scene.selection()[1].shape_id, (ShapeId{2, 0}));
 }
 
-TEST(Scene, ReselectingTheExactSamePieceOfTheSameOriginIsANoOp)
+TEST(Scene, ReselectingTheSameShapeIsANoOp)
 {
     Scene scene;
-    Shape piece;
-    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-
-    scene.select(TerminalId{1, 0}, piece);
+    scene.select(ShapeId{1, 0});
     ASSERT_EQ(scene.selection_version(), 1u);
 
-    scene.select(TerminalId{1, 0}, piece); // identical geometry, not a new piece
+    scene.select(ShapeId{1, 0});
     EXPECT_EQ(scene.selection_version(), 1u);
     EXPECT_EQ(scene.selection().size(), 1u);
 }
 
-TEST(Scene, SamePieceDedupDistinguishesDifferentPolygonPiecesAndNoOpsOnIdenticalOnes)
+TEST(Scene, SelectDedupsCorrectlyAcrossManyDistinctShapes)
 {
-    // Scene::same_piece's polygon branch, otherwise untested - every other
-    // piece-selection test here uses a rect-only piece.
+    // Regression/refactor-safety test for select()'s O(1)-average dedup
+    // (selected_ids_, a plain unordered_set<ShapeId>) - this matters
+    // because le_mouse_up's drag-select branch (api.cpp) calls select()
+    // once per enclosed piece, and a real design can put hundreds of
+    // thousands of pieces under one shared Obstruction's OBS block (see
+    // BENCHMARKS.md). Mixes distinct new ids with re-selecting already-
+    // selected ones (in original and reverse order) and checks the exact
+    // resulting count/version.
     Scene scene;
-    Shape polygon_a;
-    polygon_a.polygons.push_back(Polygon{.points = {Point{0, 0}, Point{10, 0}, Point{5, 10}}});
-    Shape polygon_b;
-    polygon_b.polygons.push_back(Polygon{.points = {Point{20, 20}, Point{30, 20}, Point{25, 30}}});
 
-    scene.select(TerminalId{1, 0}, polygon_a);
-    ASSERT_EQ(scene.selection().size(), 1u);
+    std::vector<ShapeId> ids;
+    for (uint32_t i = 0; i < 20; ++i)
+        ids.push_back(ShapeId{i, 0});
 
-    scene.select(TerminalId{1, 0}, polygon_a); // identical polygon - no-op
-    EXPECT_EQ(scene.selection().size(), 1u);
-
-    scene.select(TerminalId{1, 0}, polygon_b); // different polygon - adds a second entry
-    ASSERT_EQ(scene.selection().size(), 2u);
-    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(polygon_a));
-    EXPECT_EQ(to_string(*scene.selection()[1].piece), to_string(polygon_b));
-}
-
-TEST(Scene, SamePieceDedupDistinguishesDifferentPathPiecesAndNoOpsOnIdenticalOnes)
-{
-    // Scene::same_piece's path branch (width + polygon), otherwise
-    // untested - every other piece-selection test here uses a rect-only
-    // piece.
-    Scene scene;
-    Shape path_a;
-    path_a.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{10, 0}}}, .width = 2});
-    Shape path_b_different_polygon;
-    path_b_different_polygon.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{0, 10}}}, .width = 2});
-    Shape path_c_different_width_only;
-    path_c_different_width_only.paths.push_back(Path{.polygon = Polygon{.points = {Point{0, 0}, Point{10, 0}}}, .width = 4});
-
-    scene.select(TerminalId{1, 0}, path_a);
-    ASSERT_EQ(scene.selection().size(), 1u);
-
-    scene.select(TerminalId{1, 0}, path_a); // identical path - no-op
-    EXPECT_EQ(scene.selection().size(), 1u);
-
-    scene.select(TerminalId{1, 0}, path_b_different_polygon); // different centerline - adds a second entry
-    ASSERT_EQ(scene.selection().size(), 2u);
-
-    scene.select(TerminalId{1, 0}, path_c_different_width_only); // same centerline, different width - adds a third entry
-    ASSERT_EQ(scene.selection().size(), 3u);
-}
-
-TEST(Scene, SelectDedupsCorrectlyAcrossManyDistinctPiecesSharingOneOrigin)
-{
-    // Regression/refactor-safety test for select()'s signature-bucketed
-    // dedup (piece_signature + selection_index_), which replaced a linear
-    // scan of the whole selection to fix an O(N^2) drag-select cost when
-    // many pieces share one origin (a real design shape: an Obstruction's
-    // whole OBS block is one ObstructionId, however many rects/polygons/
-    // paths it contains) - see BENCHMARKS.md. Mixes distinct new pieces
-    // with re-selecting already-selected ones (in original and reverse
-    // order, so a signature-bucket-position bug couldn't hide behind
-    // insertion order) and checks the exact resulting count/version,
-    // proving the bucketed lookup doesn't miss real duplicates or
-    // conflate distinct pieces that happen to land in the same bucket.
-    Scene scene;
-    const ObstructionId origin{1, 0};
-
-    std::vector<Shape> pieces;
-    for (int i = 0; i < 20; ++i)
-    {
-        Shape piece;
-        piece.layer_name = "M1";
-        piece.rects.push_back(Rect{.ll = {i * 10, 0}, .ur = {i * 10 + 5, 5}});
-        pieces.push_back(piece);
-    }
-
-    for (const Shape &piece : pieces)
-        scene.select(origin, piece);
+    for (const ShapeId &id : ids)
+        scene.select(id);
     ASSERT_EQ(scene.selection().size(), 20u);
     ASSERT_EQ(scene.selection_version(), 20u);
 
-    // Re-select every piece again, in reverse order - every one should be
-    // recognized as an existing duplicate (no-op), regardless of which
-    // bucket position it was originally inserted at.
-    for (auto it = pieces.rbegin(); it != pieces.rend(); ++it)
-        scene.select(origin, *it);
+    // Re-select every id again, in reverse order - every one should be
+    // recognized as an existing duplicate (no-op).
+    for (auto it = ids.rbegin(); it != ids.rend(); ++it)
+        scene.select(*it);
     EXPECT_EQ(scene.selection().size(), 20u);
     EXPECT_EQ(scene.selection_version(), 20u);
 
-    // One genuinely new piece still gets added correctly afterward.
-    Shape new_piece;
-    new_piece.layer_name = "M1";
-    new_piece.rects.push_back(Rect{.ll = {1000, 1000}, .ur = {1005, 1005}});
-    scene.select(origin, new_piece);
+    // One genuinely new id still gets added correctly afterward.
+    scene.select(ShapeId{1000, 0});
     EXPECT_EQ(scene.selection().size(), 21u);
     EXPECT_EQ(scene.selection_version(), 21u);
 }
 
-TEST(Scene, SelectingWithNoPieceAfterAPieceWasAlreadySelectedAddsAWholeObjectEntryWithoutDisturbingThePiece)
-{
-    // e.g. a shift-drag that happens to re-enclose an object a previous
-    // click already recorded a specific piece for - the drag path has no
-    // single piece to offer (Pipeline::hit_test_rect has no per-piece
-    // result). This adds a second, whole-object entry rather than
-    // erasing or being absorbed into the earlier click's piece entry -
-    // select()'s dedup only ever collapses two calls that agree on both
-    // origin *and* piece.
-    Scene scene;
-    Shape piece;
-    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-
-    scene.select(TerminalId{1, 0}, piece);
-    ASSERT_EQ(scene.selection().size(), 1u);
-
-    scene.select(TerminalId{1, 0}); // no piece - as le_mouse_up's drag branch calls it
-    EXPECT_EQ(scene.selection().size(), 2u);
-
-    ASSERT_TRUE(scene.selection()[0].piece.has_value()); // original piece entry untouched
-    EXPECT_EQ(to_string(*scene.selection()[0].piece), to_string(piece));
-    EXPECT_FALSE(scene.selection()[1].piece.has_value()); // new whole-object entry
-}
-
-TEST(Scene, SelectingWithNoPieceTwiceForTheSameOriginStaysOneEntry)
-{
-    // Mirrors Pipeline::hit_test_rect's own behavior - it can push the
-    // same origin more than once (once per fully-enclosed RenderedShape
-    // piece of a multi-port Terminal), and those must still collapse
-    // into a single whole-object selection entry, not one per push.
-    Scene scene;
-    scene.select(TerminalId{1, 0});
-    ASSERT_EQ(scene.selection().size(), 1u);
-    ASSERT_EQ(scene.selection_version(), 1u);
-
-    scene.select(TerminalId{1, 0});
-    EXPECT_EQ(scene.selection().size(), 1u);
-    EXPECT_EQ(scene.selection_version(), 1u);
-}
-
-TEST(Scene, DeselectRemovesAnEntryRegardlessOfWhetherItHasAPiece)
+TEST(Scene, DeselectRemovesAnEntry)
 {
     Scene scene;
-    Shape piece;
-    piece.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    scene.select(TerminalId{1, 0}, piece);
-    ASSERT_TRUE(scene.is_selected(TerminalId{1, 0}));
+    scene.select(ShapeId{1, 0});
+    ASSERT_TRUE(scene.is_selected(ShapeId{1, 0}));
 
-    scene.deselect(TerminalId{1, 0});
-    EXPECT_FALSE(scene.is_selected(TerminalId{1, 0}));
+    scene.deselect(ShapeId{1, 0});
+    EXPECT_FALSE(scene.is_selected(ShapeId{1, 0}));
     EXPECT_TRUE(scene.selection().empty());
 }
 
@@ -1199,22 +1073,22 @@ TEST(Scene, ClearRulersOnAnEmptyListIsANoOp)
 TEST(Scene, SelectDeselectAndClear)
 {
     Scene scene;
-    TerminalId terminal{1, 0};
-    ObstructionId obstruction{2, 0};
+    ShapeId first{1, 0};
+    ShapeId second{2, 0};
 
-    scene.select(terminal);
-    scene.select(obstruction);
-    EXPECT_TRUE(scene.is_selected(terminal));
-    EXPECT_TRUE(scene.is_selected(obstruction));
+    scene.select(first);
+    scene.select(second);
+    EXPECT_TRUE(scene.is_selected(first));
+    EXPECT_TRUE(scene.is_selected(second));
     EXPECT_EQ(scene.selection().size(), 2u);
 
-    // Selecting the same ref again must not duplicate it.
-    scene.select(terminal);
+    // Selecting the same id again must not duplicate it.
+    scene.select(first);
     EXPECT_EQ(scene.selection().size(), 2u);
 
-    scene.deselect(terminal);
-    EXPECT_FALSE(scene.is_selected(terminal));
-    EXPECT_TRUE(scene.is_selected(obstruction));
+    scene.deselect(first);
+    EXPECT_FALSE(scene.is_selected(first));
+    EXPECT_TRUE(scene.is_selected(second));
     EXPECT_EQ(scene.selection().size(), 1u);
 
     scene.clear_selection();
@@ -1278,58 +1152,45 @@ TEST(Scene, FitToContentWithDegenerateZeroWidthBboxDoesNotDivideByZero)
     EXPECT_DOUBLE_EQ(scene.scale(), 2.0); // 200 / 100
 }
 
-TEST(Scene, SelectionDistinguishesObjectKindsWithTheSameRawId)
-{
-    // TerminalId{5,0} and ObstructionId{5,0} share the same {index,
-    // generation}, but are different types - the variant must not confuse them.
-    Scene scene;
-    TerminalId terminal{5, 0};
-    ObstructionId obstruction{5, 0};
-
-    scene.select(terminal);
-    EXPECT_TRUE(scene.is_selected(terminal));
-    EXPECT_FALSE(scene.is_selected(obstruction));
-}
-
 TEST(Scene, SelectBumpsSelectionVersionOnlyOnAnActualChange)
 {
     Scene scene;
-    TerminalId terminal{5, 0};
+    ShapeId id{5, 0};
     EXPECT_EQ(scene.selection_version(), 0u);
 
-    scene.select(terminal);
+    scene.select(id);
     EXPECT_EQ(scene.selection_version(), 1u);
 
     // Already selected - a no-op, must not bump again.
-    scene.select(terminal);
+    scene.select(id);
     EXPECT_EQ(scene.selection_version(), 1u);
 }
 
 TEST(Scene, DeselectBumpsSelectionVersionOnlyOnAnActualChange)
 {
     Scene scene;
-    TerminalId terminal{5, 0};
-    scene.select(terminal);
+    ShapeId id{5, 0};
+    scene.select(id);
     ASSERT_EQ(scene.selection_version(), 1u);
 
-    scene.deselect(terminal);
-    EXPECT_FALSE(scene.is_selected(terminal));
+    scene.deselect(id);
+    EXPECT_FALSE(scene.is_selected(id));
     EXPECT_EQ(scene.selection_version(), 2u);
 
     // Already gone - a no-op, must not bump again.
-    scene.deselect(terminal);
+    scene.deselect(id);
     EXPECT_EQ(scene.selection_version(), 2u);
 }
 
 TEST(Scene, ClearSelectionBumpsSelectionVersionOnlyIfSelectionWasNonEmpty)
 {
     Scene scene;
-    TerminalId terminal{5, 0};
+    ShapeId id{5, 0};
 
     scene.clear_selection(); // already empty - a no-op
     EXPECT_EQ(scene.selection_version(), 0u);
 
-    scene.select(terminal);
+    scene.select(id);
     ASSERT_EQ(scene.selection_version(), 1u);
 
     scene.clear_selection();
@@ -1343,7 +1204,7 @@ TEST(Scene, SelectionChangesDoNotBumpViewportOrVisibilityVersion)
     const uint64_t viewport_version_before = scene.viewport_version();
     const uint64_t visibility_version_before = scene.visibility_version();
 
-    scene.select(TerminalId{5, 0});
+    scene.select(ShapeId{5, 0});
     scene.clear_selection();
 
     EXPECT_EQ(scene.viewport_version(), viewport_version_before);

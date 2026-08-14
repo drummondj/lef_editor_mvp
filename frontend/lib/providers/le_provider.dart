@@ -29,12 +29,6 @@ class LePurposeInfo {
   });
 }
 
-class LeSelectedObjectInfo {
-  LeSelectionKind kind;
-  List<LeSelectedProperty> properties;
-  LeSelectedObjectInfo({required this.kind, required this.properties});
-}
-
 class LeProvider extends ChangeNotifier {
   LeProvider() {
     _messageStream = _messageStreamController.stream;
@@ -89,8 +83,8 @@ class LeProvider extends ChangeNotifier {
   LeMode _mode = LeMode.LE_MODE_SELECT;
   LeMode get mode => _mode;
 
-  final List<LeSelectedObjectInfo> _selectedObjects = [];
-  List<LeSelectedObjectInfo> get selectedObjects => _selectedObjects;
+  final List<LeObjectRef> _selectedObjects = [];
+  List<LeObjectRef> get selectedObjects => _selectedObjects;
 
   // -1 so the first refreshSelection() call (selectionVersion is always
   // >= 0) always does a real refresh.
@@ -149,13 +143,16 @@ class LeProvider extends ChangeNotifier {
     _mode = _editor.mode;
   }
 
-  // Rebuilding _selectedObjects makes several FFI calls per selected
-  // object (selectedObjectKind + selectedObjectProperties, itself one
-  // call per property) - proportional to selection size, not free. Gated
-  // on selectionVersion (bumped only on an actual select/deselect/clear,
-  // not on every pointer event) so a mouse move that doesn't change the
-  // selection skips this entirely instead of paying that cost on every
-  // frame - see backend/BENCHMARKS.md for the measured cost this fixes.
+  // Rebuilds _selectedObjects as a flat list of refs only - one FFI call
+  // per selected object (selectedObjectRef), not one-plus-per-property the
+  // way this used to fan out: the Property Viewer now fetches a ref's
+  // properties itself, live, only for whichever ref it's currently
+  // showing (see property_viewer.dart), not eagerly for every selected
+  // object on every refresh. Gated on selectionVersion (bumped only on an
+  // actual select/deselect/clear, not on every pointer event) so a mouse
+  // move that doesn't change the selection skips this entirely instead of
+  // paying that cost on every frame - see backend/BENCHMARKS.md for the
+  // measured cost this fixes.
   Future<void> refreshSelection() async {
     final version = _editor.selectionVersion;
     if (version == _lastSelectionVersion) {
@@ -166,17 +163,25 @@ class LeProvider extends ChangeNotifier {
     _selectedCount = _editor.selectionCount;
     _selectedObjects.clear();
     for (int i = 0; i < _selectedCount; i++) {
-      final kind = _editor.selectedObjectKind(i);
-      if (kind != null) {
-        _selectedObjects.add(
-          LeSelectedObjectInfo(
-            kind: kind,
-            properties: _editor.selectedObjectProperties(i),
-          ),
-        );
-      }
+      _selectedObjects.add(_editor.selectedObjectRef(i));
     }
   }
+
+  // Read-only pass-throughs for the Property Viewer's database-hierarchy
+  // navigation (UPDATES.md 7.2) - deliberately *not* wrapped in
+  // refreshAndNotify()/notifyListeners() the way every mutating method on
+  // this provider is: navigating via a parent/child link must never
+  // affect canvas selection or trigger a provider-wide rebuild of
+  // anything besides the Property Viewer itself (see property_viewer.dart's
+  // own `_breadcrumb` state, which calls these directly via plain
+  // `setState`, not through this provider's notify cycle).
+  List<LeSelectedProperty> objectProperties(LeObjectRef ref) =>
+      _editor.objectProperties(ref);
+
+  LeObjectRef objectParent(LeObjectRef ref) => _editor.objectParent(ref);
+
+  List<LeObjectRef> objectChildren(LeObjectRef ref) =>
+      _editor.objectChildren(ref);
 
   // Pulls in any backend messages (LEF read errors/warnings/info - see
   // backend's le_message_count/le_message_at, UPDATES.md item 3) added

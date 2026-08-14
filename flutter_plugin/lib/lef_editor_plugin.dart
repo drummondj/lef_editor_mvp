@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:ffi/ffi.dart' as pkg_ffi;
 import 'package:flutter/services.dart';
 
-import 'lef_editor_plugin_bindings_generated.dart';
+import 'lef_editor_plugin_bindings_generated.dart' hide LeObjectRef;
+import 'lef_editor_plugin_bindings_generated.dart' as native
+    show LeObjectRef;
 
 /// Re-exported so callers of [LeEditor.keyDown]/[LeEditor.keyUp]/
 /// [LeEditor.isKeyHeld] can reference key codes (e.g.
@@ -14,10 +16,15 @@ import 'lef_editor_plugin_bindings_generated.dart';
 /// no need to wrap it in a hand-written type first.
 export 'lef_editor_plugin_bindings_generated.dart' show LeKeyCode;
 
-/// Re-exported for the same reason as [LeKeyCode] - see
-/// [LeEditor.selectedObjectKind]/[LeSelectedProperty.type].
+/// Re-exported for the same reason as [LeKeyCode] - see [LeObjectRef]/
+/// [LeSelectedProperty.type]. The raw generated `LeObjectRef` struct
+/// itself is deliberately *not* re-exported - [LeObjectRef] (this file's
+/// own wrapper class, same name) is the public type; the native struct
+/// only exists internally to cross the FFI boundary (see `_toNativeRef`/
+/// `_fromNativeRef`), same reasoning as `LeLibraryId`/`LeTerminalId`/etc.
+/// never being exposed directly either.
 export 'lef_editor_plugin_bindings_generated.dart'
-    show LeSelectionKind, LePropertyType;
+    show LeObjectKind, LePropertyType;
 
 /// Re-exported for the same reason as [LeKeyCode] - see [LeEditor.mode].
 export 'lef_editor_plugin_bindings_generated.dart' show LeMode;
@@ -116,6 +123,72 @@ class LeAbstractRef extends _LeRef {
   const LeAbstractRef(super.index, super.generation);
 }
 
+/// A stable identity for one database object of any of the seven
+/// [LeObjectKind] classes (Library/Design/Abstract/Terminal/TerminalPort/
+/// Obstruction/Shape) - the Dart-facing wrapper for api.hpp's
+/// `LeObjectRef`, deliberately one concrete class (not a `_LeRef` leaf
+/// per kind, unlike [LeLibraryRef]/[LeDesignRef]/[LeAbstractRef]): the
+/// whole point is generic dispatch across kinds, e.g.
+/// [LeEditor.objectPropertyCount]/[objectParent]/[objectChildren] work
+/// the same way regardless of which kind `ref` is. Used to let the
+/// Property Viewer walk the database hierarchy (Shape -> TerminalPort ->
+/// Terminal -> Abstract -> Design -> Library) generically. Carries no
+/// native pointer - safe to hold indefinitely - but only ever a value
+/// read from this API, never hand-built.
+class LeObjectRef {
+  const LeObjectRef({
+    required this.kind,
+    required this.index,
+    required this.generation,
+  });
+
+  final LeObjectKind kind;
+  final int index;
+  final int generation;
+
+  /// False for a ref that doesn't resolve to a real object - e.g.
+  /// [LeEditor.objectParent] on a Library (no parent), or an out-of-range
+  /// [LeEditor.selectedObjectRef] index (`index` is the database's own
+  /// sentinel, `Id<Tag>::valid()`'s complement).
+  bool get isValid => index != 0xFFFFFFFF;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LeObjectRef &&
+      other.kind == kind &&
+      other.index == index &&
+      other.generation == generation;
+
+  @override
+  int get hashCode => Object.hash(kind, index, generation);
+}
+
+/// Builds a native `LeObjectRef` struct value to pass by-value into an FFI
+/// call. Deliberately *not* [LeEditor.setCurrentDesignById]'s calloc-then-
+/// free-in-`finally` pattern: that one is safe only because the struct
+/// view is consumed synchronously, inline, inside the very call
+/// expression that also frees it - this helper instead *returns* the
+/// struct view to its caller, so freeing before returning would hand back
+/// a dangling reference. [ffi.Struct.create] allocates struct storage
+/// backed by a plain Dart-managed buffer instead of malloc'd native
+/// memory, with no manual free step at all - safe to return and use
+/// later, exactly this helper's shape.
+native.LeObjectRef _toNativeRef(LeObjectRef ref) {
+  final result = ffi.Struct.create<native.LeObjectRef>();
+  result.kind = ref.kind.value;
+  result.index = ref.index;
+  result.generation = ref.generation;
+  return result;
+}
+
+LeObjectRef _fromNativeRef(native.LeObjectRef ref) {
+  return LeObjectRef(
+    kind: LeObjectKind.fromValue(ref.kind),
+    index: ref.index,
+    generation: ref.generation,
+  );
+}
+
 /// One row of [LeEditor.library]: a Library's identity and name.
 class LeLibrary {
   const LeLibrary({required this.id, required this.name});
@@ -192,11 +265,11 @@ class LeSnappedMouse {
   final double yUm;
 }
 
-/// One name/value row of a selected object's property table (UPDATES.md
-/// 7.2) - see [LeEditor.selectedObjectProperties]. [value] is a `String`,
-/// `int`, or `double` matching [type] (LE_PROPERTY_TYPE_STRING/_INT/
-/// _DOUBLE respectively) - coordinates are always microns (double),
-/// converted from the database's own dbu by the backend.
+/// One name/value row of an [LeObjectRef]'s property table - see
+/// [LeEditor.objectProperties]. [value] is a `String`, `int`, or `double`
+/// matching [type] (LE_PROPERTY_TYPE_STRING/_INT/_DOUBLE respectively) -
+/// coordinates are always microns (double), converted from the
+/// database's own dbu by the backend.
 class LeSelectedProperty {
   const LeSelectedProperty({
     required this.name,
@@ -758,9 +831,9 @@ class LeEditor {
     return msgPtr.cast<pkg_ffi.Utf8>().toDartString();
   }
 
-  /// Number of currently selected objects. Indexes [selectedObjectKind]/
-  /// [selectedObjectProperties]' own `selectionIndex` parameter,
-  /// 0..this-1, in the same (insertion) order as the selection itself.
+  /// Number of currently selected objects. Indexes [selectedObjectRef]'s
+  /// own `selectionIndex` parameter, 0..this-1, in the same (insertion)
+  /// order as the selection itself.
   int get selectionCount {
     _checkNotDisposed();
     return _bindings.le_selection_count(_handle);
@@ -768,49 +841,49 @@ class LeEditor {
 
   /// Monotonic counter bumped only on an actual selection change (a
   /// select/deselect/clear that wasn't a no-op) - cheap to check on every
-  /// pointer event to decide whether [selectionCount]/[selectedObjectKind]/
-  /// [selectedObjectProperties] need re-fetching at all, instead of always
-  /// re-fetching them (a real, measured cost that scales with how many
-  /// objects are selected - see backend/BENCHMARKS.md).
+  /// pointer event to decide whether [selectionCount]/[selectedObjectRef]
+  /// need re-fetching at all, instead of always re-fetching them (a real,
+  /// measured cost that scales with how many objects are selected - see
+  /// backend/BENCHMARKS.md).
   int get selectionVersion {
     _checkNotDisposed();
     return _bindings.le_selection_version(_handle);
   }
 
-  /// Which database class the selected object at [selectionIndex] is, or
-  /// null if [selectionIndex] is out of range (0..[selectionCount] - 1).
-  LeSelectionKind? selectedObjectKind(int selectionIndex) {
+  /// The selected object at [selectionIndex] (0..[selectionCount] - 1),
+  /// as a generic ref usable with [objectPropertyCount]/[objectPropertyAt]/
+  /// [objectParent]/[objectChildren] - always `LE_OBJECT_KIND_SHAPE`
+  /// (selection is shape-granular, see backend/src/scene/scene.hpp's own
+  /// comment on why). An invalid ref ([LeObjectRef.isValid] false) if
+  /// [selectionIndex] is out of range.
+  LeObjectRef selectedObjectRef(int selectionIndex) {
     _checkNotDisposed();
-    final kind = _bindings.le_selected_object_kind(_handle, selectionIndex);
-    return kind < 0 ? null : LeSelectionKind.fromValue(kind);
-  }
-
-  /// Every property row (UPDATES.md 7.2) for the selected object at
-  /// [selectionIndex] - e.g. a Terminal's name/direction/port count or an
-  /// Obstruction's shape count, plus a shapes bounding box in microns for
-  /// either, when one is available (see api.hpp's
-  /// `le_selected_object_property_at` doc comment for the exact row
-  /// list). Empty if [selectionIndex] is out of range.
-  List<LeSelectedProperty> selectedObjectProperties(int selectionIndex) {
-    _checkNotDisposed();
-    final count = _bindings.le_selected_object_property_count(
-      _handle,
-      selectionIndex,
+    return _fromNativeRef(
+      _bindings.le_selected_object_ref(_handle, selectionIndex),
     );
-    return [
-      for (var propertyIndex = 0; propertyIndex < count; propertyIndex++)
-        _selectedObjectProperty(selectionIndex, propertyIndex),
-    ];
   }
 
-  LeSelectedProperty _selectedObjectProperty(
-    int selectionIndex,
-    int propertyIndex,
-  ) {
-    final row = _bindings.le_selected_object_property_at(
+  /// Number of property rows [ref] has (see [LeSelectedProperty]) -
+  /// indexes [objectPropertyAt]'s own `index` parameter, 0..this-1.
+  /// Read-only: never mutates the current canvas selection or bumps
+  /// [selectionVersion] - safe to call while navigating parent/child
+  /// links (see [objectParent]/[objectChildren]) independently of it.
+  /// 0 if [ref] doesn't resolve to a real object.
+  int objectPropertyCount(LeObjectRef ref) {
+    _checkNotDisposed();
+    return _bindings.le_object_property_count(_handle, _toNativeRef(ref));
+  }
+
+  /// The property row at [index] (0..[objectPropertyCount] - 1) for
+  /// [ref] - e.g. for a `LE_OBJECT_KIND_SHAPE` ref, exactly the same rows
+  /// `get_properties shape:<id>` shows over TCL. Read-only, same contract
+  /// as [objectPropertyCount].
+  LeSelectedProperty objectPropertyAt(LeObjectRef ref, int index) {
+    _checkNotDisposed();
+    final row = _bindings.le_object_property_at(
       _handle,
-      selectionIndex,
-      propertyIndex,
+      _toNativeRef(ref),
+      index,
     );
     final type = LePropertyType.fromValue(row.type);
     final Object value = switch (type) {
@@ -825,6 +898,104 @@ class LeEditor {
       value: value,
     );
   }
+
+  /// Every property row for [ref] - see [objectPropertyAt].
+  List<LeSelectedProperty> objectProperties(LeObjectRef ref) {
+    _checkNotDisposed();
+    final count = objectPropertyCount(ref);
+    return [for (var index = 0; index < count; index++) objectPropertyAt(ref, index)];
+  }
+
+  /// [ref]'s immediate parent in the database hierarchy (Shape ->
+  /// TerminalPort/Obstruction -> Terminal/Abstract -> Design -> Library) -
+  /// the same hop graph TCL's `-filter` DSL already uses internally.
+  /// Read-only: never mutates the current canvas selection. An invalid
+  /// ref if [ref] is a Library (no parent) or doesn't resolve.
+  LeObjectRef objectParent(LeObjectRef ref) {
+    _checkNotDisposed();
+    return _fromNativeRef(
+      _bindings.le_object_parent(_handle, _toNativeRef(ref)),
+    );
+  }
+
+  /// The children of [ref] most relevant to Property Viewer navigation:
+  /// a Terminal's own TerminalPorts, or a TerminalPort/Obstruction's own
+  /// Shapes. Empty for kinds with no child list wired up here yet
+  /// (Library/Design/Abstract) or none at all (Shape, the hierarchy's
+  /// leaf). Read-only: never mutates the current canvas selection.
+  List<LeObjectRef> objectChildren(LeObjectRef ref) {
+    _checkNotDisposed();
+    switch (ref.kind) {
+      case LeObjectKind.LE_OBJECT_KIND_TERMINAL:
+        final terminalId = ffi.Struct.create<LeTerminalId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final count = _bindings.le_get_terminal_ports(
+          _handle,
+          terminalId,
+          ffi.nullptr,
+        );
+        return [
+          for (var i = 0; i < count; i++)
+            _terminalPortRef(_bindings.le_search_result_terminal_port_at(_handle, i)),
+        ];
+      case LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT:
+        final portId = ffi.Struct.create<LeTerminalPortId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final count = _bindings.le_get_shapes(
+          _handle,
+          portId,
+          _invalidObstructionId,
+          ffi.nullptr,
+        );
+        return [
+          for (var i = 0; i < count; i++)
+            _shapeRef(_bindings.le_search_result_shape_at(_handle, i)),
+        ];
+      case LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION:
+        final obstructionId = ffi.Struct.create<LeObstructionId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final count = _bindings.le_get_shapes(
+          _handle,
+          _invalidTerminalPortId,
+          obstructionId,
+          ffi.nullptr,
+        );
+        return [
+          for (var i = 0; i < count; i++)
+            _shapeRef(_bindings.le_search_result_shape_at(_handle, i)),
+        ];
+      case LeObjectKind.LE_OBJECT_KIND_LIBRARY:
+      case LeObjectKind.LE_OBJECT_KIND_DESIGN:
+      case LeObjectKind.LE_OBJECT_KIND_ABSTRACT:
+      case LeObjectKind.LE_OBJECT_KIND_SHAPE:
+        return const [];
+    }
+  }
+
+  LeObjectRef _terminalPortRef(LeTerminalPortId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT,
+    index: id.index,
+    generation: id.generation,
+  );
+
+  LeObjectRef _shapeRef(LeShapeId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_SHAPE,
+    index: id.index,
+    generation: id.generation,
+  );
+
+  LeObstructionId get _invalidObstructionId =>
+      ffi.Struct.create<LeObstructionId>()
+        ..index = 0xFFFFFFFF
+        ..generation = 0;
+
+  LeTerminalPortId get _invalidTerminalPortId =>
+      ffi.Struct.create<LeTerminalPortId>()
+        ..index = 0xFFFFFFFF
+        ..generation = 0;
 
   /// Runs the full pipeline+render chain for the currently selected Design
   /// and viewport, returning the resulting frame copied into Dart-owned

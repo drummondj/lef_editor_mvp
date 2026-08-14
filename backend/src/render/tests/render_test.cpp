@@ -28,13 +28,17 @@ namespace
             abstract_id = root.create_abstract(AbstractData{});
         }
 
-        TerminalPortId add_port_shape(TerminalId terminal_id, const Shape &shape)
+        // Returns the newly created Shape's own ShapeId (not the
+        // TerminalPortId) - selection is shape-granular (Scene::select
+        // takes a ShapeId), so that's what every caller actually needs to
+        // drive a selection with; `root.get_shape(id)->terminal_port` is
+        // right there if a test also needs the port.
+        ShapeId add_port_shape(TerminalId terminal_id, const Shape &shape)
         {
             TerminalPortId port_id = root.create_terminal_port(TerminalPortData{.terminal = terminal_id});
             Shape owned_shape = shape;
             owned_shape.terminal_port = port_id;
-            root.create_shape(std::move(owned_shape));
-            return port_id;
+            return root.create_shape(std::move(owned_shape));
         }
 
         TerminalId add_terminal_shape(const Shape &shape)
@@ -44,13 +48,13 @@ namespace
             return terminal_id;
         }
 
-        ObstructionId add_obstruction_shape(const Shape &shape)
+        // Same reasoning as add_port_shape above - returns the ShapeId.
+        ShapeId add_obstruction_shape(const Shape &shape)
         {
             ObstructionId obstruction_id = root.create_obstruction(ObstructionData{.abstract = abstract_id});
             Shape owned_shape = shape;
             owned_shape.obstruction = obstruction_id;
-            root.create_shape(std::move(owned_shape));
-            return obstruction_id;
+            return root.create_shape(std::move(owned_shape));
         }
 
         // Rasterizes `picture` into a fresh, explicitly-cleared-to-transparent
@@ -583,7 +587,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
 {
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape first_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
-    add_port_shape(terminal_id, first_piece);
+    const ShapeId first_shape_id = add_port_shape(terminal_id, first_piece);
     add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {60, 60}, .ur = {80, 80}}}});
 
     Scene scene;
@@ -591,13 +595,13 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, first_piece);
+    scene.select(first_shape_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
     const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     // Post-flip (see the Y-flip comment on
@@ -620,20 +624,20 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     // every other piece-outline test above uses a rect-only piece.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape polygon_piece{.layer_name = "M1", .polygons = {Polygon{.points = {{10, 10}, {30, 10}, {30, 30}, {10, 30}}}}};
-    add_port_shape(terminal_id, polygon_piece);
+    const ShapeId shape_id = add_port_shape(terminal_id, polygon_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, polygon_piece);
+    scene.select(shape_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
     const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     // Same square as the rect-piece tests above (10,10)-(30,30) - left
@@ -675,7 +679,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithN
         const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
         return renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
     };
 
@@ -721,20 +725,20 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     // rect/polygon selection instead of reading as a filled blob.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
-    add_port_shape(terminal_id, path_piece);
+    const ShapeId shape_id = add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, path_piece);
+    scene.select(shape_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
     const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     auto is_white = [&](int x, int y)
@@ -764,20 +768,20 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAShortWidePathHollowNotFilled)
     // typical long/thin case above.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 20}}};
-    add_port_shape(terminal_id, path_piece);
+    const ShapeId shape_id = add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, path_piece);
+    scene.select(shape_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
     const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
 
     auto is_white = [&](int x, int y)
@@ -801,7 +805,8 @@ TEST_F(RenderFixture, BuildPictureAndRasterizeAreNotInvalidatedBySelectionChange
     // change, see BENCHMARKS.md), so neither its own cache key nor
     // rasterize_frame's (kept in sync by hand) includes selection_version
     // any more - a selection change should cost nothing here.
-    const TerminalId terminal_id = add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const ShapeId shape_id = add_port_shape(terminal_id, Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -816,7 +821,7 @@ TEST_F(RenderFixture, BuildPictureAndRasterizeAreNotInvalidatedBySelectionChange
     ASSERT_EQ(renderer.picture_calls(), 1u);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
 
-    scene.select(terminal_id);
+    scene.select(shape_id);
     const auto &picture_after = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     renderer.rasterize(root, picture_after, scene);
 
@@ -1422,7 +1427,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeRulersWhenOnlyMouseMo
     auto compose_once = [&]
     {
         const auto &overlay_picture = renderer.build_overlay_picture(scene, 1000.0);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
         const auto &ruler_overlay_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
         renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
     };
@@ -1456,7 +1461,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsARulerChangeEvenWhenComposedOnc
     auto compose_and_sample = [&]
     {
         const auto &overlay_picture = renderer.build_overlay_picture(scene, 1000.0);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
         const auto &ruler_overlay_picture = renderer.build_ruler_overlay_picture(scene, 1000.0);
         const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
         // dbu (30,50) at pan(0,0)/scale(1.0)/viewport 100x100 -> pre-flip
@@ -1494,16 +1499,17 @@ TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseM
     // split.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{10, 20}, {30, 20}}}, .width = 4}}};
-    add_port_shape(terminal_id, path_piece);
+    const ShapeId shape_id = add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, path_piece);
+    scene.select(shape_id);
 
-    renderer.build_selection_overlay_picture(scene);
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    renderer.build_selection_overlay_picture(scene, root, shapes);
     renderer.build_overlay_picture(scene, std::nullopt);
     ASSERT_EQ(renderer.selection_overlay_picture_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
@@ -1511,13 +1517,13 @@ TEST_F(RenderFixture, BuildSelectionOverlayPictureDoesNotRecomputeWhenOnlyMouseM
     // Move the mouse several times - selection is untouched throughout.
     scene.set_mouse_position(5, 5);
     renderer.build_overlay_picture(scene, std::nullopt);
-    renderer.build_selection_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene, root, shapes);
     scene.set_mouse_position(6, 6);
     renderer.build_overlay_picture(scene, std::nullopt);
-    renderer.build_selection_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene, root, shapes);
     scene.set_mouse_position(7, 7);
     renderer.build_overlay_picture(scene, std::nullopt);
-    renderer.build_selection_overlay_picture(scene);
+    renderer.build_selection_overlay_picture(scene, root, shapes);
 
     EXPECT_EQ(renderer.overlay_picture_calls(), 4u);           // recomputed on every mouse move, as intended - cheap
     EXPECT_EQ(renderer.selection_overlay_picture_calls(), 1u); // never recomputed - selection never changed
@@ -1544,14 +1550,14 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}});
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape path_piece{.layer_name = "M1", .paths = {Path{.polygon = Polygon{.points = {{40, 40}, {60, 40}}}, .width = 4}}};
-    add_port_shape(terminal_id, path_piece);
+    const ShapeId shape_id = add_port_shape(terminal_id, path_piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(terminal_id, path_piece);
+    scene.select(shape_id);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
@@ -1560,7 +1566,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeTheSelectionOverlayWh
     auto compose_once = [&]
     {
         const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
         renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
     };
 
@@ -1600,7 +1606,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
 
     scene.set_mouse_position(10, 10);
     const auto &overlay_picture_1 = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture_1 = renderer.build_selection_overlay_picture(scene, root, shapes);
     renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_1, selection_overlay_picture_1, sk_sp<SkPicture>{}, scene);
     ASSERT_EQ(renderer.rasterize_calls(), 1u);
     ASSERT_EQ(renderer.overlay_picture_calls(), 1u);
@@ -1611,7 +1617,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysDoesNotReRasterizeDesignWhenOnlyMouseMo
     // the design content itself) are untouched.
     scene.set_mouse_position(20, 20);
     const auto &overlay_picture_2 = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture_2 = renderer.build_selection_overlay_picture(scene, root, shapes);
     renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture_2, selection_overlay_picture_2, sk_sp<SkPicture>{}, scene);
 
     EXPECT_EQ(renderer.rasterize_calls(), 1u);      // design frame reused, not recomputed
@@ -1645,7 +1651,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysRecomputesWhenOnlyTheTinyShapesPictureC
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
     const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
     const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
 
     const auto &tiny_shapes = pipeline.run_tiny_shapes(root, scene, view_layers);
     const auto &tiny_pixel_shapes = renderer.transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
@@ -1678,13 +1684,9 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
     // missing selection_version, so composing once before selecting
     // (warming the cache) then again after selecting returned the
     // pre-selection composited bytes unchanged, even with a correctly
-    // updated design_picture passed in both times. Selects with a piece
-    // (every reachable selection through the public API always has one -
-    // see Pipeline::hit_test_rect), which is what actually produces a
-    // visible outline (via build_selection_overlay_picture) to detect a
-    // stale composite with.
+    // updated design_picture passed in both times.
     const Shape piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
-    const ObstructionId obstruction_id = add_obstruction_shape(piece);
+    const ShapeId shape_id = add_obstruction_shape(piece);
 
     Scene scene;
     scene.set_current_abstract(abstract_id);
@@ -1698,7 +1700,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
         const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
         const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
         const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
         const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
         // Same Y-flip as rasterize() - see BuildPictureAndRasterizeAreNotInvalidatedBySelectionChanges's comment.
         const uint8_t *p = buffer.data + static_cast<size_t>(80) * buffer.row_bytes + static_cast<size_t>(9) * 4;
@@ -1706,7 +1708,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysReflectsASelectionChangeEvenWhenCompose
     };
 
     const auto before = compose_and_sample_edge(); // warms compose_with_overlays's cache with no selection
-    scene.select(obstruction_id, piece);
+    scene.select(shape_id);
     const auto after = compose_and_sample_edge();
 
     EXPECT_NE(before, after);

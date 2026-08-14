@@ -331,9 +331,9 @@ static void BM_BuildPicture_WithLargeSelection(benchmark::State &state)
     {
         for (const auto &rs : group)
         {
-            if (!rs.origin || selected >= n)
+            if (!rs.shape_id || selected >= n)
                 continue;
-            scene.select(*rs.origin, rs.shape); // always with a piece, matching le_mouse_up
+            scene.select(*rs.shape_id); // matching le_mouse_up's shape-level selection
             ++selected;
         }
     }
@@ -641,9 +641,9 @@ namespace
         {
             for (const auto &rs : group)
             {
-                if (!rs.origin)
+                if (!rs.shape_id)
                     continue;
-                scene.select(*rs.origin, rs.shape);
+                scene.select(*rs.shape_id);
                 if (++selected >= count)
                     return;
             }
@@ -663,7 +663,7 @@ static void BM_BuildSelectionOverlayPicture_ManySelectedPieces(benchmark::State 
     for (auto _ : state)
     {
         Renderer renderer;
-        const auto &picture = renderer.build_selection_overlay_picture(scene);
+        const auto &picture = renderer.build_selection_overlay_picture(scene, data.root, shapes);
         benchmark::DoNotOptimize(picture.get());
     }
 }
@@ -692,7 +692,7 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
     {
         scene.set_mouse_position(x++ % 2000, 0);
         const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
-        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene);
+        const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, data.root, shapes);
         const auto &buffer = renderer.compose_with_overlays(data.root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
         const uint8_t *buffer_data = buffer.data;
         benchmark::DoNotOptimize(buffer_data);
@@ -700,22 +700,24 @@ static void BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly(benchmark::S
 }
 BENCHMARK(BM_ComposeWithOverlays_ManySelectedPieces_MouseMoveOnly)->Arg(0)->Arg(100)->Arg(1000)->Arg(5000)->Arg(20000)->Unit(benchmark::kMillisecond);
 
-// le_selected_object_* FFI-facing benchmark - added because the two
-// Renderer-side fixes above (overlay/selection-picture split, then
-// rasterizing the selection overlay instead of replaying it) did not
-// resolve a reported mouse-move delay that scaled with selection size.
-// The Flutter provider (frontend/lib/providers/le_provider.dart)
-// unconditionally calls refreshSelectedObjects() on *every* pointer
-// move/hover event (handlePointerEvent -> refreshAndNotify -> ...), which
-// rebuilds the full selected-object property list from scratch every
-// time: le_selected_object_kind + le_selected_object_property_count + one
-// le_selected_object_property_at call per property, for *every currently
-// selected object* - none of this is Renderer/Pipeline content, so it was
-// invisible to every benchmark above. This measures the real C API call
-// sequence Dart's selectedObjectProperties() makes, through the actual
-// api.cpp (mutex-locked-per-call) surface, not a synthetic
-// reconstruction - i.e. the true cost of one refreshSelectedObjects() call
-// at a given selection size.
+// le_selected_object_ref/le_object_property_* FFI-facing benchmark - added
+// because the two Renderer-side fixes above (overlay/selection-picture
+// split, then rasterizing the selection overlay instead of replaying it)
+// did not resolve a reported mouse-move delay that scaled with selection
+// size. The Flutter provider (frontend/lib/providers/le_provider.dart)
+// unconditionally calls refreshSelection() on *every* pointer move/hover
+// event (handlePointerEvent -> refreshAndNotify -> ...), which rebuilds
+// the full selected-object ref list from scratch every time:
+// le_selected_object_ref per currently selected object (the Property
+// Viewer fetches its properties separately, on demand, once navigated
+// to - see le_object_property_count/_at) - none of this is Renderer/
+// Pipeline content, so it was invisible to every benchmark above. This
+// measures the real C API call sequence Dart's refreshSelection() makes,
+// through the actual api.cpp (mutex-locked-per-call) surface, not a
+// synthetic reconstruction - i.e. the true cost of one refreshSelection()
+// call at a given selection size, plus one full property fetch per
+// selected object (the worst case if a Property Viewer paged through
+// all of them).
 static void BM_RefreshSelectedObjects_ManySelectedPieces(benchmark::State &state)
 {
     // Ensures the shared stress LEF file exists on disk (stress_data()
@@ -745,11 +747,12 @@ static void BM_RefreshSelectedObjects_ManySelectedPieces(benchmark::State &state
     {
         for (int32_t i = 0; i < count; ++i)
         {
-            benchmark::DoNotOptimize(le_selected_object_kind(handle, i));
-            const int32_t property_count = le_selected_object_property_count(handle, i);
+            const LeObjectRef ref = le_selected_object_ref(handle, i);
+            benchmark::DoNotOptimize(ref.index);
+            const int32_t property_count = le_object_property_count(handle, ref);
             for (int32_t p = 0; p < property_count; ++p)
             {
-                const LeProperty property = le_selected_object_property_at(handle, i, p);
+                const LeProperty property = le_object_property_at(handle, ref, p);
                 benchmark::DoNotOptimize(&property);
             }
         }
@@ -761,25 +764,27 @@ BENCHMARK(BM_RefreshSelectedObjects_ManySelectedPieces)->Arg(200)->Arg(800)->Arg
 
 // Isolated Scene::select() benchmark - times only the select() loop
 // itself (not Pipeline::hit_test_rect or any other machinery le_mouse_up
-// also runs), against N distinct single-rect pieces sharing one synthetic
-// origin - the exact shape of a real drag-select over one Obstruction's
-// whole OBS block (a real design puts every OBS item under one shared
-// ObstructionId regardless of how many rects/polygons/paths it holds).
+// also runs), against N distinct synthetic ShapeIds - the exact shape of
+// a real drag-select over one Obstruction's whole OBS block (a real
+// design puts every OBS item under one shared ObstructionId regardless of
+// how many rects/polygons/paths it holds, but selection is now Shape-
+// granular, not Obstruction-granular - see scene.hpp's own comment).
 // Isolating this from the full le_mouse_up/hit_test_rect/LEF-parsing path
 // makes before/after numbers for select()'s own dedup cost directly
 // comparable and fast to run, unlike BM_RefreshSelectedObjects_
 // ManySelectedPieces above (which depends on this being fast just to
-// finish its own setup).
+// finish its own setup). Selection dedup is now plain ShapeId identity
+// (an unordered_set, see scene.hpp) rather than a geometry-hash bucket
+// lookup - this benchmark's own numbers are expected to improve after
+// that change, not regress; see BENCHMARKS.md.
 static void BM_SceneSelect_ManyPiecesSameOrigin(benchmark::State &state)
 {
     const int n = static_cast<int>(state.range(0));
 
-    std::vector<Shape> pieces;
-    pieces.reserve(static_cast<size_t>(n));
+    std::vector<ShapeId> ids;
+    ids.reserve(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i)
-        pieces.push_back(Shape{.layer_name = "M1", .rects = {Rect{.ll = {i * 10, 0}, .ur = {i * 10 + 5, 5}}}});
-
-    const ObstructionId origin{1, 0};
+        ids.push_back(ShapeId{static_cast<uint32_t>(i), 0});
 
     for (auto _ : state)
     {
@@ -787,8 +792,8 @@ static void BM_SceneSelect_ManyPiecesSameOrigin(benchmark::State &state)
         Scene scene;
         state.ResumeTiming();
 
-        for (const Shape &piece : pieces)
-            scene.select(origin, piece);
+        for (const ShapeId &id : ids)
+            scene.select(id);
         benchmark::DoNotOptimize(scene.selection().size());
     }
     state.SetItemsProcessed(state.iterations() * n);

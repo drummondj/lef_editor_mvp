@@ -131,7 +131,7 @@ namespace le
                         continue;
 
                     if (auto piece = Geometry::find_hit_piece(rs.shape, dbu_point))
-                        return HoverTarget{.origin = *rs.origin, .outline = *piece};
+                        return HoverTarget{.origin = *rs.origin, .outline = *piece, .shape_id = rs.shape_id};
                 }
             }
 
@@ -175,7 +175,7 @@ namespace le
                         continue;
 
                     for (auto &piece : Geometry::fully_enclosed_pieces(dbu_rect, rs.shape))
-                        result.push_back(HoverTarget{.origin = *rs.origin, .outline = std::move(piece)});
+                        result.push_back(HoverTarget{.origin = *rs.origin, .outline = std::move(piece), .shape_id = rs.shape_id});
                 }
             }
 

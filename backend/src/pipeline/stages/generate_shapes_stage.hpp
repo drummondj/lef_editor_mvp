@@ -215,7 +215,7 @@ namespace le
                             combined.polygons.insert(combined.polygons.end(), shape.polygons.begin(), shape.polygons.end());
                             combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
 
-                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}, .path_outlines = compute_path_outlines(shape)});
+                            shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}, .shape_id = shape_id, .path_outlines = compute_path_outlines(shape)});
                             // Merges the pushed copy's own rects/polygons in
                             // place (after combined's accumulated from the
                             // pre-merge shape above - get_label_location
@@ -254,7 +254,7 @@ namespace le
                         if (!raw_shape)
                             continue;
                         const Shape shape = expand_iterates(*raw_shape);
-                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .path_outlines = compute_path_outlines(shape)});
+                        shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .shape_id = shape_id, .path_outlines = compute_path_outlines(shape)});
                         Geometry::merge_overlapping_fills(shapes.back().shape);
                     }
                 }

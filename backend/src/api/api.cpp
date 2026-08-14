@@ -45,14 +45,14 @@ struct LeHandle
     le::Renderer renderer;
     std::mutex mutex_;
 
-    // Single-slot cache backing le_selected_object_property_count/
-    // le_selected_object_property_at - rebuilt whenever a different
-    // selection_index is requested (see build_selected_object_properties).
-    // le::PropertyValue (generated/property.hpp) doubles as LeProperty's
-    // string-owning backing store directly - no separate wrapper type
-    // needed, its shape already matches LeProperty field-for-field.
-    int32_t cached_property_selection_index = -1;
-    std::vector<le::PropertyValue> cached_properties;
+    // Single-slot cache backing le_object_property_count/le_object_
+    // property_at - rebuilt whenever a different LeObjectRef is
+    // requested. le::PropertyValue (generated/property.hpp) doubles as
+    // LeProperty's string-owning backing store directly - no separate
+    // wrapper type needed, its shape already matches LeProperty
+    // field-for-field.
+    LeObjectRef cached_object_property_ref{.kind = -1, .index = UINT32_MAX, .generation = 0};
+    std::vector<le::PropertyValue> cached_object_properties;
 
     // Same single-slot-cache pattern as cached_properties above, but for
     // le_terminal_property_count/_at (Phase 4's by-id CRUD surface,
@@ -207,9 +207,9 @@ namespace
         return LE_PROPERTY_TYPE_STRING;
     }
 
-    // LeProperty conversion, factored out of le_selected_object_property_at
-    // (below) so Phase 4's by-id property accessors (le_terminal_property_at
-    // et al) can build the same row shape from a le::PropertyValue without
+    // LeProperty conversion - shared by every by-id property accessor
+    // (le_terminal_property_at et al) and le_object_property_at, so they
+    // all build the same row shape from a le::PropertyValue without
     // duplicating the field-by-field mapping.
     LeProperty to_c(const le::PropertyValue &property)
     {
@@ -423,108 +423,11 @@ namespace
         return static_cast<double>(value_dbu) / dbu_per_um;
     }
 
-    // Appends a single "bbox_um" row ("ll_x ll_y ur_x ur_y", space-
-    // separated, matching how e.g. a LEF RECT statement itself lists four
-    // coordinates) if `bbox` and `dbu_per_um` are both present - silently
-    // omitted otherwise (an object with no shapes yet, or no Technology
-    // loaded), rather than reporting a misleading all-zero box. Always
-    // hand-written, never schema-generated: a shape's own bounding box is
-    // computed from nested geometry (TerminalPort/Obstruction shapes),
-    // not a stored field on Terminal/Obstruction itself, so no amount of
-    // struct-field reflection can produce it.
-    void push_bbox_property(std::vector<le::PropertyValue> &properties, const std::optional<le::Rect> &bbox, std::optional<double> dbu_per_um)
-    {
-        if (!bbox || !dbu_per_um)
-            return;
-
-        const double ll_x = static_cast<double>(bbox->ll.x) / *dbu_per_um;
-        const double ll_y = static_cast<double>(bbox->ll.y) / *dbu_per_um;
-        const double ur_x = static_cast<double>(bbox->ur.x) / *dbu_per_um;
-        const double ur_y = static_cast<double>(bbox->ur.y) / *dbu_per_um;
-        properties.push_back(le::PropertyValue::make_string(
-            "bbox_um",
-            format_coordinate_um(ll_x) + " " + format_coordinate_um(ll_y) + " " + format_coordinate_um(ur_x) + " " + format_coordinate_um(ur_y)));
-    }
-
-    // Builds the full property-row list (UPDATES.md 7.2) for one selected
-    // object - see le_selected_object_property_at's doc comment for the
-    // exact row list per LeSelectionKind. Every plain/enum field on
-    // TerminalData/ObstructionData itself (schema.py's Field metadata)
-    // comes for free from the generated le::to_properties() - this only
-    // hand-appends what's genuinely derived and can never be schema-
-    // generated: child-list counts that need Root's own index (ports
-    // isn't a struct field at all in INDEXED_POOLS style - see
-    // get_struct_fields()'s child-reference filtering) and the bbox_um
-    // computed from nested geometry (see push_bbox_property).
-    //
-    // If `selected.piece` is set (a click hit one specific rect/polygon/
-    // path - see SelectedObject), bbox_um is scoped to just that piece
-    // instead of the whole object's union, and a "layer_name" row is
-    // added from the piece's own Shape::layer_name - meaningful now that
-    // bbox is piece-scoped, since a Terminal can have ports on different
-    // layers. Name/direction/port_count (or shapes_count) stay parent-
-    // level context either way, so the table still says *which*
-    // Terminal/pin this piece belongs to.
-    std::vector<le::PropertyValue> build_selected_object_properties(const le::Root &root, const le::SelectedObject &selected)
-    {
-        std::vector<le::PropertyValue> properties;
-        const std::optional<double> dbu_per_um = database_units_microns(root);
-
-        if (const le::TerminalId *terminal_id = std::get_if<le::TerminalId>(&selected.origin))
-        {
-            const le::TerminalData *terminal = root.get_terminal(*terminal_id);
-            if (!terminal)
-                return properties;
-
-            properties = le::to_properties(*terminal); // name, direction
-
-            const std::vector<le::TerminalPortId> &port_ids = root.get_terminal_ports(*terminal_id);
-            properties.push_back(le::PropertyValue::make_int("port_count", static_cast<int64_t>(port_ids.size())));
-
-            if (selected.piece)
-            {
-                push_bbox_property(properties, le::Geometry::bbox(*selected.piece), dbu_per_um);
-                properties.push_back(le::PropertyValue::make_string("layer_name", selected.piece->layer_name));
-            }
-            else
-            {
-                std::vector<const le::Shape *> shapes;
-                shapes.reserve(port_ids.size()); // a lower bound (each port usually has one Shape) but avoids most reallocations
-                for (const le::TerminalPortId port_id : port_ids)
-                    for (const le::ShapeId shape_id : root.get_terminal_port_shapes(port_id))
-                        if (const le::Shape *shape = root.get_shape(shape_id))
-                            shapes.push_back(shape);
-                push_bbox_property(properties, le::Geometry::bbox(shapes), dbu_per_um);
-            }
-        }
-        else if (const le::ObstructionId *obstruction_id = std::get_if<le::ObstructionId>(&selected.origin))
-        {
-            const le::ObstructionData *obstruction = root.get_obstruction(*obstruction_id);
-            if (!obstruction)
-                return properties;
-
-            properties = le::to_properties(*obstruction);
-            const std::vector<le::ShapeId> &shape_ids = root.get_obstruction_shapes(*obstruction_id);
-            properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(shape_ids.size())));
-
-            if (selected.piece)
-            {
-                push_bbox_property(properties, le::Geometry::bbox(*selected.piece), dbu_per_um);
-                properties.push_back(le::PropertyValue::make_string("layer_name", selected.piece->layer_name));
-            }
-            else
-            {
-                std::vector<const le::Shape *> shapes;
-                shapes.reserve(shape_ids.size());
-                for (const le::ShapeId shape_id : shape_ids)
-                    if (const le::Shape *shape = root.get_shape(shape_id))
-                        shapes.push_back(shape);
-                push_bbox_property(properties, le::Geometry::bbox(shapes), dbu_per_um);
-            }
-        }
-
-        return properties;
-    }
+    // Forward-declared: its real definition needs format_rect_um/
+    // format_polygon_um/format_path_um (declared just above it), but
+    // replace_shape_geometry_properties, defined between here and there,
+    // needs to call it first.
+    std::vector<le::PropertyValue> build_combined_shape_geometry_properties(const std::vector<const le::Shape *> &shapes, double dbu_per_um);
 
     // Looks up `name` among an object's already-built to_properties()-
     // style rows - the same rows a bare `get_properties $token` (no
@@ -545,13 +448,14 @@ namespace
         return std::nullopt;
     }
 
-    // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface) -
-    // unlike build_selected_object_properties above, not piece-scoped
-    // (there's no click-selection concept for an arbitrary id lookup), so
-    // no bbox_um/layer_name rows - just cmg's generated to_properties()
-    // plus the same "port_count" derived row build_selected_object_
-    // properties adds for LE_SELECTION_KIND_TERMINAL. Returns an empty
-    // vector if id doesn't name a Terminal on this handle.
+    // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface),
+    // and - via le_object_property_count/_at's dispatch - the Property
+    // Viewer's Terminal rows too (UPDATES.md 7.2's later shape-level-
+    // selection redesign). Just cmg's generated to_properties() plus a
+    // derived "port_count" row (ports is an is_child field, not a struct
+    // field in INDEXED_POOLS style, so it isn't in to_properties() at
+    // all). Returns an empty vector if id doesn't name a Terminal on this
+    // handle.
     std::vector<le::PropertyValue> build_terminal_properties(const le::Root &root, le::TerminalId id)
     {
         const le::TerminalData *terminal = root.get_terminal(id);
@@ -637,6 +541,27 @@ namespace
         return joined;
     }
 
+    // One rect/polygon/path formatted as a single brace-grouped Tcl-list
+    // element, micron-converted - shared by replace_shape_geometry_properties
+    // (a single Shape's own rows) and build_combined_shape_geometry_properties
+    // (merged across several Shapes) below, so both produce identical
+    // per-element formatting.
+    std::string format_rect_um(const le::Rect &rect, double dbu_per_um)
+    {
+        return "{{" + format_point_um(rect.ll, dbu_per_um) + "} {" + format_point_um(rect.ur, dbu_per_um) + "}}";
+    }
+
+    std::string format_polygon_um(const le::Polygon &polygon, double dbu_per_um)
+    {
+        return "{" + format_points_um(polygon.points, dbu_per_um) + "}";
+    }
+
+    std::string format_path_um(const le::Path &path, double dbu_per_um)
+    {
+        return "{" + format_points_um(path.polygon.points, dbu_per_um) + " " +
+               format_coordinate_um(to_um(static_cast<int64_t>(path.width), dbu_per_um)) + "}";
+    }
+
     // Overrides the "rects"/"polygons"/"paths" rows cmg's generically
     // generated to_properties(ShapeData) already produced (in raw
     // database units, via to_property_string()'s recursive
@@ -646,53 +571,60 @@ namespace
     // Technology's dbu_per_um (to_properties() only ever sees the bare
     // ShapeData struct, not Root), so that conversion can only happen
     // here, same as le_shape_rect_at/le_shape_polygon_point_at already
-    // do for their own dedicated accessors. Each element keeps its own
-    // brace grouping (one rect/polygon/path per Tcl-list element),
-    // matching the generic list-of-object convention it's replacing -
-    // only the per-element formatting changes, from
-    // "Rect{ll=Point{x=.. y=..} ur=Point{x=.. y=..} }" to
-    // "{{ll_x ll_y} {ur_x ur_y}}".
+    // do for their own dedicated accessors.
+    //
+    // The actual formatting/joining is entirely delegated to
+    // build_combined_shape_geometry_properties (a single-Shape list is
+    // just the shapes.size()==1 case of "merge across shapes") - this
+    // function's only remaining job is splicing that result into `shape`'s
+    // own full to_properties() list, replacing cmg's raw-dbu placeholder
+    // rows with it in place. There is deliberately exactly one place
+    // (build_combined_shape_geometry_properties) that knows how to turn
+    // Rect/Polygon/Path geometry into this Tcl-list string format - not
+    // two.
     void replace_shape_geometry_properties(std::vector<le::PropertyValue> &properties, const le::ShapeData &shape, double dbu_per_um)
     {
+        const std::vector<le::PropertyValue> geometry = build_combined_shape_geometry_properties({&shape}, dbu_per_um);
         for (le::PropertyValue &property : properties)
+            if (const std::optional<le::PropertyValue> replacement = find_property_by_name(geometry, property.name))
+                property = *replacement;
+    }
+
+    // Merges rects/polygons/paths across every shape in `shapes` into
+    // three combined "rects"/"polygons"/"paths" string properties -
+    // replace_shape_geometry_properties's single implementation (one
+    // Shape, via build_shape_properties/get_properties on a shape:<id>
+    // token, and now also le_object_property_at's LE_OBJECT_KIND_SHAPE
+    // branch) builds on it, so there's exactly one place that knows how
+    // to turn geometry
+    // into this format, not one per caller.
+    std::vector<le::PropertyValue> build_combined_shape_geometry_properties(const std::vector<const le::Shape *> &shapes, double dbu_per_um)
+    {
+        std::string rects_joined, polygons_joined, paths_joined;
+        auto append = [](std::string &joined, const std::string &element)
         {
-            if (property.name == "rects")
-            {
-                std::string joined;
-                for (size_t i = 0; i < shape.rects.size(); ++i)
-                {
-                    if (i != 0)
-                        joined += " ";
-                    const le::Rect &rect = shape.rects[i];
-                    joined += "{{" + format_point_um(rect.ll, dbu_per_um) + "} {" + format_point_um(rect.ur, dbu_per_um) + "}}";
-                }
-                property = le::PropertyValue::make_string("rects", joined);
-            }
-            else if (property.name == "polygons")
-            {
-                std::string joined;
-                for (size_t i = 0; i < shape.polygons.size(); ++i)
-                {
-                    if (i != 0)
-                        joined += " ";
-                    joined += "{" + format_points_um(shape.polygons[i].points, dbu_per_um) + "}";
-                }
-                property = le::PropertyValue::make_string("polygons", joined);
-            }
-            else if (property.name == "paths")
-            {
-                std::string joined;
-                for (size_t i = 0; i < shape.paths.size(); ++i)
-                {
-                    if (i != 0)
-                        joined += " ";
-                    const le::Path &path = shape.paths[i];
-                    joined += "{" + format_points_um(path.polygon.points, dbu_per_um) + " " +
-                              format_coordinate_um(to_um(static_cast<int64_t>(path.width), dbu_per_um)) + "}";
-                }
-                property = le::PropertyValue::make_string("paths", joined);
-            }
+            if (!joined.empty())
+                joined += " ";
+            joined += element;
+        };
+
+        for (const le::Shape *shape : shapes)
+        {
+            if (!shape)
+                continue;
+            for (const le::Rect &rect : shape->rects)
+                append(rects_joined, format_rect_um(rect, dbu_per_um));
+            for (const le::Polygon &polygon : shape->polygons)
+                append(polygons_joined, format_polygon_um(polygon, dbu_per_um));
+            for (const le::Path &path : shape->paths)
+                append(paths_joined, format_path_um(path, dbu_per_um));
         }
+
+        return {
+            le::PropertyValue::make_string("rects", rects_joined),
+            le::PropertyValue::make_string("polygons", polygons_joined),
+            le::PropertyValue::make_string("paths", paths_joined),
+        };
     }
 
     std::vector<le::PropertyValue> build_shape_properties(const le::Root &root, le::ShapeId id)
@@ -803,12 +735,9 @@ namespace
 
     // LE_KEY_FIT's Ctrl-held branch (UPDATES.md 9.6) - fits the viewport
     // to the current selection's own combined bbox instead of the whole
-    // design's. Collects a pointer per selection entry into the same
-    // owning storage build_selected_object_properties's bbox_um property
-    // reads from (Root::get_terminal_port_shapes()/get_obstruction_shapes()
-    // resolved through Root::get_shape(), or the SelectedObject's own
-    // `piece` in `scene` - both outlive this call, no copy needed), then
-    // a single Geometry::bbox call unions them - mirrors
+    // design's. One Root::get_shape(selected.shape_id) lookup per
+    // selection entry (owned by `root`, outlives this call, no copy
+    // needed), then a single Geometry::bbox call unions them - mirrors
     // fit_scene_unlocked's own shape_ptrs pattern above. A no-op (view
     // unchanged) if nothing is selected, unlike fit_scene_unlocked, which
     // always has the whole design to fall back to.
@@ -817,27 +746,8 @@ namespace
         std::vector<const le::Shape *> shape_ptrs;
 
         for (const le::SelectedObject &selected : handle->scene.selection())
-        {
-            if (selected.piece)
-            {
-                shape_ptrs.push_back(&*selected.piece);
-                continue;
-            }
-
-            if (const le::TerminalId *terminal_id = std::get_if<le::TerminalId>(&selected.origin))
-            {
-                for (const le::TerminalPortId port_id : handle->root.get_terminal_ports(*terminal_id))
-                    for (const le::ShapeId shape_id : handle->root.get_terminal_port_shapes(port_id))
-                        if (const le::Shape *shape = handle->root.get_shape(shape_id))
-                            shape_ptrs.push_back(shape);
-            }
-            else if (const le::ObstructionId *obstruction_id = std::get_if<le::ObstructionId>(&selected.origin))
-            {
-                for (const le::ShapeId shape_id : handle->root.get_obstruction_shapes(*obstruction_id))
-                    if (const le::Shape *shape = handle->root.get_shape(shape_id))
-                        shape_ptrs.push_back(shape);
-            }
-        }
+            if (const le::Shape *shape = handle->root.get_shape(selected.shape_id))
+                shape_ptrs.push_back(shape);
 
         if (shape_ptrs.empty())
             return;
@@ -875,9 +785,11 @@ namespace
         const auto hits = le::Pipeline::hit_test_rect(filtered, handle->view_layers, handle->scene, *bbox);
         for (const le::HoverTarget &hit : hits)
         {
+            if (!hit.shape_id)
+                continue;
             if (static_cast<int32_t>(handle->scene.selection().size()) >= kMaxSelectAllCount)
                 break;
-            handle->scene.select(hit.origin, hit.outline);
+            handle->scene.select(*hit.shape_id);
         }
 
         if (hits.size() > static_cast<size_t>(kMaxSelectAllCount))
@@ -981,6 +893,119 @@ namespace
                     handle->scene.set_layer_name_visible(cut->name, both_visible);
             }
         }
+    }
+
+    // --- Generic LeObjectRef dispatch (UPDATES.md 7.2's database-hierarchy
+    // Property Viewer redesign) - le_object_property_count/_at/
+    // le_object_parent/le_selected_object_ref's own internal machinery.
+    // Every ref's `index`/`generation` pair is exactly one of the seven
+    // LeXxxId structs' own fields, so converting is a bare field copy. ---
+
+    LeObjectRef invalid_object_ref()
+    {
+        return LeObjectRef{.kind = LE_OBJECT_KIND_LIBRARY, .index = UINT32_MAX, .generation = 0};
+    }
+
+    bool same_object_ref(LeObjectRef a, LeObjectRef b)
+    {
+        return a.kind == b.kind && a.index == b.index && a.generation == b.generation;
+    }
+
+    template <typename IdT>
+    IdT id_from_ref(LeObjectRef ref)
+    {
+        return IdT{.index = ref.index, .generation = ref.generation};
+    }
+
+    LeObjectRef ref_from_id(LeObjectKind kind, le::LibraryId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::DesignId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::AbstractId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::TerminalId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::TerminalPortId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::ObstructionId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+    LeObjectRef ref_from_id(LeObjectKind kind, le::ShapeId id) { return LeObjectRef{.kind = kind, .index = id.index, .generation = id.generation}; }
+
+    // Dispatches to the same by-id property builder each class's own
+    // le_X_property_count/_at already uses (build_library_properties et
+    // al, all lock-free, defined earlier in this file) - never the public
+    // le_X_property_at functions themselves, which each take
+    // handle->mutex_ on their own; le_object_property_count/_at take it
+    // exactly once, so calling back into a lock-taking function here
+    // would self-deadlock (std::mutex isn't recursive).
+    std::vector<le::PropertyValue> build_object_properties(const le::Root &root, LeObjectRef ref)
+    {
+        switch (static_cast<LeObjectKind>(ref.kind))
+        {
+        case LE_OBJECT_KIND_LIBRARY:
+            return build_library_properties(root, id_from_ref<le::LibraryId>(ref));
+        case LE_OBJECT_KIND_DESIGN:
+            return build_design_properties(root, id_from_ref<le::DesignId>(ref));
+        case LE_OBJECT_KIND_ABSTRACT:
+            return build_abstract_properties(root, id_from_ref<le::AbstractId>(ref));
+        case LE_OBJECT_KIND_TERMINAL:
+            return build_terminal_properties(root, id_from_ref<le::TerminalId>(ref));
+        case LE_OBJECT_KIND_TERMINAL_PORT:
+            return build_terminal_port_properties(root, id_from_ref<le::TerminalPortId>(ref));
+        case LE_OBJECT_KIND_OBSTRUCTION:
+            return build_obstruction_properties(root, id_from_ref<le::ObstructionId>(ref));
+        case LE_OBJECT_KIND_SHAPE:
+            return build_shape_properties(root, id_from_ref<le::ShapeId>(ref));
+        }
+        return {};
+    }
+
+    // `ref`'s immediate parent - the same parent-hop graph
+    // filter_field_tables() already declares for -filter validation
+    // (Shape->terminal_port/obstruction, TerminalPort->terminal,
+    // Terminal/Obstruction->abstract, Abstract->design, Design->library),
+    // read directly off each class's own schema parent field. Library has
+    // no parent. Degrades to invalid_object_ref() if `ref` doesn't
+    // resolve to a real object (rather than asserting) - same graceful-
+    // degradation convention as every other lookup in this file.
+    LeObjectRef object_ref_parent(const le::Root &root, LeObjectRef ref)
+    {
+        switch (static_cast<LeObjectKind>(ref.kind))
+        {
+        case LE_OBJECT_KIND_LIBRARY:
+            return invalid_object_ref();
+        case LE_OBJECT_KIND_DESIGN:
+        {
+            const le::DesignData *design = root.get_design(id_from_ref<le::DesignId>(ref));
+            return design ? ref_from_id(LE_OBJECT_KIND_LIBRARY, design->library) : invalid_object_ref();
+        }
+        case LE_OBJECT_KIND_ABSTRACT:
+        {
+            const le::AbstractData *abstract = root.get_abstract(id_from_ref<le::AbstractId>(ref));
+            return abstract ? ref_from_id(LE_OBJECT_KIND_DESIGN, abstract->design) : invalid_object_ref();
+        }
+        case LE_OBJECT_KIND_TERMINAL:
+        {
+            const le::TerminalData *terminal = root.get_terminal(id_from_ref<le::TerminalId>(ref));
+            return terminal ? ref_from_id(LE_OBJECT_KIND_ABSTRACT, terminal->abstract) : invalid_object_ref();
+        }
+        case LE_OBJECT_KIND_TERMINAL_PORT:
+        {
+            const le::TerminalPortData *port = root.get_terminal_port(id_from_ref<le::TerminalPortId>(ref));
+            return port ? ref_from_id(LE_OBJECT_KIND_TERMINAL, port->terminal) : invalid_object_ref();
+        }
+        case LE_OBJECT_KIND_OBSTRUCTION:
+        {
+            const le::ObstructionData *obstruction = root.get_obstruction(id_from_ref<le::ObstructionId>(ref));
+            return obstruction ? ref_from_id(LE_OBJECT_KIND_ABSTRACT, obstruction->abstract) : invalid_object_ref();
+        }
+        case LE_OBJECT_KIND_SHAPE:
+        {
+            const le::ShapeData *shape = root.get_shape(id_from_ref<le::ShapeId>(ref));
+            if (!shape)
+                return invalid_object_ref();
+            if (shape->terminal_port.valid())
+                return ref_from_id(LE_OBJECT_KIND_TERMINAL_PORT, shape->terminal_port);
+            if (shape->obstruction.valid())
+                return ref_from_id(LE_OBJECT_KIND_OBSTRUCTION, shape->obstruction);
+            return invalid_object_ref(); // shouldn't happen - mutually exclusive per schema.py - degrade gracefully anyway
+        }
+        }
+        return invalid_object_ref();
     }
 }
 
@@ -1885,8 +1910,8 @@ extern "C"
                 // le_set_mouse_position), which this call has no guaranteed
                 // ordering against.
                 const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
-                if (hit)
-                    handle->scene.select(hit->origin, hit->outline);
+                if (hit && hit->shape_id)
+                    handle->scene.select(*hit->shape_id);
             }
             else
             {
@@ -1898,7 +1923,8 @@ extern "C"
                 };
 
                 for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
-                    handle->scene.select(hit.origin, hit.outline);
+                    if (hit.shape_id)
+                        handle->scene.select(*hit.shape_id);
             }
         }
         else if (handle->scene.mode() == le::Scene::Mode::RULER)
@@ -1947,64 +1973,61 @@ extern "C"
         return static_cast<int64_t>(handle->scene.selection_version());
     }
 
-    int32_t le_selected_object_kind(LeHandle *handle, int32_t selection_index)
+    LeObjectRef le_object_invalid_ref(void)
     {
-        if (!handle || selection_index < 0)
-            return -1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const std::vector<le::SelectedObject> &selection = handle->scene.selection();
-        if (static_cast<size_t>(selection_index) >= selection.size())
-            return -1;
-
-        return std::holds_alternative<le::TerminalId>(selection[static_cast<size_t>(selection_index)].origin)
-                   ? LE_SELECTION_KIND_TERMINAL
-                   : LE_SELECTION_KIND_OBSTRUCTION;
+        return invalid_object_ref();
     }
 
-    int32_t le_selected_object_property_count(LeHandle *handle, int32_t selection_index)
+    int32_t le_object_property_count(LeHandle *handle, LeObjectRef ref)
     {
-        if (!handle || selection_index < 0)
+        if (!handle)
             return 0;
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
-        const std::vector<le::SelectedObject> &selection = handle->scene.selection();
-        if (static_cast<size_t>(selection_index) >= selection.size())
-            return 0;
-
-        handle->cached_properties = build_selected_object_properties(handle->root, selection[static_cast<size_t>(selection_index)]);
-        handle->cached_property_selection_index = selection_index;
-        return static_cast<int32_t>(handle->cached_properties.size());
+        handle->cached_object_properties = build_object_properties(handle->root, ref);
+        handle->cached_object_property_ref = ref;
+        return static_cast<int32_t>(handle->cached_object_properties.size());
     }
 
-    LeProperty le_selected_object_property_at(LeHandle *handle, int32_t selection_index, int32_t property_index)
+    LeProperty le_object_property_at(LeHandle *handle, LeObjectRef ref, int32_t index)
     {
         const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || selection_index < 0 || property_index < 0)
+        if (!handle || index < 0)
             return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        if (!same_object_ref(handle->cached_object_property_ref, ref))
+        {
+            handle->cached_object_properties = build_object_properties(handle->root, ref);
+            handle->cached_object_property_ref = ref;
+        }
+
+        if (static_cast<size_t>(index) >= handle->cached_object_properties.size())
+            return invalid;
+
+        return to_c(handle->cached_object_properties[static_cast<size_t>(index)]);
+    }
+
+    LeObjectRef le_object_parent(LeHandle *handle, LeObjectRef ref)
+    {
+        if (!handle)
+            return invalid_object_ref();
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        return object_ref_parent(handle->root, ref);
+    }
+
+    LeObjectRef le_selected_object_ref(LeHandle *handle, int32_t selection_index)
+    {
+        if (!handle || selection_index < 0)
+            return invalid_object_ref();
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const std::vector<le::SelectedObject> &selection = handle->scene.selection();
         if (static_cast<size_t>(selection_index) >= selection.size())
-            return invalid;
+            return invalid_object_ref();
 
-        if (handle->cached_property_selection_index != selection_index)
-        {
-            handle->cached_properties = build_selected_object_properties(handle->root, selection[static_cast<size_t>(selection_index)]);
-            handle->cached_property_selection_index = selection_index;
-        }
-
-        if (static_cast<size_t>(property_index) >= handle->cached_properties.size())
-            return invalid;
-
-        const le::PropertyValue &property = handle->cached_properties[static_cast<size_t>(property_index)];
-        return LeProperty{
-            .name = property.name.c_str(),
-            .type = to_c_property_type(property.type),
-            .string_value = property.string_value.c_str(),
-            .int_value = property.int_value,
-            .double_value = property.double_value,
-        };
+        return ref_from_id(LE_OBJECT_KIND_SHAPE, selection[static_cast<size_t>(selection_index)].shape_id);
     }
 
     LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction)

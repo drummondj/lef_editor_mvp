@@ -22,6 +22,15 @@ namespace le
         /// Terminal/Obstruction and isn't selectable.
         std::optional<SelectionRef> origin;
 
+        /// The exact database ShapeId this RenderedShape was generated
+        /// from (GenerateShapesStage pushes exactly one RenderedShape per
+        /// ShapeId - see its own comment) - nullopt only for the
+        /// synthetic BOUNDARY shape, which has no backing Shape row.
+        /// Selection (Scene::SelectedObject) is keyed on this, not on
+        /// `origin` - see scene.hpp's own comment for why selection is
+        /// shape-granular.
+        std::optional<ShapeId> shape_id;
+
         /// (*path_outlines)[i] == Geometry::path_to_polygons(shape.paths[i]) -
         /// each path's buffered outline (flat ends, miter joins),
         /// precomputed once here (pipeline's GenerateShapesStage is cached

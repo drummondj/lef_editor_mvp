@@ -75,9 +75,9 @@ namespace le
             return build_tiny_shapes_picture_stage_.run(tiny_transform_stage_, root, tiny_pixel_shapes, scene, view_layers);
         }
 
-        const sk_sp<SkPicture> &build_selection_overlay_picture(const Scene &scene)
+        const sk_sp<SkPicture> &build_selection_overlay_picture(const Scene &scene, const Root &root, const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes)
         {
-            return build_selection_overlay_picture_stage_.run(scene);
+            return build_selection_overlay_picture_stage_.run(scene, root, shapes);
         }
 
         /// @brief Finalized (committed) rulers only - not the live ghost
@@ -134,7 +134,7 @@ namespace le
             const auto &tiny_pixel_shapes = transform_tiny_shapes_to_pixels(root, tiny_shapes, scene);
             const auto &tiny_shapes_picture = build_tiny_shapes_picture(root, tiny_pixel_shapes, scene, view_layers);
             const auto &overlay_picture = build_overlay_picture(scene, dbu_per_um);
-            const auto &selection_overlay_picture = build_selection_overlay_picture(scene);
+            const auto &selection_overlay_picture = build_selection_overlay_picture(scene, root, shapes);
             const auto &ruler_overlay_picture = build_ruler_overlay_picture(scene, dbu_per_um);
             return compose_with_overlays(root, picture, tiny_shapes_picture, overlay_picture, selection_overlay_picture, ruler_overlay_picture, scene);
         }
