@@ -60,17 +60,22 @@ namespace le
     {
     public:
         // --- Currently displayed Abstract ---
-        // Switching Abstracts clears selection and hover - both hold
-        // TerminalId/ObstructionId values scoped to whichever Abstract
-        // they were selected/hovered in (they're plain {index,generation}
-        // pool handles, not namespaced by Abstract), so leaving them set
-        // after switching risks a stale reference that, at best, matches
-        // nothing in the new Abstract (id from the old one simply isn't
-        // present) and at worst - since Terminals/Obstructions across all
-        // Abstracts share the same underlying Pool - happens to collide
-        // with an unrelated object's reused pool slot in the new one,
-        // highlighting/selecting the wrong shape entirely. A no-op (no
-        // clear, no version bumps) if `id` is the same Abstract already
+        // Switching Abstracts clears selection, hover, and rulers -
+        // selection/hover hold TerminalId/ObstructionId values scoped to
+        // whichever Abstract they were selected/hovered in (they're plain
+        // {index,generation} pool handles, not namespaced by Abstract),
+        // so leaving them set after switching risks a stale reference
+        // that, at best, matches nothing in the new Abstract (id from the
+        // old one simply isn't present) and at worst - since Terminals/
+        // Obstructions across all Abstracts share the same underlying
+        // Pool - happens to collide with an unrelated object's reused
+        // pool slot in the new one, highlighting/selecting the wrong
+        // shape entirely. Rulers (UPDATES.md item 13) are plain dbu
+        // Points with no Abstract scoping at all - left uncleared they'd
+        // just go on being drawn, at the same raw coordinates, over
+        // whatever design happens to occupy that part of the new
+        // Abstract's own unrelated coordinate space. A no-op (no clear,
+        // no version bumps) if `id` is the same Abstract already
         // displayed.
         void set_current_abstract(AbstractId id)
         {
@@ -80,6 +85,7 @@ namespace le
             current_abstract_ = id;
             clear_selection();
             clear_hover();
+            clear_rulers();
         }
         AbstractId current_abstract() const { return current_abstract_; }
 

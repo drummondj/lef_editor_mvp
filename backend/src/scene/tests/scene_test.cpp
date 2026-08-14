@@ -50,6 +50,27 @@ TEST(Scene, SwitchingToADifferentAbstractClearsSelectionAndHover)
     EXPECT_FALSE(scene.hover().has_value());
 }
 
+TEST(Scene, SwitchingToADifferentAbstractClearsRulers)
+{
+    // Regression: rulers are plain dbu Points with no Abstract scoping
+    // at all - left uncleared they'd go on being drawn, at the same raw
+    // coordinates, over whatever design happens to occupy that part of
+    // the new Abstract's own unrelated coordinate space.
+    Scene scene;
+    scene.set_current_abstract(AbstractId{1, 0});
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    scene.add_ruler_point(false);
+    ASSERT_FALSE(scene.rulers().empty());
+
+    scene.set_current_abstract(AbstractId{2, 0});
+    EXPECT_TRUE(scene.rulers().empty());
+}
+
 TEST(Scene, SwitchingToADifferentAbstractBumpsSelectionVersionOnlyIfSelectionWasNonEmpty)
 {
     Scene scene;

@@ -2235,6 +2235,24 @@ TEST_F(ApiFixture, SwitchingToADifferentDesignClearsTheSelection)
     EXPECT_EQ(le_selection_count(handle), 0);
 }
 
+TEST_F(ApiFixture, SwitchingToADifferentDesignClearsRulers)
+{
+    // Regression: rulers used to leak across Abstracts - drawn in one
+    // Design's abstract view, they'd keep showing up (at the same raw
+    // dbu coordinates) after switching to a different Design entirely.
+    load_two_shapes_at_known_scale(handle); // design 0 = TWOSHAPES
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0); // design 1 = TESTCELL
+
+    le_set_mode(handle, LE_MODE_RULER);
+    le_set_mouse_position(handle, 25, 175);
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_ruler_count(handle), 1);
+
+    ASSERT_EQ(le_set_current_design(handle, 1), 0); // switch to TESTCELL
+    EXPECT_EQ(le_ruler_count(handle), 0);
+}
+
 TEST_F(ApiFixture, ClearAllKeysMakesSubsequentClicksReplaceRatherThanAddAgain)
 {
     // The exact reported bug: a stuck shift (e.g. from a missed key-up on
