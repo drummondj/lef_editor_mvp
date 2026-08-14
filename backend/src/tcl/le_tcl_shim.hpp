@@ -150,6 +150,12 @@ long long design_abstract_id(int design_index);
 /// if no Design named `name` is loaded on this session.
 long long design_by_name(const char *name);
 
+/// @brief The singleton Technology's friendly `"technology:N"` id (see
+/// this header's own "IDs" comment) - the way a script reaches Layer/
+/// Via/Site/NonDefaultRule, e.g. `technology_layers [technology_id]`.
+/// Returns "" if no Technology has been read yet.
+const char *technology_id();
+
 /// @brief Select the Design `design_id` (as returned by design_by_name)
 /// as this session's current view (UPDATES.md item 17) - every
 /// subsequent get_terminals/get_obstructions/get_terminal_ports call is
@@ -406,3 +412,10 @@ int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
 int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
 int remove_shape_path(const char *id, int path_index);
+
+// --- Generated TCL property-reading surface (see backend/CLAUDE.md's
+// TCL section) - bare property-table accessors and is_child-field
+// enumeration for every TCL-readable class not already covered above.
+// Never edit generated/le_tcl_shim_generated.hpp directly - regenerate
+// via the regen-tcl skill instead. ---
+#include "generated/le_tcl_shim_generated.hpp"

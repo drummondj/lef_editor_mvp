@@ -43,6 +43,12 @@ TYPEMAP = {
     "double": ("double", float),
     "long double": ("long double", float),
     "bool": ("bool", bool),
+    # A raw value in database units (this project's LEF/DEF integer
+    # coordinate/length convention) - a plain int64_t in the generated
+    # struct, but a distinct schema-level type so property-formatting code
+    # can tell "this needs micron conversion for display" from a plain
+    # count/int without guessing from the C++ type name.
+    "dbu": ("int64_t", int),
 }
 
 
@@ -273,7 +279,61 @@ class Klass:
     is_enum: bool = False
     enum_values: List["EnumValue"] = field(default_factory=list)
 
+    # TCL codegen (backend/src/tcl) - not database codegen. `None` means
+    # "default to has_pool": every pool-backed class is TCL-readable
+    # (property tables + friendly-id resolution) unless explicitly opted
+    # out with tcl_readable=False. See backend/CLAUDE.md's TCL section.
+    tcl_readable: Optional[bool] = None
+
+    # Explicit override for the field backing this class's TCL friendly
+    # id (e.g. "type:NAME" instead of "type:N"). Auto-derives to the
+    # field with index=True if one exists (see tcl_friendly_id_field()) -
+    # only needed when a class's real uniqueness isn't captured by
+    # index=True (e.g. Terminal, whose name uniqueness is enforced
+    # per-Abstract by hand, not a global cmg index).
+    tcl_id_field: Optional[str] = None
+
     _schema: Optional[Schema] = field(default=None, repr=False, init=False)
+
+    def is_tcl_readable(self) -> bool:
+        """
+        Whether this class gets a generated TCL property-reading surface
+        (le_X_property_count/_at/_path, friendly-id resolution). Defaults
+        to has_pool - a non-pooled (embedded value) class has no
+        independent identity to hand out a friendly id for.
+        """
+        return self.tcl_readable if self.tcl_readable is not None else self.has_pool
+
+    def tcl_friendly_id_field(self) -> Optional["Field"]:
+        """
+        The field backing this class's TCL friendly id ("type:<value>"),
+        or None if this class uses a numeric ("type:<packed index>")
+        friendly id instead. tcl_id_field wins if set; otherwise the
+        first field with index=True (Root already generates
+        get_<klass>_by_<field>() for it - see root_hpp_j2.py - so name-
+        based resolution needs no new database-side lookup).
+        """
+        if self.tcl_id_field is not None:
+            for f in self.fields:
+                if f.name == self.tcl_id_field:
+                    return f
+            raise ValueError(
+                f"Klass {self.name}: tcl_id_field={self.tcl_id_field!r} does not name a real field"
+            )
+        for f in self.fields:
+            if f.index:
+                return f
+        return None
+
+    def tcl_child_list_fields(self) -> List["Field"]:
+        """
+        This class's own is_child list fields (e.g. Technology.layers) -
+        the ones the TCL generator emits a friendly-id enumeration
+        pair (le_X_<field>_count/_at) and a derived "<field>_count"
+        property row for, since to_properties() itself never includes
+        is_child fields (they're structural, not struct fields at all).
+        """
+        return [f for f in self.fields if f.is_child and f.is_list]
 
     def get_include_define(self) -> str:
         """
@@ -794,7 +854,7 @@ class Field:
             and not self._type_klass.has_pool
         )
 
-    def wrap_with_to_property_string(self, code, namespace) -> str:
+    def wrap_with_to_property_string(self, code, namespace, dbu_var="dbu_per_um") -> str:
         """
         Fully-expanded string form of this field, used by
         to_property_string() - the get_properties()-facing analog of
@@ -809,10 +869,36 @@ class Field:
         to_property_string() overload (see _references_embedded_klass()),
         so those keep going through to_string(), same as
         wrap_with_to_string() already does for them.
+
+        A `dbu`-typed scalar converts to microns via `dbu_var` (in scope
+        at every to_property_string()/to_property_list_string() call site
+        - see struct_hpp_j2.py) and formats with format_coordinate_um(),
+        instead of the raw integer std::to_string() would otherwise give -
+        this is the fix for Shape's rects/polygons/paths having been the
+        only clean, unit-converted display anywhere (previously hand-
+        patched in api.cpp; every `dbu` field anywhere now converts the
+        same way, recursively, for free).
+
+        A scalar reference to an embedded klass is wrapped in its own
+        "{...}" here - to_property_string() itself returns bare,
+        unbracketed content (its own fields space-joined, no enclosing
+        brace of its own), so every *splice* site (this one, a scalar
+        reference field nested in a parent struct; and
+        wrap_with_to_display_property()'s own matching branch, a
+        top-level property-table row) is responsible for adding exactly
+        one wrapping brace pair around the nested value it embeds - the
+        same responsibility to_property_list_string() already carries
+        per list item. This reproduces api.cpp's old hand-written
+        format_rect_um()'s exact "{{llx lly} {urx ury}}" shape
+        generically: Point has no embedded-klass fields of its own so it
+        stays bare ("llx lly"), Rect's own "ll"/"ur" fields each wrap
+        their Point in one brace pair, and whatever embeds a whole Rect
+        (a list, or a scalar field like Abstract.bbox) adds the outer
+        pair.
         """
         if self.is_list:
             if self.is_reference() and self._references_embedded_klass():
-                return f"{namespace}::to_property_list_string({code})"
+                return f"{namespace}::to_property_list_string({code}, {dbu_var})"
             return f"std::to_string({code}.size())"
 
         if self.is_optional:
@@ -820,11 +906,14 @@ class Field:
 
         if self.is_reference():
             if self._references_embedded_klass():
-                return f"{namespace}::to_property_string({code})"
+                return f'"{{" + {namespace}::to_property_string({code}, {dbu_var}) + "}}"'
             return f"{namespace}::to_string({code})"
 
         if self.type == "str":
             return code
+
+        if self.type == "dbu":
+            return f"{namespace}::format_coordinate_um({namespace}::to_um({code}, {dbu_var}))"
 
         return f"std::to_string({code})"
 
@@ -851,11 +940,26 @@ class Field:
         (e.g. Instance.reference_design, stored as a bare Id), is the
         exception, via to_string() same as before - see
         _references_embedded_klass().
+
+        Deliberately leaves `dbu` fields as a raw PropertyValue::INT (not
+        micron-converted) - this is also the method backing get_field(),
+        the filter-expression leaf lookup (struct_hpp_j2.py), which has
+        no Root/dbu_per_um context and whose numeric comparisons
+        (`-filter "width > 1000"`) are defined in raw database units. Use
+        wrap_with_to_display_property() instead for anything actually
+        shown to a user - see its own docstring.
         """
+        # Note: get_filterable_scalar_fields() (the only real caller, via
+        # get_field()) excludes every reference-to-non-enum-klass field
+        # (see its own docstring), so the is_list/is_reference-embedded
+        # branches below are unreachable in practice - kept correct
+        # (with a literal dbu_per_um=1.0, since no such variable is ever
+        # in scope in get_field()) as defense-in-depth rather than left
+        # subtly broken if that filter ever changes.
         name = self.name
         if self.is_list:
             if self.is_reference() and self._references_embedded_klass():
-                return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_property_list_string({code}))'
+                return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_property_list_string({code}, 1.0))'
             return f'{namespace}::PropertyValue::make_int("{name}_count", static_cast<int64_t>({code}.size()))'
 
         # .value_or(...), not .value() - see wrap_with_to_string's own
@@ -870,12 +974,54 @@ class Field:
         if self.is_reference():
             if not self._references_embedded_klass():
                 return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_string({value}))'
-            return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_property_string({value}))'
+            return f'{namespace}::PropertyValue::make_string("{name}", "{{" + {namespace}::to_property_string({value}, 1.0) + "}}")'
         if self.type == "str":
             return f'{namespace}::PropertyValue::make_string("{name}", {value})'
         if self.type in ("float", "double", "long double"):
             return f'{namespace}::PropertyValue::make_double("{name}", static_cast<double>({value}))'
-        return f'{namespace}::PropertyValue::make_int("{name}", static_cast<int64_t>({value}))'  # int/int64_t/uint64_t/bool/etc.
+        return f'{namespace}::PropertyValue::make_int("{name}", static_cast<int64_t>({value}))'  # int/dbu/bool/etc.
+
+    def wrap_with_to_display_property(self, code, namespace, dbu_var="dbu_per_um") -> str:
+        """
+        The to_properties()-facing sibling of wrap_with_to_property(),
+        used for every user-visible property table (get_properties/
+        report_properties, the Property Viewer) - identical except a
+        `dbu` scalar becomes a micron-formatted STRING
+        (format_coordinate_um(to_um(value, dbu_var))) instead of a raw
+        PropertyValue::INT, and every recursive to_property_string()/
+        to_property_list_string() call threads `dbu_var` through so a
+        `dbu` field nested inside an embedded struct (e.g. Point.x via
+        Rect.ll) converts too. This is the fix for every non-Shape type's
+        embedded Rect/Point/Polygon/Path fields having shown raw-dbu,
+        debug-style `Rect{ll=Point{x=...}}` text while Shape's own
+        rects/polygons/paths were hand-patched (in api.cpp) to show
+        clean microns - see backend/src/api/api.cpp's now-deleted
+        replace_shape_geometry_properties for the override this
+        generalizes and replaces.
+        """
+        name = self.name
+        if self.is_list:
+            if self.is_reference() and self._references_embedded_klass():
+                return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_property_list_string({code}, {dbu_var}))'
+            return f'{namespace}::PropertyValue::make_int("{name}_count", static_cast<int64_t>({code}.size()))'
+
+        value = (
+            f"{code}.value_or({self._optional_default_cpp()})"
+            if self.is_optional
+            else code
+        )
+
+        if self.is_reference():
+            if not self._references_embedded_klass():
+                return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::to_string({value}))'
+            return f'{namespace}::PropertyValue::make_string("{name}", "{{" + {namespace}::to_property_string({value}, {dbu_var}) + "}}")'
+        if self.type == "str":
+            return f'{namespace}::PropertyValue::make_string("{name}", {value})'
+        if self.type == "dbu":
+            return f'{namespace}::PropertyValue::make_string("{name}", {namespace}::format_coordinate_um({namespace}::to_um({value}, {dbu_var})))'
+        if self.type in ("float", "double", "long double"):
+            return f'{namespace}::PropertyValue::make_double("{name}", static_cast<double>({value}))'
+        return f'{namespace}::PropertyValue::make_int("{name}", static_cast<int64_t>({value}))'  # int/bool/etc.
 
 
 @dataclass

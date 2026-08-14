@@ -135,6 +135,12 @@ struct LeHandle
     // existing elements (only iterators), so it's the correct container
     // here.
     std::deque<std::string> messages;
+
+    // Generated TCL property-reading cache - one cached_X_property_id/
+    // cached_X_properties pair per TCL-readable class not already covered
+    // by hand-written code above. Never edit generated_tcl/
+    // handle_fields.inc directly - regenerate via the regen-tcl skill.
+#include "generated_tcl/handle_fields.inc"
 };
 
 namespace
@@ -378,37 +384,6 @@ namespace
         return technology->database_units_microns;
     }
 
-    // Formats a coordinate value the way UPDATES.md 7.2 wants it shown:
-    // std::to_string's own fixed 6 decimal digits, then trailing zeros
-    // stripped in whole groups of three - never a partial group - down
-    // to whichever group first contains a non-zero digit (or entirely,
-    // dropping the decimal point too, if every digit is zero). So an
-    // exact-micron value like 1.0 collapses to "1", a 3-decimal-precise
-    // value like 0.34 collapses to "0.340" (one trailing zero kept,
-    // since the next group of three - "340" - isn't all zero), and a
-    // value that genuinely needs the full 6 digits of precision is left
-    // alone. Groups of three (not one at a time) since that's this
-    // project's own dbu/um convention - a DATABASE MICRONS value like
-    // 1000 gives exactly 3 significant decimal digits, so a *partial*
-    // trim (e.g. "0.34" instead of "0.340") would misrepresent that
-    // precision as coarser than it is.
-    std::string format_coordinate_um(double value)
-    {
-        std::string formatted = std::to_string(value); // always exactly 6 decimal digits
-        const size_t dot = formatted.find('.');
-        if (dot == std::string::npos)
-            return formatted;
-
-        size_t end = formatted.size();
-        while (end - dot - 1 >= 3 && formatted.compare(end - 3, 3, "000") == 0)
-            end -= 3;
-
-        if (end == dot + 1) // stripped every decimal digit - drop the bare "." too
-            end = dot;
-
-        return formatted.substr(0, end);
-    }
-
     // Rounds to the nearest dbu rather than truncating - a caller passing
     // e.g. 0.1um at 1000 dbu/um should get exactly 100 dbu, not silently
     // lose precision to a fractional-dbu rounding direction they didn't
@@ -418,16 +393,15 @@ namespace
         return static_cast<int64_t>(std::llround(value_um * dbu_per_um));
     }
 
-    double to_um(int64_t value_dbu, double dbu_per_um)
+    // A `dbu` field's own dbu-per-micron ratio, for property tables built
+    // before any Technology has been loaded (or with an invalid scale) -
+    // falls back to 1.0 (no scaling, same raw magnitude the field would
+    // have shown before dbu-aware formatting existed) rather than leaving
+    // every build_X_properties() call site to invent its own fallback.
+    double display_dbu_per_um(const le::Root &root)
     {
-        return static_cast<double>(value_dbu) / dbu_per_um;
+        return database_units_microns(root).value_or(1.0);
     }
-
-    // Forward-declared: its real definition needs format_rect_um/
-    // format_polygon_um/format_path_um (declared just above it), but
-    // replace_shape_geometry_properties, defined between here and there,
-    // needs to call it first.
-    std::vector<le::PropertyValue> build_combined_shape_geometry_properties(const std::vector<const le::Shape *> &shapes, double dbu_per_um);
 
     // Looks up `name` among an object's already-built to_properties()-
     // style rows - the same rows a bare `get_properties $token` (no
@@ -451,7 +425,7 @@ namespace
     // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface),
     // and - via le_object_property_count/_at's dispatch - the Property
     // Viewer's Terminal rows too (UPDATES.md 7.2's later shape-level-
-    // selection redesign). Just cmg's generated to_properties() plus a
+    // selection redesign). Just codegen's generated to_properties() plus a
     // derived "port_count" row (ports is an is_child field, not a struct
     // field in INDEXED_POOLS style, so it isn't in to_properties() at
     // all). Returns an empty vector if id doesn't name a Terminal on this
@@ -462,15 +436,15 @@ namespace
         if (!terminal)
             return {};
 
-        std::vector<le::PropertyValue> properties = le::to_properties(*terminal);
+        std::vector<le::PropertyValue> properties = le::to_properties(*terminal, display_dbu_per_um(root));
         properties.push_back(le::PropertyValue::make_int("port_count", static_cast<int64_t>(root.get_terminal_ports(id).size())));
         return properties;
     }
 
     // Same pattern as build_terminal_properties, for TerminalPort/
     // Obstruction. "shapes_count" is a derived row (Root::get_x_shapes()'s
-    // own size), not part of cmg's generated to_properties() - `shapes` is
-    // an is_child field (Shape is pooled, TCL_EXPLORATION.md Phase 3), so
+    // own size), not part of codegen's generated to_properties() - `shapes`
+    // is an is_child field (Shape is pooled, TCL_EXPLORATION.md Phase 3), so
     // it isn't a struct field at all, same reasoning as Terminal's own
     // "port_count" row in build_terminal_properties above.
     std::vector<le::PropertyValue> build_terminal_port_properties(const le::Root &root, le::TerminalPortId id)
@@ -478,7 +452,7 @@ namespace
         const le::TerminalPortData *port = root.get_terminal_port(id);
         if (!port)
             return {};
-        std::vector<le::PropertyValue> properties = le::to_properties(*port);
+        std::vector<le::PropertyValue> properties = le::to_properties(*port, display_dbu_per_um(root));
         properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_terminal_port_shapes(id).size())));
         return properties;
     }
@@ -488,7 +462,7 @@ namespace
         const le::ObstructionData *obstruction = root.get_obstruction(id);
         if (!obstruction)
             return {};
-        std::vector<le::PropertyValue> properties = le::to_properties(*obstruction);
+        std::vector<le::PropertyValue> properties = le::to_properties(*obstruction, display_dbu_per_um(root));
         properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_obstruction_shapes(id).size())));
         return properties;
     }
@@ -505,7 +479,7 @@ namespace
         const le::LibraryData *library = root.get_library(id);
         if (!library)
             return {};
-        return le::to_properties(*library);
+        return le::to_properties(*library, display_dbu_per_um(root));
     }
 
     std::vector<le::PropertyValue> build_design_properties(const le::Root &root, le::DesignId id)
@@ -513,7 +487,7 @@ namespace
         const le::DesignData *design = root.get_design(id);
         if (!design)
             return {};
-        return le::to_properties(*design);
+        return le::to_properties(*design, display_dbu_per_um(root));
     }
 
     std::vector<le::PropertyValue> build_abstract_properties(const le::Root &root, le::AbstractId id)
@@ -521,122 +495,34 @@ namespace
         const le::AbstractData *abstract = root.get_abstract(id);
         if (!abstract)
             return {};
-        return le::to_properties(*abstract);
+        return le::to_properties(*abstract, display_dbu_per_um(root));
     }
 
-    std::string format_point_um(const le::Point &point, double dbu_per_um)
-    {
-        return format_coordinate_um(to_um(point.x, dbu_per_um)) + " " + format_coordinate_um(to_um(point.y, dbu_per_um));
-    }
-
-    std::string format_points_um(const std::vector<le::Point> &points, double dbu_per_um)
-    {
-        std::string joined;
-        for (size_t i = 0; i < points.size(); ++i)
-        {
-            if (i != 0)
-                joined += " ";
-            joined += "{" + format_point_um(points[i], dbu_per_um) + "}";
-        }
-        return joined;
-    }
-
-    // One rect/polygon/path formatted as a single brace-grouped Tcl-list
-    // element, micron-converted - shared by replace_shape_geometry_properties
-    // (a single Shape's own rows) and build_combined_shape_geometry_properties
-    // (merged across several Shapes) below, so both produce identical
-    // per-element formatting.
-    std::string format_rect_um(const le::Rect &rect, double dbu_per_um)
-    {
-        return "{{" + format_point_um(rect.ll, dbu_per_um) + "} {" + format_point_um(rect.ur, dbu_per_um) + "}}";
-    }
-
-    std::string format_polygon_um(const le::Polygon &polygon, double dbu_per_um)
-    {
-        return "{" + format_points_um(polygon.points, dbu_per_um) + "}";
-    }
-
-    std::string format_path_um(const le::Path &path, double dbu_per_um)
-    {
-        return "{" + format_points_um(path.polygon.points, dbu_per_um) + " " +
-               format_coordinate_um(to_um(static_cast<int64_t>(path.width), dbu_per_um)) + "}";
-    }
-
-    // Overrides the "rects"/"polygons"/"paths" rows cmg's generically
-    // generated to_properties(ShapeData) already produced (in raw
-    // database units, via to_property_string()'s recursive
-    // "Rect{ll=Point{x=... y=...} ...}" - see UPDATES.md item 19.2's
-    // list-of-object-fields follow-up) with a clean, micron-converted
-    // coordinate listing - the generic codegen has no access to
-    // Technology's dbu_per_um (to_properties() only ever sees the bare
-    // ShapeData struct, not Root), so that conversion can only happen
-    // here, same as le_shape_rect_at/le_shape_polygon_point_at already
-    // do for their own dedicated accessors.
-    //
-    // The actual formatting/joining is entirely delegated to
-    // build_combined_shape_geometry_properties (a single-Shape list is
-    // just the shapes.size()==1 case of "merge across shapes") - this
-    // function's only remaining job is splicing that result into `shape`'s
-    // own full to_properties() list, replacing cmg's raw-dbu placeholder
-    // rows with it in place. There is deliberately exactly one place
-    // (build_combined_shape_geometry_properties) that knows how to turn
-    // Rect/Polygon/Path geometry into this Tcl-list string format - not
-    // two.
-    void replace_shape_geometry_properties(std::vector<le::PropertyValue> &properties, const le::ShapeData &shape, double dbu_per_um)
-    {
-        const std::vector<le::PropertyValue> geometry = build_combined_shape_geometry_properties({&shape}, dbu_per_um);
-        for (le::PropertyValue &property : properties)
-            if (const std::optional<le::PropertyValue> replacement = find_property_by_name(geometry, property.name))
-                property = *replacement;
-    }
-
-    // Merges rects/polygons/paths across every shape in `shapes` into
-    // three combined "rects"/"polygons"/"paths" string properties -
-    // replace_shape_geometry_properties's single implementation (one
-    // Shape, via build_shape_properties/get_properties on a shape:<id>
-    // token, and now also le_object_property_at's LE_OBJECT_KIND_SHAPE
-    // branch) builds on it, so there's exactly one place that knows how
-    // to turn geometry
-    // into this format, not one per caller.
-    std::vector<le::PropertyValue> build_combined_shape_geometry_properties(const std::vector<const le::Shape *> &shapes, double dbu_per_um)
-    {
-        std::string rects_joined, polygons_joined, paths_joined;
-        auto append = [](std::string &joined, const std::string &element)
-        {
-            if (!joined.empty())
-                joined += " ";
-            joined += element;
-        };
-
-        for (const le::Shape *shape : shapes)
-        {
-            if (!shape)
-                continue;
-            for (const le::Rect &rect : shape->rects)
-                append(rects_joined, format_rect_um(rect, dbu_per_um));
-            for (const le::Polygon &polygon : shape->polygons)
-                append(polygons_joined, format_polygon_um(polygon, dbu_per_um));
-            for (const le::Path &path : shape->paths)
-                append(paths_joined, format_path_um(path, dbu_per_um));
-        }
-
-        return {
-            le::PropertyValue::make_string("rects", rects_joined),
-            le::PropertyValue::make_string("polygons", polygons_joined),
-            le::PropertyValue::make_string("paths", paths_joined),
-        };
-    }
-
+    // codegen's generated to_properties(ShapeData, dbu_per_um) now
+    // produces the exact same clean, micron-converted, brace-nested
+    // "rects"/"polygons"/"paths" rows this file used to hand-build (via a
+    // since-deleted format_rect_um/format_polygon_um/format_path_um +
+    // replace_shape_geometry_properties override) - the codegen fix that
+    // made every `dbu` field convert to microns, and every embedded-klass
+    // reference brace-wrap itself, generalizes Shape's old one-off
+    // special case to every class. No override needed anymore.
     std::vector<le::PropertyValue> build_shape_properties(const le::Root &root, le::ShapeId id)
     {
         const le::ShapeData *shape = root.get_shape(id);
         if (!shape)
             return {};
-        std::vector<le::PropertyValue> properties = le::to_properties(*shape);
-        if (const std::optional<double> dbu_per_um = database_units_microns(root))
-            replace_shape_geometry_properties(properties, *shape, *dbu_per_um);
-        return properties;
+        return le::to_properties(*shape, display_dbu_per_um(root));
     }
+
+    // Generated TCL property-reading surface (internal helpers only -
+    // build_X_properties/to_c/from_c overloads; these stay inside this
+    // anonymous namespace, same as build_shape_properties above - see
+    // generated_tcl/property_accessors_public.inc, included later in
+    // this file inside extern "C", for the externally-linked
+    // le_X_property_count/_at/_path etc. Never edit
+    // generated_tcl/property_accessors_internal.inc directly - regenerate
+    // via the regen-tcl skill instead.
+#include "generated_tcl/property_accessors_internal.inc"
 
     // Shared by le_add_shape_polygon/le_add_shape_path - builds a Polygon
     // from a flat microns array (alternating x/y). nullopt on any invalid
@@ -1011,6 +897,18 @@ namespace
 
 extern "C"
 {
+    // Generated TCL property-reading surface (public, externally-linked
+    // functions - le_X_property_count/_at/_path, friendly-id-by-name
+    // lookups, is_child-field enumeration - declared in api.hpp's own
+    // generated_tcl/declarations.inc, called from le_tcl_shim.cpp) for
+    // every TCL-readable class not already covered by hand-written code.
+    // Must live inside this extern "C" block, not the anonymous namespace
+    // above (internal linkage there would make these unresolvable from
+    // other translation units) - see
+    // generated_tcl/property_accessors_public.inc's own header comment.
+    // Never edit that file directly - regenerate via the regen-tcl skill.
+#include "generated_tcl/property_accessors_public.inc"
+
     LeHandle *le_create(void)
     {
         return new LeHandle();
@@ -1203,6 +1101,23 @@ extern "C"
             .abstract_id = to_c(handle->root.get_design_abstract(design_id)),
             .name = design ? design->name.c_str() : nullptr,
         };
+    }
+
+    // Technology is a single shared per-session instance, same assumption
+    // database_units_microns() already makes (root.get_technology_ids().front()).
+    // Hand-written, not generated - it's a session/singleton lookup, not
+    // per-class CRUD (see backend/CLAUDE.md's TCL section).
+    LeTechnologyId le_technology_id(LeHandle *handle)
+    {
+        const LeTechnologyId invalid{.index = UINT32_MAX, .generation = 0};
+        if (!handle)
+            return invalid;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+
+        const auto technology_ids = handle->root.get_technology_ids();
+        if (technology_ids.empty())
+            return invalid;
+        return to_c(technology_ids.front());
     }
 
     int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id)
@@ -3158,10 +3073,10 @@ extern "C"
 
         const le::Rect &rect = shape->rects[static_cast<size_t>(index)];
         return LeRectUm{
-            .ll_x_um = to_um(rect.ll.x, *dbu_per_um),
-            .ll_y_um = to_um(rect.ll.y, *dbu_per_um),
-            .ur_x_um = to_um(rect.ur.x, *dbu_per_um),
-            .ur_y_um = to_um(rect.ur.y, *dbu_per_um),
+            .ll_x_um = le::to_um(rect.ll.x, *dbu_per_um),
+            .ll_y_um = le::to_um(rect.ll.y, *dbu_per_um),
+            .ur_x_um = le::to_um(rect.ur.x, *dbu_per_um),
+            .ur_y_um = le::to_um(rect.ur.y, *dbu_per_um),
         };
     }
 
@@ -3242,7 +3157,7 @@ extern "C"
             return invalid;
 
         const le::Point &point = points[static_cast<size_t>(point_index)];
-        return LePointUm{.x_um = to_um(point.x, *dbu_per_um), .y_um = to_um(point.y, *dbu_per_um)};
+        return LePointUm{.x_um = le::to_um(point.x, *dbu_per_um), .y_um = le::to_um(point.y, *dbu_per_um)};
     }
 
     int le_add_shape_polygon(LeHandle *handle, LeShapeId id, const double *points_um, int32_t point_coord_count)
@@ -3301,7 +3216,7 @@ extern "C"
         const std::optional<double> dbu_per_um = database_units_microns(handle->root);
         if (!dbu_per_um)
             return 0;
-        return to_um(static_cast<int64_t>(shape->paths[static_cast<size_t>(path_index)].width), *dbu_per_um);
+        return le::to_um(static_cast<int64_t>(shape->paths[static_cast<size_t>(path_index)].width), *dbu_per_um);
     }
 
     int32_t le_shape_path_point_count(LeHandle *handle, LeShapeId id, int32_t path_index)
@@ -3335,7 +3250,7 @@ extern "C"
             return invalid;
 
         const le::Point &point = points[static_cast<size_t>(point_index)];
-        return LePointUm{.x_um = to_um(point.x, *dbu_per_um), .y_um = to_um(point.y, *dbu_per_um)};
+        return LePointUm{.x_um = le::to_um(point.x, *dbu_per_um), .y_um = le::to_um(point.y, *dbu_per_um)};
     }
 
     int le_add_shape_path(LeHandle *handle, LeShapeId id, double width_um, const double *points_um, int32_t point_coord_count)
@@ -3356,7 +3271,7 @@ extern "C"
         if (!dbu_per_um)
             return 1;
 
-        shape->paths.push_back(le::Path{.polygon = std::move(*polygon), .width = static_cast<uint64_t>(to_dbu(width_um, *dbu_per_um))});
+        shape->paths.push_back(le::Path{.polygon = std::move(*polygon), .width = to_dbu(width_um, *dbu_per_um)});
         handle->root.bump_mutation_version();
         return 0;
     }

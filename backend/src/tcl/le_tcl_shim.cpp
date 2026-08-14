@@ -228,6 +228,18 @@ namespace
     }
 }
 
+// Generated TCL property-reading surface - friendly-id resolve/format,
+// property-table accessors, and is_child-field enumeration, for every
+// TCL-readable class not already covered by hand-written code above.
+// Placed here (after the anonymous namespace above, before every bare
+// function below) so session()/pack/unpack/return_string/
+// format_property_value/resolve_numeric_friendly_id/
+// format_numeric_friendly_id are all already in scope, and so
+// technology_id() below can use the generated format_technology_id().
+// Never edit generated/le_tcl_shim_generated.inc directly - regenerate
+// via the regen-tcl skill instead.
+#include "generated/le_tcl_shim_generated.inc"
+
 int read_lef(const char *path)
 {
     return le_read_lef(session(), path);
@@ -276,6 +288,14 @@ long long design_abstract_id(int design_index)
 long long design_by_name(const char *name)
 {
     return pack(le_design_by_name(session(), name));
+}
+
+const char *technology_id()
+{
+    LeTechnologyId id = le_technology_id(session());
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    return return_string(format_technology_id(id));
 }
 
 int set_current_design_cmd(long long design_id)

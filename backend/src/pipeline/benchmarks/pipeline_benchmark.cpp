@@ -830,7 +830,7 @@ static void BM_ToPropertiesObstructionCopyCost(benchmark::State &state)
 
     for (auto _ : state)
     {
-        const auto properties = le::to_properties(*obstruction);
+        const auto properties = le::to_properties(*obstruction, /*dbu_per_um=*/1000.0);
         benchmark::DoNotOptimize(properties.data());
     }
 }

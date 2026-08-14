@@ -21,7 +21,7 @@ none of these are duplicated here.
 ## Layout
 
 - `src/database/` — the object-pool database. `schema.py` is the source of
-  truth (a `cmg.Schema` of `Klass`/`Field` definitions); `generated/` is
+  truth (a `codegen.Schema` of `Klass`/`Field` definitions); `generated/` is
   produced from it and must never be hand-edited (see Database codegen below).
   `database.hpp` is the single public include (`#include "generated/root.hpp"`).
 - `src/geometry/` — `Geometry`, a Boost.Geometry-backed wrapper (bbox, overlap,
@@ -167,6 +167,23 @@ none of these are duplicated here.
   rather than crashing. Fully covered by `api_test.cpp`, using a small
   hand-written `.lef` fixture. Depends on `database`, `geometry`, `scene`,
   `view_style`, `pipeline`, `render`, `io`.
+- `src/tcl/` — `le_api.i` (SWIG), `le_tcl_shim.hpp`/`.cpp`, `le_tcl_procs.tcl`:
+  a Tcl-facing scripting surface wrapping `api.hpp` (see TCL_EXPLORATION.md),
+  distinct from `src/api/`'s Dart-FFI-facing one — domain verb command
+  names, no visible handle, friendly string ids (`"terminal:NAME"`/
+  `"layer:M1"`/`"shape:3"`, name-based or numeric depending on the class -
+  see `le_tcl_shim.hpp`'s own "IDs" comment) instead of raw `Le*Id` structs.
+  `le_shell` (Tcl_Main-based) and any `tclsh` can both load `le_tcl.so` and
+  source `le_tcl_procs.tcl`. Property *reading* (property tables,
+  friendly-id resolution, `is_child` enumeration) is generated for every
+  TCL-readable class — see "TCL codegen" below; CRUD (`create_X`/`delete_X`/
+  `set_X_<field>`, `get_<type>` search) stays hand-written, currently only
+  for `Terminal`/`TerminalPort`/`Obstruction`/`Shape` (+ `Abstract`'s
+  boundary) — the classes this MVP actually edits, not read-only LEF
+  technology reference data (`Technology`/`Layer`/`Via`/...). Fully covered
+  by `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl`
+  (run via `tclsh8.6`, not the generic `tclsh` — see the `build-test`
+  skill).
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
   Built by its own `Makefile` via `ExternalProject_Add` in the top-level
   `CMakeLists.txt`; only `lef/` is wired into the build so far (`def/` is
@@ -175,11 +192,15 @@ none of these are duplicated here.
 - Each module's tests live alongside it in a `tests/` subdirectory (e.g.
   `src/database/tests/database_test.cpp`), hand-written GTest.
 
-## Database codegen (cmg)
+## Database codegen (codegen)
 
-Generated code follows the **INDEXED_POOLS** export style from
-[cmg](https://github.com/johndru-astrophysics/cmg) — not cmg's default
-(`SMART_POINTERS`). Every `Klass` in `schema.py` becomes:
+Generated code follows the **INDEXED_POOLS** export style, produced by this
+project's own `codegen` fork (repo root: `codegen/` — a project-specific
+fork of [cmg](https://github.com/johndru-astrophysics/cmg), which stays
+generic/reusable; `codegen` owns this project's own display/formatting
+conventions instead, e.g. the `dbu` field type and its LEF/DEF unit-conversion
+formatting — see `codegen/codegen/schema.py`'s `TYPEMAP` and
+`Field.wrap_with_to_property*`). Every `Klass` in `schema.py` becomes:
 
 - `XxxData` — a plain data struct.
 - `XxxId` — a `{index, generation}` handle (see `generated/ids.hpp`), not a
@@ -190,19 +211,39 @@ Generated code follows the **INDEXED_POOLS** export style from
   parent→children and lookup-by-field indices, and exposes
   `create_x`/`get_x`/`get_x_ids`/`for_each_x_id`/`clear_x`/`get_x_size` per class.
 
-To change the schema: edit `src/database/schema.py`, bump `Schema.version`,
-then regenerate with the `regen-database` skill rather than editing
-`generated/` by hand. Real test coverage lives in each module's own
-`tests/` directory, not `generated/` — `cmg` doesn't emit test files.
+To change the schema: edit `src/database/schema.py`, bump `Schema.version`
+(only needed for a real field/class shape change, not a pure codegen-side
+formatting change), then regenerate with the `regen-database` skill rather
+than editing `generated/` by hand. Real test coverage lives in each module's
+own `tests/` directory, not `generated/` — codegen doesn't emit test files.
+
+## TCL codegen (codegen, `--target tcl`)
+
+A separate generation target from the database one above (`regen-tcl`
+skill, not `regen-database`) — covers `src/tcl/`'s property-*reading*
+surface: `src/api/generated_tcl/` (`declarations.inc`/`handle_fields.inc`/
+`property_accessors_internal.inc`/`property_accessors_public.inc`,
+`#include`d from `api.hpp`/`api.cpp`) and `src/tcl/generated/`
+(`le_tcl_shim_generated.hpp`/`.inc`, `le_api_generated.i`,
+`le_tcl_procs_generated.tcl`, `#include`d/`%include`d/`source`d from
+`le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`). Every pool-backed
+`Klass` gets a generated property table, friendly-id resolution, and
+`is_child`-field enumeration by default (`Klass.tcl_readable`/
+`Klass.tcl_id_field` in `codegen/codegen/schema.py` — see the `regen-tcl`
+skill for the opt-out/override mechanics and the full list of injection
+points) *unless* it's one of the 7 classes with hand-written CRUD
+(`codegen/codegen/tcl_generator.py`'s `HAND_WRITTEN_CLASSES`), which keep
+their own hand-written property accessors to avoid duplicate-symbol
+collisions. CRUD generation (`create_X`/`delete_X`/`set_X_<field>`,
+`get_<type>` search) is a deliberately separate, not-yet-built effort —
+it needs real new per-type infrastructure (result caching, filter-table
+registration) this target doesn't provide.
 
 ## Open gaps (tracked in README's Plan checklist)
 
 - `src/lefdef/def` is vendored but not yet wired into `CMakeLists.txt` — add
   an `ExternalProject_Add(def_lib ...)` (mirroring `lef_lib`) when a DEF
   reader module is added.
-- `cmg` itself isn't installed in this environment — see the `regen-database`
-  skill for setup (or run it via `poetry run cmg` from the local
-  `/Volumes/Docking/Projects/synthosilicon/cmg` checkout).
 - Skia isn't vendored/built by this project — `src/render/`'s
   `CMakeLists.txt` `skia` target points `SKIA_DIR` at a pre-built checkout
   (default `/Volumes/Docking/Projects/synthosilicon/skia/skia`, override with
@@ -315,7 +356,8 @@ copy wholesale.
 
 ## Skills
 
-- `regen-database` — regenerate `src/database/generated/` from `schema.py` via `cmg`.
+- `regen-database` — regenerate `src/database/generated/` from `schema.py` via the local `codegen` fork.
+- `regen-tcl` — regenerate `src/tcl`'s generated property-reading surface from `schema.py` via the local `codegen` fork's `tcl` target.
 - `build-test` — configure/build/test the CMake project once one exists.
 - `cpp-review` — review pending changes for missing test coverage, unnecessary
   allocations/copies/moves, memory safety, and other issues; reports via

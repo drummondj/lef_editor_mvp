@@ -308,37 +308,14 @@ proc get_shapes {args} {
 
 # --- get_properties/report_properties (UPDATES.md item 19.2) ---
 #
-# Replaces the old per-type terminal_properties/terminal_port_properties/
-# obstruction_properties procs with one generic pair that works on any
-# friendly-id token (library:/design:/abstract:/terminal:/terminal_port:/
-# obstruction:/shape:), dispatching by the token's own prefix - nothing
-# else in this file needs a 7-way type dispatch like this, so unlike the
-# get_<type> commands above (which lean on `check_of_prefixes` matching
-# just the one-or-two prefixes each command cares about) this is its own
-# small helper.
-
-# Maps a friendly-id token to its {count name value path} shim-function
-# quadruplet - count/name/value back properties_for_token's "list
-# everything" mode, path backs get_properties' own dotted/chained
-# property-name lookups (see get_properties' own comment).
-proc property_accessors_for_token {token} {
-    if {[string match "library:*" $token]} {
-        return {library_property_count library_property_name library_property_value library_property_path}
-    } elseif {[string match "design:*" $token]} {
-        return {design_property_count design_property_name design_property_value design_property_path}
-    } elseif {[string match "abstract:*" $token]} {
-        return {abstract_property_count abstract_property_name abstract_property_value abstract_property_path}
-    } elseif {[string match "terminal_port:*" $token]} {
-        return {terminal_port_property_count terminal_port_property_name terminal_port_property_value terminal_port_property_path}
-    } elseif {[string match "terminal:*" $token]} {
-        return {terminal_property_count terminal_property_name terminal_property_value terminal_property_path}
-    } elseif {[string match "obstruction:*" $token]} {
-        return {obstruction_property_count obstruction_property_name obstruction_property_value obstruction_property_path}
-    } elseif {[string match "shape:*" $token]} {
-        return {shape_property_count shape_property_name shape_property_value shape_property_path}
-    }
-    error "get_properties: unrecognized token \"$token\" - expected a friendly id (library:/design:/abstract:/terminal:/terminal_port:/obstruction:/shape:)"
-}
+# property_accessors_for_token (dispatches a friendly-id token to its
+# {count name value path} shim-function quadruplet by prefix, across
+# every TCL-readable class - not just library:/design:/abstract:/
+# terminal:/terminal_port:/obstruction:/shape:) is generated - see
+# generated/le_tcl_procs_generated.tcl and backend/CLAUDE.md's TCL
+# section. Never edit that file directly, regenerate via the regen-tcl
+# skill instead.
+source [file join [file dirname [info script]] generated le_tcl_procs_generated.tcl]
 
 # All properties for one token, as a dict - the shared building block
 # behind both get_properties and report_properties.

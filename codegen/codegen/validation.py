@@ -121,7 +121,7 @@ class FieldExampleMatchesTypeRule(BaseRule):
                 continue
             for field in klass.fields:
                 has_error = False
-                if field.type in TYPEMAP:
+                if field.type in TYPEMAP and field.example is not None:
                     if not isinstance(field.example, TYPEMAP[field.type][1]):
                         has_error = True
 

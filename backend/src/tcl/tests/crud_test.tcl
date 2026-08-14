@@ -139,8 +139,11 @@ if {[catch {get_properties {} .name}]} {
 }
 
 if {[catch {get_properties bogus_token:1} err]} {
+    # Prefix list is generated (property_accessors_for_token, see
+    # generated/le_tcl_procs_generated.tcl) and covers every TCL-readable
+    # class, not just the 7 with hand-written CRUD.
     check "get_properties unrecognized token error message" \
-        "get_properties: unrecognized token \"bogus_token:1\" - expected a friendly id (library:/design:/abstract:/terminal:/terminal_port:/obstruction:/shape:)" \
+        "get_properties: unrecognized token \"bogus_token:1\" - expected a friendly id (technology:/layer:/site:/non_default_rule:/via:/via_rule:/shape:/library:/design:/abstract:/terminal:/terminal_port:/obstruction:/schematic:/instance:)" \
         $err
 } else {
     puts stderr "FAIL: get_properties on an unrecognized token did not raise a Tcl error"
@@ -265,14 +268,15 @@ check "get_properties on a shape token" M1 [dict get [get_properties $shape] lay
 
 # --- get_properties on non-pooled object-list fields (rects/polygons/
 # paths/...) returns the full list with all coordinates, not a bare
-# "<field>_count". Shape's own rects/polygons/paths get a further,
-# hand-written override (build_shape_properties/
-# replace_shape_geometry_properties in api.cpp) on top of the generic
-# cmg-generator behavior: clean micron-converted coordinates
-# ("{{ll_x ll_y} {ur_x ur_y}}" per rect, not raw-dbu
-# "Rect{ll=Point{x=.. y=..} ..}") - the generic codegen has no
-# Technology/dbu_per_um access to do that conversion itself, so it can
-# only happen here, same as le_shape_rect_at's own dedicated accessor. ---
+# "<field>_count" - clean, micron-converted, brace-nested coordinates
+# ("{{ll_x ll_y} {ur_x ur_y}}" per rect), generated generically for every
+# class (codegen/codegen/schema.py's `dbu` field type + Field.wrap_with_*
+# methods - see backend/CLAUDE.md's Database codegen section), not a
+# Shape-only hand-written override anymore. A Path's own "polygon" field
+# is itself a reference to an embedded Polygon, so it gets its own
+# wrapping brace group like any other embedded-klass reference (Polygon's
+# points list nested one level inside that, width a sibling alongside
+# it) - not flattened flush with width. ---
 
 set shape_props [get_properties $shape]
 check "get_properties rects is a clean micron-converted list, not a count" \
@@ -282,7 +286,7 @@ check "get_properties polygons is a clean micron-converted point list" \
     {{{0 0} {5 0} {5 5} {0 5}}} \
     [dict get $shape_props polygons]
 check "get_properties paths is a clean micron-converted point list plus width" \
-    {{{0 0} {10 10} {20 0} 0.500}} \
+    {{{{0 0} {10 10} {20 0}} 0.500}} \
     [dict get $shape_props paths]
 check_true "rects_count is no longer a property (removed, confusing once the list itself is available)" \
     [expr {![dict exists $shape_props rects_count]}]
@@ -322,9 +326,9 @@ check "get_properties single-segment .rects (not just the bare-token dict form)"
 check "get_properties single-segment .polygons" \
     {{{0 0} {5 0} {5 5} {0 5}}} [get_properties $shape .polygons]
 check "get_properties single-segment .paths" \
-    {{{0 0} {10 10} {20 0} 0.500}} [get_properties $shape .paths]
+    {{{{0 0} {10 10} {20 0}} 0.500}} [get_properties $shape .paths]
 check "get_properties many single-segment object-list names together" \
-    [list {{{2 2} {8 8}}} {{{0 0} {5 0} {5 5} {0 5}}} {{{0 0} {10 10} {20 0} 0.500}} M1] \
+    [list {{{2 2} {8 8}}} {{{0 0} {5 0} {5 5} {0 5}}} {{{{0 0} {10 10} {20 0}} 0.500}} M1] \
     [get_properties $shape {.rects .polygons .paths .layer_name}]
 
 check "remove_shape_rect return code" 0 [remove_shape_rect $shape 0]

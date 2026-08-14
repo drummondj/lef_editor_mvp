@@ -92,6 +92,7 @@ int viewport_height();
 
 long long design_abstract_id(int design_index);
 long long design_by_name(const char *name);
+const char *technology_id();
 int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
@@ -182,3 +183,8 @@ int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
 int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
 int remove_shape_path(const char *id, int path_index);
+
+// --- Generated TCL property-reading surface (see backend/CLAUDE.md's
+// TCL section) - never edit generated/le_api_generated.i directly,
+// regenerate via the regen-tcl skill instead. ---
+%include "generated/le_api_generated.i"

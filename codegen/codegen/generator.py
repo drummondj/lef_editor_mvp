@@ -2,6 +2,7 @@
 
 from logging import Logger
 from pathlib import Path
+import shutil
 import jinja2
 from codegen.templates import (
     root_hpp_j2,
@@ -48,7 +49,9 @@ def generate(schema: Schema, output_dir: str, logger: Logger) -> int:
 
     logger.info("Generating code ...")
 
-    # Create the directory
+    # Delete and fully recreate the directory, so a removed/renamed class
+    # or field can't leave a stale generated file behind.
+    shutil.rmtree(output_dir, ignore_errors=True)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Link the schema

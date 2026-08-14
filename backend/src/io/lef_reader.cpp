@@ -1774,7 +1774,7 @@ namespace le
     std::vector<Shape> LEFReader::shapes_from_parser(LEFReader *reader, lefiGeometries *geometries)
     {
         std::vector<Shape> shapes;
-        uint64_t width = 0;
+        int64_t width = 0;
         uint64_t geo_count = 0;
 
         shapes.reserve(geometries->numItems());

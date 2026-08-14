@@ -37,31 +37,39 @@ namespace {{schema.namespace}}
     }
 
     /**
-        @brief Fully-expanded (no list ever collapsed to a count) string
-        form of this value, used by to_properties() (via
-        Field::wrap_with_to_property()/wrap_with_to_property_string()) to
-        serialize an embedded (non-pooled) Klass list item or scalar
-        reference field for get_properties() - the get_properties()-facing
-        analog of to_string(), which deliberately collapses list fields to
-        a bare count instead, for compact debug logging. Never called
-        directly - only from generated to_properties()/
-        to_property_list_string() bodies, same as to_string() itself.
+        @brief Fully-expanded (no list ever collapsed to a count), Tcl-
+        list-friendly string form of this value, used by to_properties()
+        (via Field::wrap_with_to_display_property()/
+        wrap_with_to_property_string()) to serialize an embedded
+        (non-pooled) Klass list item or scalar reference field for
+        get_properties() - the get_properties()-facing analog of
+        to_string(), which deliberately collapses list fields to a bare
+        count instead (and keeps "ClassName{field=value}" debug
+        labeling) for compact debug logging. This one recurses fully and
+        drops all labeling - just this klass's own field values, bare
+        space-joined (no enclosing brace of its own; a scalar reference
+        to an embedded klass, or a list element, gets exactly one
+        wrapping "{...}" at the *splice* site instead - see
+        wrap_with_to_property_string()'s own docstring for the full
+        recursive-bracing rule and why). Never called directly - only
+        from generated to_properties()/to_property_list_string() bodies,
+        same as to_string() itself.
     */
-    inline std::string to_property_string(const {{schema.namespace}}::{{klass.name}}{{"Data" if klass.has_pool}} &value)
+    inline std::string to_property_string(const {{schema.namespace}}::{{klass.name}}{{"Data" if klass.has_pool}} &value, double dbu_per_um)
     {
-        std::string output = "{{klass.name}}{";
+        std::string output;
         {%- for field in klass.get_struct_fields() %}
-        output += "{{field.name}}=" + {{field.wrap_with_to_property_string('value.' + field.name, schema.namespace)}} + " ";
+        if (!output.empty()) output += " ";
+        output += {{field.wrap_with_to_property_string('value.' + field.name, schema.namespace)}};
         {%- endfor %}
-        output += "}";
         return output;
     }
 
-    inline std::vector<{{schema.namespace}}::PropertyValue> to_properties(const {{schema.namespace}}::{{klass.name}}{{"Data" if klass.has_pool}} &value)
+    inline std::vector<{{schema.namespace}}::PropertyValue> to_properties(const {{schema.namespace}}::{{klass.name}}{{"Data" if klass.has_pool}} &value, double dbu_per_um)
     {
         std::vector<{{schema.namespace}}::PropertyValue> properties;
         {%- for field in klass.get_property_fields() %}
-        properties.push_back({{field.wrap_with_to_property('value.' + field.name, schema.namespace)}});
+        properties.push_back({{field.wrap_with_to_display_property('value.' + field.name, schema.namespace)}});
         {%- endfor %}
         return properties;
     }

@@ -1682,6 +1682,22 @@ extern "C"
     /// this handle, or path_index is out of range.
     int le_remove_shape_path(LeHandle *handle, LeShapeId id, int32_t path_index);
 
+    // --- Generated TCL property-reading surface (see backend/CLAUDE.md's
+    // TCL section) - one Id typedef, friendly-id-by-name lookup, property
+    // table accessors, and is_child-field enumeration pairs, for every
+    // TCL-readable class not already covered by hand-written code above.
+    // Never edit generated_tcl/declarations.inc directly - regenerate via
+    // the regen-tcl skill instead. ---
+#include "generated_tcl/declarations.inc"
+
+    /// @brief The singleton Technology's friendly id (see
+    /// le_tcl_shim.hpp's own "IDs" comment for the friendly-id
+    /// convention this feeds) - Technology is a single shared per-
+    /// session instance, same assumption database_units_microns() (api.cpp)
+    /// already makes. Returns an invalid id (index == UINT32_MAX) if no
+    /// Technology has been read yet.
+    LeTechnologyId le_technology_id(LeHandle *handle);
+
 #ifdef __cplusplus
 }
 #endif
