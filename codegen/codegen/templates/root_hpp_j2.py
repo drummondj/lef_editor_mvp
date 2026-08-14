@@ -1,0 +1,218 @@
+TEMPLATE = """
+#pragma once
+#include "ids.hpp"
+#include "pool.hpp"
+#include "index.hpp"
+{%- for klass in schema.classes %}
+#include "{{klass.to_snake_case()}}.hpp"
+{%- endfor %}
+#include <algorithm>
+#include <cassert>
+#include <string>
+
+namespace {{schema.namespace}} {
+    class Root {
+    public:
+        /// @brief Monotonic counter bumped by every bump_mutation_version()
+        /// call - a cheap way for a caller (e.g. a render pipeline's own
+        /// cache key) to tell whether *any* database content has changed
+        /// since it last checked, without needing per-field/per-class
+        /// change tracking. Mirrors Scene::selection_version()'s existing
+        /// pattern (see scene.hpp) for the same reason: a hand-written,
+        /// domain-specific mutation site (e.g. api.cpp's own CRUD
+        /// functions - see TCL_EXPLORATION.md) calls bump_mutation_version()
+        /// explicitly, since not every mutation goes through a generated
+        /// create_x/delete_x/set_x_<field> (e.g. appending to a plain list
+        /// field via a mutable get_x() pointer never does) - this Root
+        /// method only tracks the counter itself, not when to bump it.
+        uint64_t mutation_version() const { return mutation_version_; }
+
+        /// @brief Bump the counter returned by mutation_version(). Call
+        /// once per logical mutation (not once per internal step of a
+        /// multi-step one) after the database content actually changed.
+        void bump_mutation_version() { ++mutation_version_; }
+
+    {%- for klass in schema.get_pool_classes() %}
+        /// @brief Create a {{klass.name}} object
+        {{klass.name}}Id create_{{klass.to_snake_case()}}({{klass.name}}Data data) {
+            {{klass.name}}Id id = {{klass.to_snake_case()}}_.create(std::move(data));
+
+        {%- if klass.has_indecies() %}
+            const auto& d = *{{klass.to_snake_case()}}_.get(id);
+        {%- endif %}
+
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.parent %}
+                {%- if field._parent_field.is_list %}
+            if (d.{{field.name}}.valid())
+                index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[d.{{field.name}}].push_back(id);
+                {%- else %}
+            if (d.{{field.name}}.valid())
+                index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[d.{{field.name}}] = id;
+                {%- endif %}
+            {%- elif field.index %}
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}[d.{{field.name}}] = id;
+            {%- endif %}
+        {%- endfor %}
+            return id;
+        }
+
+        /// @brief Erase the {{klass.name}} at {{klass.name}}Id, cleaning up
+        /// any parent/index bookkeeping that referenced it. Does not
+        /// cascade to children referencing this id - a child holding a
+        /// now-dangling {{klass.name}}Id degrades gracefully the same way
+        /// any other not-found lookup already does (see get_{{klass.to_snake_case()}}()),
+        /// rather than being eagerly deleted itself. False (no-op) if id
+        /// doesn't exist.
+        bool delete_{{klass.to_snake_case()}}({{klass.name}}Id id) {
+            const auto* existing = {{klass.to_snake_case()}}_.get(id);
+            if (!existing) return false;
+
+        {%- if klass.has_indecies() %}
+            const auto& d = *existing;
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.parent %}
+                {%- if field._parent_field.is_list %}
+            {
+                auto it = index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.find(d.{{field.name}});
+                if (it != index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.end()) {
+                    it->second.erase(std::remove(it->second.begin(), it->second.end(), id), it->second.end());
+                }
+            }
+                {%- else %}
+            index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.erase(d.{{field.name}});
+                {%- endif %}
+            {%- elif field.index %}
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}.erase(d.{{field.name}});
+            {%- endif %}
+        {%- endfor %}
+        {%- endif %}
+            return {{klass.to_snake_case()}}_.erase(id);
+        }
+
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.parent or field.index %}
+        /// @brief Set {{klass.name}}'s {{field.name}}, keeping the relevant
+        /// Root index in sync (unlike assigning through
+        /// get_{{klass.to_snake_case()}}() directly, which would leave a
+        /// stale index entry behind). False (no-op) if id doesn't exist.
+        bool set_{{klass.to_snake_case()}}_{{field.name}}({{klass.name}}Id id, {{field.get_cpp_type()}} value) {
+            auto* existing = {{klass.to_snake_case()}}_.get(id);
+            if (!existing) return false;
+            if (existing->{{field.name}} == value) return true;
+
+            {%- if field.parent %}
+                {%- if field._parent_field.is_list %}
+            {
+                auto& old_siblings = index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[existing->{{field.name}}];
+                old_siblings.erase(std::remove(old_siblings.begin(), old_siblings.end(), id), old_siblings.end());
+            }
+                {%- else %}
+            index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.erase(existing->{{field.name}});
+                {%- endif %}
+            {%- else %}
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}.erase(existing->{{field.name}});
+            {%- endif %}
+
+            existing->{{field.name}} = value;
+
+            {%- if field.parent %}
+                {%- if field._parent_field.is_list %}
+            {
+                auto& new_siblings = index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[value];
+                if (std::find(new_siblings.begin(), new_siblings.end(), id) == new_siblings.end())
+                    new_siblings.push_back(id);
+            }
+                {%- else %}
+            index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[value] = id;
+                {%- endif %}
+            {%- else %}
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}[value] = id;
+            {%- endif %}
+            return true;
+        }
+            {%- endif %}
+        {%- endfor %}
+
+        /// @brief Get mutable {{klass.name}}Data from a {{klass.name}}Id
+        {{klass.name}}Data* get_{{klass.to_snake_case()}}({{klass.name}}Id id) { return {{klass.to_snake_case()}}_.get(id); }
+
+        /// @brief Get immutable {{klass.name}}Data from a {{klass.name}}Id
+        const {{klass.name}}Data* get_{{klass.to_snake_case()}}({{klass.name}}Id id) const { return {{klass.to_snake_case()}}_.get(id); }
+
+        /// @brief Get all {{klass.name}}Ids
+        const std::vector<{{klass.name}}Id> get_{{klass.to_snake_case()}}_ids() const { return {{klass.to_snake_case()}}_.ids(); }
+
+        /// @brief Test if {{klass.name}} pool is empty
+        bool is_{{klass.to_snake_case()}}_empty() { return {{klass.to_snake_case()}}_.is_empty(); }
+
+        /// @brief Clear all data from {{klass.name}} pool
+        void clear_{{klass.to_snake_case()}}() { return {{klass.to_snake_case()}}_.clear(); }
+
+        /// @brief Get size of {{klass.name}} pool
+        uint64_t get_{{klass.to_snake_case()}}_size() { return {{klass.to_snake_case()}}_.size(); }
+
+        /// @brief Iterate through {{klass.name}}Ids
+        template <typename Fn>
+        void for_each_{{klass.to_snake_case()}}_id(Fn&& fn) const {
+            return {{klass.to_snake_case()}}_.for_each_id(fn);
+        }
+
+        /// @brief Collect every {{klass.name}}Id whose data satisfies
+        /// `predicate(root, id, data) -> bool`. A linear scan - no
+        /// index-fast-path, correctness first (see TCL_EXPLORATION.md's
+        /// "Filter-expression architecture" for why). Not domain-specific:
+        /// filter-expression parsing/evaluation is hand-written elsewhere
+        /// (get_{{klass.to_snake_case()}}_field()/match_{{klass.to_snake_case()}}_hop() in
+        /// {{klass.to_snake_case()}}.hpp supply the per-field metadata that
+        /// evaluator needs) - this just wraps for_each_{{klass.to_snake_case()}}_id()
+        /// with a generic predicate callback.
+        template <typename Predicate>
+        std::vector<{{klass.name}}Id> search_{{klass.to_snake_case()}}(Predicate&& predicate) const {
+            std::vector<{{klass.name}}Id> results;
+            for_each_{{klass.to_snake_case()}}_id([&]({{klass.name}}Id id) {
+                if (predicate(*this, id, *{{klass.to_snake_case()}}_.get(id))) {
+                    results.push_back(id);
+                }
+            });
+            return results;
+        }
+
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.is_child and field.is_reference() %}
+                {%- if field.is_list %}
+        /// @brief Get {{field.name}} {{field.type}}Ids for the specified {{klass.name}}Id
+        const std::vector<{{field.type}}Id>& get_{{klass.to_snake_case()}}_{{field.name}}({{klass.name}}Id id) const {
+            static const std::vector<{{field.type}}Id> empty;
+            auto it = index_.{{klass.to_snake_case()}}_{{field.name}}.find(id);
+            return it == index_.{{klass.to_snake_case()}}_{{field.name}}.end() ? empty : it->second;
+        }
+                {%- else %}
+        /// @brief Get {{field.name}} {{field.type}}Id for the specified {{klass.name}}Id
+        const {{field.type}}Id get_{{klass.to_snake_case()}}_{{field.name}}({{klass.name}}Id id) const {
+            static const {{field.type}}Id empty;
+            auto entry = index_.{{klass.to_snake_case()}}_{{field.name}}.find(id);
+            if (entry == index_.{{klass.to_snake_case()}}_{{field.name}}.end())
+                return empty;
+            return entry->second;
+        }
+                {%- endif %}
+            {%- elif field.index %}
+        /// @brief Get {{klass.name}}Ids for the specified {{field.name}}
+        {{klass.name}}Id get_{{klass.to_snake_case()}}_by_{{field.name}}(const {{field.get_cpp_type()}}& {{field.name}}) const {
+            auto it = index_.{{klass.to_snake_case()}}_by_{{field.name}}.find({{field.name}});
+            return it == index_.{{klass.to_snake_case()}}_by_{{field.name}}.end() ? {{klass.name}}Id{} : it->second;
+        }
+            {%- endif %}
+        {%- endfor %}
+    {%- endfor %}
+
+    private:
+        uint64_t mutation_version_ = 0;
+    {%- for klass in schema.get_pool_classes() %}
+        Pool<{{klass.name}}Data, {{klass.name}}Id> {{klass.to_snake_case()}}_;
+    {%- endfor %}
+        Index index_;
+    };
+}
+"""

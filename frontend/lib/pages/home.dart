@@ -1,12 +1,42 @@
+import 'dart:async';
+
 import 'package:docking/docking.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor/components/layer_manager.dart';
 import 'package:lef_editor/components/layout_editor.dart';
+import 'package:lef_editor/components/library_browser.dart';
 import 'package:lef_editor/components/main_menu.dart';
 import 'package:lef_editor/components/property_viewer.dart';
 import 'package:lef_editor/components/status_bar.dart';
-import 'package:lef_editor/components/terminal/terminal.dart';
+import 'package:lef_editor/components/terminal.dart';
+import 'package:lef_editor/components/toolbox.dart';
 import 'package:lef_editor/components/widget_card.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// Ids are Strings, so the default id<->String conversion is a plain no-op.
+class _IdLayoutParser extends LayoutParser with LayoutParserMixin {
+  const _IdLayoutParser();
+}
+
+class _HomeAreaBuilder extends AreaBuilder with AreaBuilderMixin {
+  _HomeAreaBuilder(this.buildItem);
+
+  final DockingItem Function({
+    required dynamic id,
+    double? weight,
+    bool maximized,
+  })
+  buildItem;
+
+  @override
+  DockingItem buildDockingItem({
+    required dynamic id,
+    required double? weight,
+    required bool maximized,
+  }) {
+    return buildItem(id: id, weight: weight, maximized: maximized);
+  }
+}
 
 class Home extends StatefulWidget {
   const Home({super.key});
@@ -16,59 +46,178 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  final double leftWidth = 300;
-  final double rightWidth = 110;
+  static const String _layoutPrefsKey = 'docking_layout_v1';
+  static const _IdLayoutParser _layoutParser = _IdLayoutParser();
+
+  late final DockingLayout _layout;
+  SharedPreferences? _prefs;
+  Timer? _saveDebounce;
 
   @override
-  Widget build(BuildContext context) {
-    DockingLayout layout = DockingLayout(
-      root: DockingRow([
-        DockingItem(
-          name: 'Main Menu',
+  void initState() {
+    super.initState();
+    _layout = _buildDefaultLayout();
+    _layout.addListener(_scheduleSave);
+    _restoreLayout();
+  }
+
+  @override
+  void dispose() {
+    _layout.removeListener(_scheduleSave);
+    _saveDebounce?.cancel();
+    _layout.dispose();
+    super.dispose();
+  }
+
+  // The single source of truth for each panel's identity (name, widget,
+  // closable/maximizable rules), keyed by the stable id also used to
+  // persist/restore the layout. Used both for the hardcoded default tree
+  // and to reconstruct panels from a saved layout string.
+  DockingItem _dockingItem({
+    required dynamic id,
+    double? weight,
+    bool maximized = false,
+  }) {
+    switch (id) {
+      case 'toolbox':
+        return DockingItem(
+          id: id,
+          name: 'Toolbox',
+          widget: WidgetCard(child: Toolbox()),
+          closable: false,
+          keepAlive: true,
+          maximizable: false,
+          weight: weight,
+        );
+      case 'menu':
+        return DockingItem(
+          id: id,
+          name: 'Menu',
           widget: WidgetCard(child: MainMenu()),
           closable: false,
-          size: 300,
           keepAlive: true,
-        ),
-        DockingColumn([
-          DockingItem(
-            name: 'Layout',
-            widget: WidgetCard(
-              child: Column(
-                children: [
-                  Expanded(child: LayoutEditor()),
-                  StatusBar(),
-                ],
-              ),
+          maximizable: false,
+          weight: weight,
+        );
+      case 'browser':
+        return DockingItem(
+          id: id,
+          name: 'Browser',
+          widget: WidgetCard(child: LibraryBrowser()),
+          closable: false,
+          keepAlive: true,
+          maximizable: false,
+          weight: weight,
+        );
+      case 'layout':
+        return DockingItem(
+          id: id,
+          name: 'Layout',
+          widget: WidgetCard(
+            child: Column(
+              children: [
+                Expanded(child: LayoutEditor()),
+                StatusBar(),
+              ],
             ),
-            closable: false,
-            keepAlive: true,
           ),
-          DockingItem(
-            name: 'Console',
-            widget: WidgetCard(child: Terminal()),
-            closable: false,
-            keepAlive: true,
-            size: 300,
-          ),
+          closable: false,
+          keepAlive: true,
+          weight: weight,
+          maximized: maximized,
+        );
+      case 'console':
+        return DockingItem(
+          id: id,
+          name: 'Console',
+          widget: WidgetCard(child: Terminal()),
+          closable: false,
+          keepAlive: true,
+          minimalSize: 300,
+          weight: weight ?? 0.2,
+          maximized: maximized,
+        );
+      case 'layers':
+        return DockingItem(
+          id: id,
+          name: 'Layers',
+          widget: WidgetCard(child: LayerManager()),
+          closable: false,
+          keepAlive: true,
+          weight: weight,
+          maximized: maximized,
+        );
+      case 'properties':
+        return DockingItem(
+          id: id,
+          name: 'Properties',
+          widget: WidgetCard(child: PropertyViewer()),
+          closable: false,
+          keepAlive: true,
+          weight: weight,
+          maximized: maximized,
+        );
+      default:
+        throw ArgumentError('Unknown DockingItem id: $id');
+    }
+  }
+
+  DockingLayout _buildDefaultLayout() {
+    return DockingLayout(
+      root: DockingRow([
+        DockingTabs(size: 300, minimalSize: 300, [
+          _dockingItem(id: 'toolbox'),
+          _dockingItem(id: 'menu'),
+          _dockingItem(id: 'browser'),
         ]),
-        DockingTabs(size: 400, [
-          DockingItem(
-            name: 'Layers',
-            widget: WidgetCard(child: LayerManager()),
-            closable: false,
-            keepAlive: true,
-          ),
-          DockingItem(
-            name: 'Properties',
-            widget: WidgetCard(child: PropertyViewer()),
-            closable: false,
-            keepAlive: true,
-          ),
+        DockingColumn([
+          _dockingItem(id: 'layout'),
+          _dockingItem(id: 'console'),
+        ]),
+        DockingTabs(size: 300, minimalSize: 300, [
+          _dockingItem(id: 'layers'),
+          _dockingItem(id: 'properties'),
         ]),
       ]),
     );
-    Docking docking = Docking(layout: layout);
+  }
+
+  Future<void> _restoreLayout() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    _prefs = prefs;
+
+    final String? saved = prefs.getString(_layoutPrefsKey);
+    if (saved == null) return;
+
+    try {
+      _layout.load(
+        layout: saved,
+        parser: _layoutParser,
+        builder: _HomeAreaBuilder(_dockingItem),
+      );
+    } catch (_) {
+      // Saved layout is corrupt or no longer compatible (e.g. after a panel
+      // was renamed/removed) - keep the default layout instead.
+    }
+  }
+
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    // Layout changes fire on every frame of a drag, so debounce down to one
+    // write shortly after things settle rather than hitting disk constantly.
+    _saveDebounce = Timer(const Duration(milliseconds: 500), _saveLayout);
+  }
+
+  void _saveLayout() {
+    final SharedPreferences? prefs = _prefs;
+    if (prefs == null) return;
+    prefs.setString(_layoutPrefsKey, _layout.stringify(parser: _layoutParser));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Docking docking = Docking(layout: _layout);
     MultiSplitViewTheme theme = MultiSplitViewTheme(
       data: MultiSplitViewThemeData(
         dividerThickness: 16,
@@ -104,7 +253,19 @@ class _HomeState extends State<Home> {
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surfaceDim,
       body: SafeArea(
-        child: Padding(padding: const EdgeInsets.all(16), child: theme),
+        // multi_split_view resolves a divider drag by writing straight to
+        // each Area's weight and calling plain setState() on its own
+        // private State - it never calls the MultiSplitViewController's (or
+        // by extension DockingLayout's) notifyListeners(), so there is no
+        // change-notification hook anywhere in that path to save from.
+        // Saving on every pointer-up instead sidesteps that entirely: it
+        // fires after a divider drag ends (as well as everything else,
+        // e.g. a tab move), well before the debounce in _scheduleSave()
+        // reads the now-settled weights back out.
+        child: Listener(
+          onPointerUp: (_) => _scheduleSave(),
+          child: Padding(padding: const EdgeInsets.all(16), child: theme),
+        ),
       ),
     );
   }

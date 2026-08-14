@@ -1,8 +1,6 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:lef_editor/components/library_browser.dart';
 import 'package:lef_editor/providers/le_provider.dart';
-import 'package:lef_editor_plugin/lef_editor_plugin.dart';
 import 'package:provider/provider.dart';
 
 class MainMenu extends StatefulWidget {
@@ -21,21 +19,6 @@ class _MainMenuState extends State<MainMenu> {
     for (final file in files) {
       await provider.readLef(file.path);
     }
-  }
-
-  void _openLibraryBrowser() async {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          child: SizedBox(
-            width: MediaQuery.of(context).size.width * 0.66,
-            height: MediaQuery.of(context).size.height * 0.9,
-            child: LibraryBrowser(),
-          ),
-        );
-      },
-    );
   }
 
   void _loadTestData() async {
@@ -65,32 +48,9 @@ class _MainMenuState extends State<MainMenu> {
             label: Text("Import LEF ..."),
           ),
           TextButton.icon(
-            icon: Icon(Icons.list),
-            onPressed: _openLibraryBrowser,
-            label: Text("Library Browser ..."),
-          ),
-          TextButton.icon(
             icon: Icon(Icons.my_library_books_sharp),
             onPressed: _loadTestData,
             label: Text("Load test data"),
-          ),
-          TextButton.icon(
-            icon: Icon(Icons.near_me),
-            onPressed: () =>
-                context.read<LeProvider>().setMode(LeMode.LE_MODE_SELECT),
-            label: Text("Select Mode"),
-          ),
-          TextButton.icon(
-            icon: Icon(Icons.edit),
-            onPressed: () =>
-                context.read<LeProvider>().setMode(LeMode.LE_MODE_EDIT),
-            label: Text("Edit Mode"),
-          ),
-          TextButton.icon(
-            icon: Icon(Icons.straighten),
-            onPressed: () =>
-                context.read<LeProvider>().setMode(LeMode.LE_MODE_RULER),
-            label: Text("Ruler Mode"),
           ),
           TextButton.icon(
             icon: Icon(Icons.layers_clear),
