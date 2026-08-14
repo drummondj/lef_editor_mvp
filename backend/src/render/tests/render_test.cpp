@@ -891,6 +891,65 @@ TEST_F(RenderFixture, BuildPictureDrawsAMajorGridDotAtAKnownLatticePoint)
     EXPECT_GT(SkColorGetA(sample_pixel(picture, 200, 200, 100, 100)), 0);
 }
 
+TEST_F(RenderFixture, BuildPictureUsesMinorGridColorForMajorDotsWhenMinorTierIsHidden)
+{
+    // Once zoomed out far enough that the minor tier is hidden, the
+    // major dots are the only grid left on screen - they should read as
+    // "the finest grid currently visible" (kMinorGridColor), not the
+    // bolder kMajorGridColor that implies a finer, unseen tier below.
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0); // minor 5*1=5px (hidden, <8px floor), major 50*1=50px (visible)
+    scene.set_viewport_size(200, 200);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    // dbu (50,50) is on the major lattice (multiple of 50) but off both
+    // axes -> pixel (50,50) at this pan/scale. Checking for an exact
+    // kMinorGridColor match (like the sibling test below does for
+    // kMajorGridColor) isn't reliable here: kMinorGridColor is a
+    // semi-transparent *gray*, and a tiny (kGridDotRadius=1px)
+    // antialiased circle's partially-covered edge pixels round-trip
+    // through premultiplied-alpha storage with small per-channel
+    // rounding error - unlike kMajorGridColor's pure white, which
+    // recovers exactly regardless of alpha (R=G=B=255 divides evenly by
+    // any alpha). So instead confirm a dot is present at all, and that
+    // it's specifically *not* kMajorGridColor - the two are mutually
+    // exclusive alternatives per draw_grid's own color selection, so
+    // ruling one out confirms the other.
+    const SkBitmap bitmap = rasterize(picture, 200, 200);
+    bool found_dot = false;
+    for (int y = 48; y <= 52 && !found_dot; ++y)
+        for (int x = 48; x <= 52; ++x)
+            if (SkColorGetA(bitmap.getColor(x, y)) > 0)
+            {
+                found_dot = true;
+                break;
+            }
+    EXPECT_TRUE(found_dot);
+    EXPECT_FALSE(region_shows_color(bitmap, 48, 48, 52, 52, to_sk_color(kMajorGridColor)));
+}
+
+TEST_F(RenderFixture, BuildPictureUsesMajorGridColorForMajorDotsWhenMinorTierIsAlsoVisible)
+{
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(2.0); // minor 5*2=10px and major 50*2=100px both clear the floor
+    scene.set_viewport_size(200, 200);
+
+    const auto &shapes = pipeline.run(root, scene, view_layers); // empty Abstract
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+
+    const SkBitmap bitmap = rasterize(picture, 200, 200);
+    EXPECT_TRUE(region_shows_color(bitmap, 98, 98, 102, 102, to_sk_color(kMajorGridColor)));
+    EXPECT_FALSE(region_shows_color(bitmap, 98, 98, 102, 102, to_sk_color(kMinorGridColor)));
+}
+
 TEST_F(RenderFixture, BuildPictureHidesBothGridTiersWhenTooDenseButKeepsAxisLines)
 {
     Scene scene;

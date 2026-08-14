@@ -59,6 +59,8 @@ I would like to display a grid of major and minor dots. The major dots should be
 
 A solid line should be used for the x and y axis.
 
+**Update**: once zoomed out far enough that the minor tier itself is hidden (below `kMinGridDotPixelSpacing`), the major dots now draw in the minor tier's own color (`draw_grid`, `draw_helpers.hpp`) rather than the bolder major color - at that zoom level the major dots are the only grid left on screen, so the bold treatment would visually imply a finer tier is still being contrasted against when there isn't one.
+
 ## 5.2 Mouse snapping - DONE
 
 I would like to store the current mouse position and a snapped to grid mouse position. Then display a red box around the current grid position that follows the mouse. The mouse position, in pixels, should be sent by flutter via the API. If this causes performance problems then an alternative solution may be required. For example, rendering the mouse position in a separate SkPicture and thread, then just merging it with the abstract layout picture.

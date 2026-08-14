@@ -364,7 +364,9 @@ namespace le
         auto to_pixel_y = [&](int64_t dbu_y)
         { return static_cast<SkScalar>((static_cast<double>(dbu_y) - static_cast<double>(pan.y)) * scale); };
 
-        if (minor_spacing * scale >= kMinGridDotPixelSpacing)
+        const bool minor_visible = minor_spacing * scale >= kMinGridDotPixelSpacing;
+
+        if (minor_visible)
         {
             SkPaint minor_paint;
             minor_paint.setAntiAlias(true);
@@ -384,9 +386,16 @@ namespace le
 
         if (major_spacing * scale >= kMinGridDotPixelSpacing)
         {
+            // Once zoomed out far enough that the minor tier itself is
+            // hidden (see minor_visible above), the major dots are the
+            // only grid left on screen - drawing them in the bolder
+            // kMajorGridColor at that point would visually claim there's
+            // still a finer tier being contrasted against, when there
+            // isn't; kMinorGridColor reads as "the finest grid currently
+            // visible" instead, matching what's actually true.
             SkPaint major_paint;
             major_paint.setAntiAlias(true);
-            major_paint.setColor(to_sk_color(kMajorGridColor));
+            major_paint.setColor(to_sk_color(minor_visible ? kMajorGridColor : kMinorGridColor));
             major_paint.setStyle(SkPaint::kFill_Style);
 
             for (int64_t x = first_line(dbu_x_min, major_spacing); x <= dbu_x_max; x += major_spacing)
