@@ -243,6 +243,18 @@ class LeProvider extends ChangeNotifier {
     refreshAndNotify();
   }
 
+  // Goes through the Tcl `read_lef` command (via runTclCommand), not
+  // _editor.readLef()/le_read_lef directly - Tcl's own read_lef is meant
+  // to be the only way a LEF file gets read into this provider's handle,
+  // so anything driven from the UI stays consistent with (and visible to)
+  // whatever a user also runs by hand through the Terminal (e.g.
+  // current_technology getting selected only happens inside le_read_lef
+  // itself, so both paths already share that regardless - this is about
+  // keeping one entry point, not working around a behavior gap). Braces
+  // around $path guard against Tcl word-splitting/substitution on
+  // whitespace or special characters in the path - safe for any path
+  // short of one containing a literal, unescaped '{' or '}', which a real
+  // filesystem path essentially never does.
   Future<void> readLef(String path) async {
     if (_openLefFiles.contains(path)) {
       _messageStreamController.add("ERROR: $path already open");
@@ -250,15 +262,15 @@ class LeProvider extends ChangeNotifier {
       return;
     }
     _messageStreamController.add("INFO: Reading $path");
-    if (_editor.readLef(path)) {
-      _openLefFiles.add(path);
-    }
+    final result = await runTclCommand('read_lef {$path}');
     // On failure, the backend's own le_message_count/le_message_at
     // queue already has a more specific error (e.g. "ERROR: Could not
-    // open LEF file ..." or a real parser diagnostic) - refreshAndNotify
-    // below (via refreshMessages) pulls it in, so no generic fallback
-    // message is added here.
-    refreshAndNotify();
+    // open LEF file ..." or a real parser diagnostic) - runTclCommand's
+    // own refreshAndNotify (via refreshMessages) already pulled it in,
+    // so no generic fallback message is added here.
+    if (int.tryParse(result) == 0) {
+      _openLefFiles.add(path);
+    }
   }
 
   Future<List<LeLibrary>> getLibraries() async {

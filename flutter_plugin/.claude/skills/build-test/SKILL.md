@@ -1,6 +1,6 @@
 ---
 name: build-test
-description: Build the backend native code this plugin links against, then run flutter pub get/analyze/test and build the macOS example app. Use when asked to build, compile, test, or run the flutter plugin.
+description: Build the backend native code this plugin links against, then run flutter pub get/analyze/test. Use when asked to build, compile, test, or run the flutter plugin.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -47,51 +47,30 @@ flutter test
 `unused_element`/`unused_field` warnings from transitively-included
 `<stdint.h>`/`<pthread.h>` cruft, not from anything we wrote.
 
-## 3. macOS example app (verified working end-to-end)
+## 3. Verifying the native link end-to-end
 
-```
-cd example
-flutter build macos --debug   # or: flutter run -d macos
-```
-
-Requires backend/build_release's `libapi.a`/`librender.a`/`libio.a` (step 1) and a
-Skia checkout (`$SKIA_DIR` or backend's own default,
-`/Users/john/Projects/synthosilicon/skia/skia`) — the podspec raises a
-clear error naming the missing file/command if these aren't there yet.
+This plugin no longer ships its own example app (removed — `../frontend`
+is the real end-user app and the live consumer of this plugin now).
+Verify the native link/build via `../frontend`'s own build (`frontend`'s
+own skill, once one exists) — `flutter build macos` there succeeds,
+`nm -gU` on the built `lef_editor_plugin.framework` shows all nine `le_*`
+symbols, and a loaded LEF file's geometry actually renders through the
+`LeEditor` → `LeTexture` → `Texture` widget chain (not just "didn't
+crash" — a blank white `Texture` widget with no error is the single most
+likely failure mode; check the platform log for `Metal texture`/
+`CVReturn` lines on macOS, same as any Skia/CVPixelBuffer issue would
+produce).
 
 **If CocoaPods doesn't pick up a podspec/Classes change** (e.g. a new file
 added to `macos/Classes/`): `pod install` only reruns when Flutter thinks
-the Podfile/plugin list changed, not on every glob match. Force it:
+the Podfile/plugin list changed, not on every glob match. Force it (run
+from whatever app consumes this plugin, e.g. `../frontend/macos`):
 ```
 rm -rf macos/Pods macos/Podfile.lock
 flutter build macos --debug
 ```
 
-Verify the native link actually exposes the API, not just that it
-compiled:
-```
-nm -gU example/build/macos/Build/Products/Debug/lef_editor_plugin_example.app/Contents/Frameworks/lef_editor_plugin.framework/lef_editor_plugin | grep le_
-```
-should list all nine `le_*` symbols.
-
-**Verify the texture actually renders, not just that the app launches** —
-a blank white `Texture` widget with no crash and no error is the single
-most likely failure mode here (found this way once already: a missing
-`kCVPixelBufferIOSurfacePropertiesKey` produced exactly this, with the
-real error buried in the system log, not the build output). Launch the
-built binary directly (not `open`, which detaches stdout) and grep for the
-platform log lines:
-```
-example/build/macos/Build/Products/Debug/lef_editor_plugin_example.app/Contents/MacOS/lef_editor_plugin_example > /tmp/lef_app_log.txt 2>&1 &
-sleep 3
-grep -i "Metal texture\|CVReturn" /tmp/lef_app_log.txt   # should be empty
-```
-Then screenshot (`screencapture -x <path>` after `osascript -e 'tell
-application "lef_editor_plugin_example" to activate'`) and look for the
-testcell's boundary + pink M1 pin labeled "A", not just a grey-bordered
-blank square.
-
-## 4. Linux example app — cannot be built or run here
+## 4. Linux — cannot be built or run here
 
 `src/CMakeLists.txt`/`linux/CMakeLists.txt`'s `LE_LINK_BACKEND` option is
 `OFF` by default and genuinely can't be turned on successfully yet — see

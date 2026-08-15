@@ -293,6 +293,21 @@ class Klass:
     # per-Abstract by hand, not a global cmg index).
     tcl_id_field: Optional[str] = None
 
+    # Whether this class has a generated "current instance" concept
+    # (a settable Le{Klass}Id on LeHandle, plus generated current_X/
+    # set_current_X_cmd TCL commands) - independent of any hand-written
+    # "current view" state elsewhere (e.g. Scene::current_abstract(),
+    # which drives GUI rendering and is deliberately not bridged to this).
+    # Every readable class's generated get_<type> search command derives
+    # its default (-of omitted) scope from whichever has_current_access
+    # class governs it, purely from schema parent/is_child structure - see
+    # codegen/codegen/tcl_scope.py's own module docstring for the full
+    # algorithm. Set on the classes that actually have an "in-progress
+    # editing view" concept (Abstract, Schematic) plus any natural
+    # session-singleton (Technology) - not every class needs this, only
+    # ones other classes' defaults should anchor to.
+    has_current_access: bool = False
+
     _schema: Optional[Schema] = field(default=None, repr=False, init=False)
 
     def is_tcl_readable(self) -> bool:
@@ -325,6 +340,22 @@ class Klass:
                 return f
         return None
 
+    def tcl_indexed_id_field(self) -> Optional["Field"]:
+        """
+        Like tcl_friendly_id_field(), but only returns a field actually
+        backed by a real global Root::get_<klass>_by_<field>() lookup
+        (index=True). A tcl_id_field override can name a field that isn't
+        globally unique (e.g. Terminal's `name`, unique only per-Abstract,
+        enforced by hand - see its own comment in backend/src/database/
+        schema.py) - such a field is still the right one for glob-based
+        name_expression search (tcl_friendly_id_field() covers that), but
+        there's no Root-level by-name lookup to generate a friendly-id
+        resolve/format pair or a le_X_by_<field>/le_X_<field> accessor
+        pair from, so this returns None for it instead.
+        """
+        f = self.tcl_friendly_id_field()
+        return f if f is not None and f.index else None
+
     def tcl_child_list_fields(self) -> List["Field"]:
         """
         This class's own is_child list fields (e.g. Technology.layers) -
@@ -334,6 +365,47 @@ class Klass:
         is_child fields (they're structural, not struct fields at all).
         """
         return [f for f in self.fields if f.is_child and f.is_list]
+
+    def tcl_plural_snake_case(self) -> str:
+        """
+        snake_case, pluralized - matches the existing hand-written search
+        naming convention (le_get_terminals/get_terminals_cmd/
+        get_terminals_at/the "get_terminals" Tcl proc itself are all
+        plural; le_search_result_terminal_at and the
+        terminal_search_results cache member stay singular - see
+        to_snake_case() for those). Simple English pluralization (+s, or
+        -y -> -ies after a consonant) - covers every class name in this
+        schema; extend here if a future class name needs an irregular
+        plural cmg/codegen doesn't already know how to form.
+        """
+        snake = self.to_snake_case()
+        if len(snake) >= 2 and snake[-1] == "y" and snake[-2] not in "aeiou":
+            return snake[:-1] + "ies"
+        return snake + "s"
+
+    def tcl_child_fields(self) -> List["Field"]:
+        """
+        Every one of this class's own is_child fields, list or scalar
+        (e.g. both Technology.layers - a list - and Design.abstract - a
+        single field, since a Design has at most one Abstract). Used by
+        codegen/codegen/tcl_scope.py's default-scope graph walk, which
+        needs to traverse scalar is_child edges too (Design->Abstract,
+        Design->Schematic) - tcl_child_list_fields() alone (list-only)
+        would miss them.
+        """
+        return [f for f in self.fields if f.is_child]
+
+    def get_parent_fields(self) -> List["Field"]:
+        """
+        Every field on this class that names a parent (has_parent()) -
+        usually exactly one, but a class can have more than one distinct
+        parent type (e.g. Shape.terminal_port/Shape.obstruction - a Shape
+        belongs to exactly one of the two, never both, per schema.py's own
+        comment on Shape). Used by tcl_scope.py to walk "up" from a
+        has_current_access class's current instance toward an ancestor
+        class whose own default get_<type> scope it governs.
+        """
+        return [f for f in self.fields if f.has_parent()]
 
     def get_include_define(self) -> str:
         """
@@ -584,21 +656,6 @@ class Klass:
             return f"std::weak_ptr<{self.name}>"
         else:
             return f"std::shared_ptr<{self.name}>"
-
-    def get_parent_fields(self) -> List["Field"]:
-        """
-        Get the parent fields for the class.
-
-        Returns:
-            List[Field]: The parent fields.
-        """
-        fields = []
-        for field in self.fields:
-            if field.has_parent():
-                if field._parent_klass is not None:
-                    fields.extend(field._parent_klass.get_parent_fields())
-                fields.append(field)
-        return fields
 
     def get_parent_field(self) -> "Field":
         """

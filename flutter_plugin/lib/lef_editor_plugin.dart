@@ -108,7 +108,8 @@ abstract class _LeRef {
   int get hashCode => Object.hash(runtimeType, index, generation);
 }
 
-/// Identifies one Library (one [LeEditor.readLef] call's worth of Designs).
+/// Identifies one Library (one `read_lef` call's worth of Designs - see
+/// [LeEditor.createTclConsole], the only way this plugin reads a LEF file).
 class LeLibraryRef extends _LeRef {
   const LeLibraryRef(super.index, super.generation);
 }
@@ -310,28 +311,15 @@ class LeEditor {
     }
   }
 
-  /// Reads a LEF file into this handle's shared Root, deriving a library
-  /// name from the file's stem. Safe to call multiple times on the same
-  /// handle - e.g. a tech file followed by macro file(s) that reference its
-  /// layers by name (pass the tech file first). Returns true on success.
-  bool readLef(String path) {
-    _checkNotDisposed();
-    final pathPtr = path.toNativeUtf8();
-    try {
-      return _bindings.le_read_lef(_handle, pathPtr.cast()) == 0;
-    } finally {
-      pkg_ffi.calloc.free(pathPtr);
-    }
-  }
-
   /// Total number of error/warning/info messages produced by this
-  /// handle's backend operations so far (currently just [readLef] -
-  /// file-open/parse errors, parser warnings, parser info notes, and a
-  /// success summary, each already formatted with its own "ERROR "/
-  /// "WARNING "/"INFO " prefix). Monotonically increasing - entries are
-  /// never removed, cleared, or reordered - so a caller can poll this
-  /// like [selectionVersion] and only fetch [messageAt] for indices at
-  /// or past what it last saw.
+  /// handle's backend operations so far (currently just a `read_lef` Tcl
+  /// command - see [createTclConsole], the only way this plugin reads a
+  /// LEF file - file-open/parse errors, parser warnings, parser info
+  /// notes, and a success summary, each already formatted with its own
+  /// "ERROR "/"WARNING "/"INFO " prefix). Monotonically increasing -
+  /// entries are never removed, cleared, or reordered - so a caller can
+  /// poll this like [selectionVersion] and only fetch [messageAt] for
+  /// indices at or past what it last saw.
   int get messageCount {
     _checkNotDisposed();
     return _bindings.le_message_count(_handle);
@@ -370,7 +358,8 @@ class LeEditor {
     return _bindings.le_set_current_design(_handle, index) == 0;
   }
 
-  /// Number of Libraries currently loaded - one per [readLef] call so far.
+  /// Number of Libraries currently loaded - one per `read_lef` Tcl command
+  /// so far (see [createTclConsole]).
   /// The top level of a Library -> Design -> Abstract browser widget; see
   /// [libraryDesignCount]/[libraryDesign] for the next level.
   int get libraryCount {
@@ -441,7 +430,7 @@ class LeEditor {
   }
 
   /// Number of layer-widget rows currently available (0 before the first
-  /// [readLef] call, since no ViewLayerSet has been built yet). Includes
+  /// `read_lef` Tcl command, since no ViewLayerSet has been built yet). Includes
   /// BOUNDARY and any future non-Technology-derived row, not just physical
   /// Layers. See [layer] for each row's contents.
   int get layerCount {
@@ -740,7 +729,7 @@ class LeEditor {
   /// minor grid - the same point [setMousePosition]'s grid-snap indicator
   /// box is centered on. Null if no mouse position has been set (or
   /// [clearMousePosition] was called since), or no Technology has been
-  /// read yet ([readLef]) to convert dbu to microns with.
+  /// read yet (`read_lef`) to convert dbu to microns with.
   LeSnappedMouse? get snappedMousePosition {
     _checkNotDisposed();
     final result = _bindings.le_snapped_mouse_position(_handle);
@@ -1088,8 +1077,9 @@ class LeEditor {
 /// [LeEditor] setter (`zoom`/`pan`/`setViewportSize`/`fitScene`/
 /// `minorGridSpacing`/`majorGridSpacing`/`setMousePosition`/
 /// `clearMousePosition`/`keyDown`/`keyUp`/`mouseDown`/`mouseUp`/
-/// `setCurrentDesign`/`readLef`) racing a pending, not-yet-rendered
-/// [markFrameAvailable] is a genuine data race, not just a hypothetical
+/// `setCurrentDesign`) - or a [LeTclConsole.eval] call, e.g. `read_lef` -
+/// racing a pending, not-yet-rendered [markFrameAvailable] is a genuine
+/// data race, not just a hypothetical
 /// one. Not solved at this layer - a real fix needs a lock inside the C
 /// API itself, guarding every `le_*` call on a handle regardless of which
 /// thread it's called from.

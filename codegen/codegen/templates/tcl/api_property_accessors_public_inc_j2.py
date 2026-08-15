@@ -22,7 +22,7 @@ TEMPLATE = """// GENERATED - do not edit by hand. Regenerate via the regen-tcl s
 
 // --- Friendly-id-by-name lookups (name-indexed classes only) ---
 {% for klass in classes %}
-{%- set id_field = klass.tcl_friendly_id_field() %}
+{%- set id_field = klass.tcl_indexed_id_field() %}
 {%- if id_field %}
 Le{{klass.name}}Id le_{{klass.to_snake_case()}}_by_{{id_field.name}}(LeHandle *handle, const char *{{id_field.name}})
 {
@@ -34,7 +34,7 @@ Le{{klass.name}}Id le_{{klass.to_snake_case()}}_by_{{id_field.name}}(LeHandle *h
     return to_c(handle->root.get_{{klass.to_snake_case()}}_by_{{id_field.name}}({{id_field.name}}));
 }
 
-const char *le_{{klass.to_snake_case()}}_{{id_field.name}}(LeHandle *handle, Le{{klass.name}}Id id)
+const char *le_{{klass.to_snake_case()}}_{{id_field.name}}_by_id(LeHandle *handle, Le{{klass.name}}Id id)
 {
     if (!handle)
         return nullptr;
@@ -148,5 +148,29 @@ Le{{child_field.type}}Id le_{{klass.to_snake_case()}}_{{child_field.name}}_at(Le
     return to_c(children[static_cast<size_t>(index)]);
 }
 {% endfor -%}
+{% endfor %}
+
+// --- Current-instance access ---
+{% for klass in current_access_classes %}
+Le{{klass.name}}Id le_current_{{klass.to_snake_case()}}(LeHandle *handle)
+{
+    const Le{{klass.name}}Id invalid{.index = UINT32_MAX, .generation = 0};
+    if (!handle)
+        return invalid;
+    std::lock_guard<std::mutex> lock(handle->mutex_);
+    return to_c(handle->current_{{klass.to_snake_case()}}_id);
+}
+
+int le_set_current_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}Id id)
+{
+    if (!handle)
+        return 1;
+    std::lock_guard<std::mutex> lock(handle->mutex_);
+    const le::{{klass.name}}Id typed_id = from_c(id);
+    if (!handle->root.get_{{klass.to_snake_case()}}(typed_id))
+        return 1;
+    handle->current_{{klass.to_snake_case()}}_id = typed_id;
+    return 0;
+}
 {% endfor %}
 """

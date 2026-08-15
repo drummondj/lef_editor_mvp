@@ -58,14 +58,19 @@ proc set_viewport_size {args} {
 # --- Current view (UPDATES.md item 17) ---
 
 # Selects `name`'s Design as this session's current view - every
-# subsequent get_terminals/get_obstructions/get_terminal_ports call is
-# scoped to its Abstract (see le_tcl_shim.hpp's own comment on
-# get_terminals for why: a script's "give me the terminals" means "in the
-# view I have open", not "across every open Library/Design"). `-view` is
-# accepted but currently only "abstract" is meaningful - every Design
-# read via read_lef() has exactly one Abstract view and no
-# DEF/placement-driven Design exists in this project yet (see
-# le_tcl_shim.hpp's design_abstract_id comment for the same caveat).
+# subsequent get_terminals/get_obstructions/get_terminal_ports/get_shapes
+# call (whose default scope, absent an explicit -of, derives from
+# current_abstract - see codegen/codegen/tcl_scope.py's own module
+# docstring) is scoped to its Abstract, since a script's "give me the
+# terminals" means "in the view I have open", not "across every open
+# Library/Design". Sets the generated current_abstract independently of
+# Scene::current_abstract() (which drives GUI rendering and is untouched
+# here) - see backend/CLAUDE.md's TCL codegen section for why those two
+# are deliberately separate. `-view` is accepted but currently only
+# "abstract" is meaningful - every Design read via read_lef() has exactly
+# one Abstract view and no DEF/placement-driven Design exists in this
+# project yet (see le_tcl_shim.hpp's design_abstract_id comment for the
+# same caveat).
 proc open_design {name args} {
     array set opts {-view abstract}
     foreach {flag value} $args {
@@ -87,7 +92,12 @@ proc open_design {name args} {
     # design:<name>, not the raw design_id, for consistency with UPDATES.md
     # item 19.1's own friendly-id convention - the caller already has
     # `name` literally, so this costs nothing to derive.
-    return "design:$name"
+    set design_token "design:$name"
+    set abstracts [get_abstracts -of $design_token]
+    if {[llength $abstracts] > 0} {
+        set_current_abstract [lindex $abstracts 0]
+    }
+    return $design_token
 }
 
 # --- get_<type> (UPDATES.md item 19.1) ---
@@ -172,138 +182,6 @@ proc default_to_unset {values} {
         return {{}}
     }
     return $values
-}
-
-proc get_libraries {args} {
-    set parsed [parse_get_args get_libraries $args 1]
-    if {[dict get $parsed help]} {
-        return "get_libraries \[<name-expr>...\] \[-filter <expr>\] \[-help\] - Libraries loaded this session (no -of: Library has no parent)"
-    }
-    if {[llength [dict get $parsed of_tokens]] > 0} {
-        error "get_libraries: -of is not valid here - Library has no parent object type"
-    }
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach name_expr [default_to_unset [dict get $parsed name_exprs]] {
-        set count [get_libraries_cmd $name_expr $filter]
-        for {set i 0} {$i < $count} {incr i} {
-            lappend result [get_libraries_at $i]
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_designs {args} {
-    set parsed [parse_get_args get_designs $args 1]
-    if {[dict get $parsed help]} {
-        return "get_designs \[<name-expr>...\] \[-of <library-token>...\] \[-filter <expr>\] \[-help\] - Designs (default: current view's Library, or every Library if none open)"
-    }
-    check_of_prefixes get_designs [dict get $parsed of_tokens] library
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        foreach name_expr [default_to_unset [dict get $parsed name_exprs]] {
-            set count [get_designs_cmd $of_token $name_expr $filter]
-            for {set i 0} {$i < $count} {incr i} {
-                lappend result [get_designs_at $i]
-            }
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_abstracts {args} {
-    set parsed [parse_get_args get_abstracts $args 0]
-    if {[dict get $parsed help]} {
-        return "get_abstracts \[-of <design-token>...\] \[-filter <expr>\] \[-help\] - Abstract views (default: current view's Abstract)"
-    }
-    check_of_prefixes get_abstracts [dict get $parsed of_tokens] design
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        foreach id [get_abstracts_cmd $of_token $filter] {
-            lappend result $id
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_terminals {args} {
-    set parsed [parse_get_args get_terminals $args 1]
-    if {[dict get $parsed help]} {
-        return "get_terminals \[<name-expr>...\] \[-of <abstract-token>...\] \[-filter <expr>\] \[-help\] - Terminals (default: current view's Abstract)"
-    }
-    check_of_prefixes get_terminals [dict get $parsed of_tokens] abstract
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        foreach name_expr [default_to_unset [dict get $parsed name_exprs]] {
-            set count [get_terminals_cmd $of_token $name_expr $filter]
-            for {set i 0} {$i < $count} {incr i} {
-                lappend result [get_terminals_at $i]
-            }
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_terminal_ports {args} {
-    set parsed [parse_get_args get_terminal_ports $args 0]
-    if {[dict get $parsed help]} {
-        return "get_terminal_ports \[-of <terminal-token>...\] \[-filter <expr>\] \[-help\] - TerminalPorts (default: current view's Abstract's Terminals' Ports)"
-    }
-    check_of_prefixes get_terminal_ports [dict get $parsed of_tokens] terminal
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        foreach id [get_terminal_ports_cmd $of_token $filter] {
-            lappend result $id
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_obstructions {args} {
-    set parsed [parse_get_args get_obstructions $args 0]
-    if {[dict get $parsed help]} {
-        return "get_obstructions \[-of <abstract-token>...\] \[-filter <expr>\] \[-help\] - Obstructions (default: current view's Abstract)"
-    }
-    check_of_prefixes get_obstructions [dict get $parsed of_tokens] abstract
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        foreach id [get_obstructions_cmd $of_token $filter] {
-            lappend result $id
-        }
-    }
-    return [lsort -unique $result]
-}
-
-proc get_shapes {args} {
-    set parsed [parse_get_args get_shapes $args 0]
-    if {[dict get $parsed help]} {
-        return "get_shapes \[-of <terminal_port-or-obstruction-token>...\] \[-filter <expr>\] \[-help\] - Shapes (default: current view's Terminals' Ports' shapes, union'd with its Obstructions' shapes)"
-    }
-    check_of_prefixes get_shapes [dict get $parsed of_tokens] {terminal_port obstruction}
-    set filter [dict get $parsed filter]
-
-    set result {}
-    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
-        if {[string match "terminal_port:*" $of_token]} {
-            foreach id [get_shapes_cmd $of_token {} $filter] { lappend result $id }
-        } elseif {[string match "obstruction:*" $of_token]} {
-            foreach id [get_shapes_cmd {} $of_token $filter] { lappend result $id }
-        } else {
-            foreach id [get_shapes_cmd {} {} $filter] { lappend result $id }
-        }
-    }
-    return [lsort -unique $result]
 }
 
 # --- get_properties/report_properties (UPDATES.md item 19.2) ---

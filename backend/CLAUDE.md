@@ -175,13 +175,13 @@ none of these are duplicated here.
   see `le_tcl_shim.hpp`'s own "IDs" comment) instead of raw `Le*Id` structs.
   `le_shell` (Tcl_Main-based) and any `tclsh` can both load `le_tcl.so` and
   source `le_tcl_procs.tcl`. Property *reading* (property tables,
-  friendly-id resolution, `is_child` enumeration) is generated for every
-  TCL-readable class — see "TCL codegen" below; CRUD (`create_X`/`delete_X`/
-  `set_X_<field>`, `get_<type>` search) stays hand-written, currently only
-  for `Terminal`/`TerminalPort`/`Obstruction`/`Shape` (+ `Abstract`'s
-  boundary) — the classes this MVP actually edits, not read-only LEF
-  technology reference data (`Technology`/`Layer`/`Via`/...). Fully covered
-  by `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl`
+  friendly-id resolution, `is_child` enumeration) and `get_<type>` search
+  are generated uniformly for every TCL-readable class — see "TCL codegen"
+  below; only CRUD (`create_X`/`delete_X`/`set_X_<field>`) stays
+  hand-written, currently for `Terminal`/`TerminalPort`/`Obstruction`/
+  `Shape` (+ `Abstract`'s boundary) — the classes this MVP actually edits,
+  not read-only LEF technology reference data (`Technology`/`Layer`/
+  `Via`/...). Fully covered by `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl`
   (run via `tclsh8.6`, not the generic `tclsh` — see the `build-test`
   skill).
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
@@ -220,24 +220,34 @@ own `tests/` directory, not `generated/` — codegen doesn't emit test files.
 ## TCL codegen (codegen, `--target tcl`)
 
 A separate generation target from the database one above (`regen-tcl`
-skill, not `regen-database`) — covers `src/tcl/`'s property-*reading*
-surface: `src/api/generated_tcl/` (`declarations.inc`/`handle_fields.inc`/
-`property_accessors_internal.inc`/`property_accessors_public.inc`,
+skill, not `regen-database`) — covers `src/tcl/`'s property-*reading* and
+`get_<type>` *search* surface: `src/api/generated_tcl/` (`ids.inc`/
+`declarations.inc`/`handle_fields.inc`/`property_accessors_internal.inc`/
+`property_accessors_public.inc`/`filter_tables.inc`/`search.inc`,
 `#include`d from `api.hpp`/`api.cpp`) and `src/tcl/generated/`
 (`le_tcl_shim_generated.hpp`/`.inc`, `le_api_generated.i`,
 `le_tcl_procs_generated.tcl`, `#include`d/`%include`d/`source`d from
 `le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`). Every pool-backed
-`Klass` gets a generated property table, friendly-id resolution, and
-`is_child`-field enumeration by default (`Klass.tcl_readable`/
-`Klass.tcl_id_field` in `codegen/codegen/schema.py` — see the `regen-tcl`
-skill for the opt-out/override mechanics and the full list of injection
-points) *unless* it's one of the 7 classes with hand-written CRUD
-(`codegen/codegen/tcl_generator.py`'s `HAND_WRITTEN_CLASSES`), which keep
-their own hand-written property accessors to avoid duplicate-symbol
-collisions. CRUD generation (`create_X`/`delete_X`/`set_X_<field>`,
-`get_<type>` search) is a deliberately separate, not-yet-built effort —
-it needs real new per-type infrastructure (result caching, filter-table
-registration) this target doesn't provide.
+`Klass` gets a generated property table, friendly-id resolution,
+`is_child`-field enumeration, and a `get_<type>` search command by
+default (`Klass.tcl_readable`/`Klass.tcl_id_field` in `codegen/codegen/
+schema.py` — see the `regen-tcl` skill for the opt-out/override mechanics
+and the full list of injection points) — uniformly across all 15 classes
+today, including the 4 with hand-written CRUD elsewhere (`Terminal`/
+`TerminalPort`/`Obstruction`/`Shape` — `codegen/codegen/tcl_generator.py`'s
+`HAND_WRITTEN_CRUD_CLASSES`, kept only as documentation of which classes
+*also* have hand-written `create_X`/`delete_X`/`set_X_<field>`, not an
+exclusion set for this target). `Klass.has_current_access = True`
+(`Technology`/`Abstract`/`Schematic`) marks a class with a generated
+"current instance" concept (`current_X`/`set_current_X` — independent of
+any other "current view" state elsewhere, e.g. `Scene::current_abstract()`,
+which drives GUI rendering) that every *other* readable class's
+`get_<type>` default scope (`-of` omitted) derives from automatically,
+purely from schema graph structure — see `codegen/codegen/tcl_scope.py`'s
+own module docstring for the algorithm, and the `regen-tcl` skill for the
+full injection-point list. CRUD generation itself (`create_X`/`delete_X`/
+`set_X_<field>`) stays a separate, not-yet-built effort — it needs real
+new per-type infrastructure this target doesn't provide yet.
 
 ## Open gaps (tracked in README's Plan checklist)
 

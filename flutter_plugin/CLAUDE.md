@@ -194,11 +194,13 @@ rebuilt before running `ctest`.
   `dlsym` at runtime — so without `-force_load` the linker drops the whole
   object file) plus `librender.a`/`libio.a`/`liblef.a`/`libskia.a` and the
   Homebrew/system libs backend's own `CMakeLists.txt` needs. Verified
-  end-to-end: `flutter build macos` in `example/` succeeds, `nm -gU` on the
+  end-to-end (originally via this plugin's own `example/` app, since
+  removed — `../frontend` is the real end-user app and now the live proof
+  this link still works): `flutter build macos` succeeds, `nm -gU` on the
   resulting `lef_editor_plugin.framework` shows all nine `le_*` symbols
-  exported, and the example app renders `testcell.lef`'s boundary and M1
-  pin through the full `LeEditor` → `LeTexture` → `Texture` widget chain —
-  confirmed visually (screenshot), not just "didn't crash."
+  exported, and a loaded LEF file's boundary and M1 pin render through the
+  full `LeEditor` → `LeTexture` → `Texture` widget chain — confirmed
+  visually (screenshot), not just "didn't crash."
   - **Gotcha:** CocoaPods' `OTHER_LDFLAGS` merging silently drops anything
     it recognizes as the C++ runtime library — neither a plain `-lc++` flag
     nor an explicit `libc++.tbd` path survives (no error, just absent from
@@ -280,8 +282,8 @@ useful compile-time signal):
   Selection API's low-level calls (see Architecture below) —
   `handlePointerEvent()` and `handleKeyEvent()` — so a consumer doesn't
   have to hand-roll a `LogicalKeyboardKey` → `LeKeyCode` mapping or
-  pixel-space bookkeeping itself. `example/lib/main.dart` shows the
-  intended `Listener`/`MouseRegion`/`Focus` wiring.
+  pixel-space bookkeeping itself. `../frontend`'s canvas wiring shows the
+  intended `Listener`/`MouseRegion`/`Focus` usage.
 - `src/lef_editor_plugin.h` — `#include`s `../backend/src/api/api.hpp`
   directly (so this TU fails to compile if that header ever stops being
   C-parseable); `src/lef_editor_plugin.c` — empty, exists only because the
@@ -295,14 +297,10 @@ useful compile-time signal):
 - `linux/` — `lef_editor_plugin.cc`/`include/lef_editor_plugin/lef_editor_plugin.h`
   (method channel), `lef_texture.cc`/`.h` (`FlPixelBufferTexture`) — same
   protocol as macOS, **unverified** (see Open design questions).
-- `example/` — loads a bundled `testcell.lef` fixture
-  (`backend/src/api/tests/fixtures/testcell.lef`, copied to
-  `example/assets/`), selects its Design, creates a texture, and displays
-  it — the actual proof this plugin works, not just that it builds.
 
 ## Skills
 
 - `ffigen` — regenerate `lib/lef_editor_plugin_bindings_generated.dart`
   from `backend/src/api/api.hpp`.
 - `build-test` — build the backend native code this plugin links against,
-  then `flutter pub get`/`analyze`/`test`, plus the macOS example app.
+  then `flutter pub get`/`analyze`/`test`.

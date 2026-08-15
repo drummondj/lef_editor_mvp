@@ -26,12 +26,12 @@ class ToolboxButton extends StatelessWidget {
       onPressed: selected ? null : onPressed,
       child: Column(
         children: [
-          HugeIcon(icon: icon, color: color, size: 48, strokeWidth: 0.75),
+          HugeIcon(icon: icon, color: color, size: 32, strokeWidth: 0.75),
           Text(
             text,
             style: Theme.of(
               context,
-            ).textTheme.labelLarge?.copyWith(color: color),
+            ).textTheme.labelMedium?.copyWith(color: color),
           ),
         ],
       ),

@@ -2390,8 +2390,8 @@ TEST_F(ApiFixture, SelectedShapesParentChainReportsTerminalPortThenTerminal)
     EXPECT_STREQ(terminal_properties.at("name").string_value, "A");
     ASSERT_TRUE(terminal_properties.contains("direction"));
     EXPECT_STREQ(terminal_properties.at("direction").string_value, "INPUT");
-    ASSERT_TRUE(terminal_properties.contains("port_count"));
-    EXPECT_EQ(terminal_properties.at("port_count").int_value, 1);
+    ASSERT_TRUE(terminal_properties.contains("ports_count"));
+    EXPECT_EQ(terminal_properties.at("ports_count").int_value, 1);
 
     // Library has no parent - the chain terminates gracefully.
     const LeObjectRef abstract_ref = le_object_parent(handle, terminal_ref);
@@ -2584,8 +2584,8 @@ TEST_F(ApiFixture, ClickSelectingOnePortOfATwoPortTerminalReportsOnlyThatPortsRe
     const std::map<std::string, LeProperty> terminal_properties = object_properties(handle, terminal_ref);
     ASSERT_TRUE(terminal_properties.contains("name"));
     EXPECT_STREQ(terminal_properties.at("name").string_value, "B");
-    ASSERT_TRUE(terminal_properties.contains("port_count"));
-    EXPECT_EQ(terminal_properties.at("port_count").int_value, 2);
+    ASSERT_TRUE(terminal_properties.contains("ports_count"));
+    EXPECT_EQ(terminal_properties.at("ports_count").int_value, 2);
 }
 
 TEST_F(ApiFixture, DragSelectingATwoPortTerminalSelectsBothPortsIndependently)
@@ -2752,7 +2752,7 @@ TEST_F(ApiFixture, CreateTerminalSucceedsAndIsReadableViaProperties)
             found_direction = true;
             EXPECT_STREQ(property.string_value, "INPUT");
         }
-        else if (std::string(property.name) == "port_count")
+        else if (std::string(property.name) == "ports_count")
         {
             found_port_count = true;
             EXPECT_EQ(property.int_value, 0); // no ports created yet
@@ -2931,12 +2931,12 @@ TEST_F(ApiFixture, CreateTerminalPortSucceedsAndIsReadableViaProperties)
     }
     EXPECT_TRUE(found_shapes_count);
 
-    // The Terminal's own port_count now reflects the new port.
+    // The Terminal's own ports_count now reflects the new port.
     const int32_t terminal_property_count = le_terminal_property_count(handle, terminal_id);
     for (int32_t i = 0; i < terminal_property_count; ++i)
     {
         const LeProperty property = le_terminal_property_at(handle, terminal_id, i);
-        if (std::string(property.name) == "port_count")
+        if (std::string(property.name) == "ports_count")
             EXPECT_EQ(property.int_value, 1);
     }
 }

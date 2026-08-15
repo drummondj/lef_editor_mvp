@@ -9,6 +9,10 @@ schema = Schema(
         Klass(
             name="Technology",
             description="Technology information such as layers and site definitions",
+            # Session-singleton anchor for get_layers/get_vias/get_sites/
+            # get_via_rules/get_non_default_rules' own default (-of
+            # omitted) scope - see codegen/codegen/tcl_scope.py.
+            has_current_access=True,
             fields=[
                 Field(
                     name="layers",
@@ -1583,6 +1587,13 @@ schema = Schema(
         Klass(
             name="Abstract",
             description="A physical abstract view (LEF)",
+            # "Current view" anchor for get_terminals/get_terminal_ports/
+            # get_obstructions/get_shapes' own default (-of omitted) scope
+            # - see codegen/codegen/tcl_scope.py. Independent of Scene's
+            # own hand-written current_abstract_ (GUI rendering state) -
+            # deliberately not bridged, see backend/CLAUDE.md's TCL
+            # codegen section.
+            has_current_access=True,
             fields=[
                 Field(
                     name="design",
@@ -1931,6 +1942,12 @@ schema = Schema(
         Klass(
             name="Schematic",
             description="A logical connectivity view (netlist)",
+            # "Current view" anchor for get_instances' own default (-of
+            # omitted) scope - see codegen/codegen/tcl_scope.py. Nothing
+            # populates Schematic/Instance data yet (no SystemVerilog
+            # reader exists), but the TCL surface is generated uniformly
+            # regardless.
+            has_current_access=True,
             fields=[
                 Field(
                     name="design",

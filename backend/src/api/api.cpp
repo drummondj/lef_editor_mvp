@@ -54,55 +54,6 @@ struct LeHandle
     LeObjectRef cached_object_property_ref{.kind = -1, .index = UINT32_MAX, .generation = 0};
     std::vector<le::PropertyValue> cached_object_properties;
 
-    // Same single-slot-cache pattern as cached_properties above, but for
-    // le_terminal_property_count/_at (Phase 4's by-id CRUD surface,
-    // TCL_EXPLORATION.md) - keyed by TerminalId instead of a selection
-    // index, since there's no "current selection" involved here.
-    le::TerminalId cached_terminal_property_id{};
-    std::vector<le::PropertyValue> cached_terminal_properties;
-
-    // Backs le_search_terminal/le_search_result_terminal_at - the ids a
-    // filter-expression search matched, cached until the next
-    // le_search_terminal call overwrites it, same "valid until the next
-    // call" convention as cached_properties above.
-    std::vector<le::TerminalId> terminal_search_results;
-
-    // Same two patterns as cached_terminal_property_id/_properties and
-    // terminal_search_results above, repeated for TerminalPort and
-    // Obstruction (Phase 4, continued).
-    le::TerminalPortId cached_terminal_port_property_id{};
-    std::vector<le::PropertyValue> cached_terminal_port_properties;
-    std::vector<le::TerminalPortId> terminal_port_search_results;
-
-    le::ObstructionId cached_obstruction_property_id{};
-    std::vector<le::PropertyValue> cached_obstruction_properties;
-    std::vector<le::ObstructionId> obstruction_search_results;
-
-    // Same "valid until the next call" search-result cache pattern as
-    // terminal_search_results/obstruction_search_results above, backing
-    // UPDATES.md item 19.1's le_get_libraries/le_get_designs/
-    // le_get_abstracts/le_get_shapes.
-    std::vector<le::LibraryId> library_search_results;
-    std::vector<le::DesignId> design_search_results;
-    std::vector<le::AbstractId> abstract_search_results;
-    std::vector<le::ShapeId> shape_search_results;
-
-    // Same single-slot-cache pattern as cached_terminal_property_id/
-    // _properties above, backing UPDATES.md item 19.2's
-    // le_library_property_count/_at/le_design_property_count/_at/
-    // le_abstract_property_count/_at/le_shape_property_count/_at.
-    le::LibraryId cached_library_property_id{};
-    std::vector<le::PropertyValue> cached_library_properties;
-
-    le::DesignId cached_design_property_id{};
-    std::vector<le::PropertyValue> cached_design_properties;
-
-    le::AbstractId cached_abstract_property_id{};
-    std::vector<le::PropertyValue> cached_abstract_properties;
-
-    le::ShapeId cached_shape_property_id{};
-    std::vector<le::PropertyValue> cached_shape_properties;
-
     // Backs every le_X_property_path function (UPDATES.md item 19.2's
     // dot-notation/chaining follow-up). le::PropertyValue owns its own
     // std::string storage, and the LeProperty handed back to the caller
@@ -145,22 +96,6 @@ struct LeHandle
 
 namespace
 {
-    LeLibraryId to_c(le::LibraryId id) { return LeLibraryId{.index = id.index, .generation = id.generation}; }
-    LeDesignId to_c(le::DesignId id) { return LeDesignId{.index = id.index, .generation = id.generation}; }
-    LeAbstractId to_c(le::AbstractId id) { return LeAbstractId{.index = id.index, .generation = id.generation}; }
-    LeTerminalId to_c(le::TerminalId id) { return LeTerminalId{.index = id.index, .generation = id.generation}; }
-    LeTerminalPortId to_c(le::TerminalPortId id) { return LeTerminalPortId{.index = id.index, .generation = id.generation}; }
-    LeObstructionId to_c(le::ObstructionId id) { return LeObstructionId{.index = id.index, .generation = id.generation}; }
-    LeShapeId to_c(le::ShapeId id) { return LeShapeId{.index = id.index, .generation = id.generation}; }
-
-    le::LibraryId from_c(LeLibraryId id) { return le::LibraryId{.index = id.index, .generation = id.generation}; }
-    le::DesignId from_c(LeDesignId id) { return le::DesignId{.index = id.index, .generation = id.generation}; }
-    le::AbstractId from_c(LeAbstractId id) { return le::AbstractId{.index = id.index, .generation = id.generation}; }
-    le::TerminalId from_c(LeTerminalId id) { return le::TerminalId{.index = id.index, .generation = id.generation}; }
-    le::TerminalPortId from_c(LeTerminalPortId id) { return le::TerminalPortId{.index = id.index, .generation = id.generation}; }
-    le::ObstructionId from_c(LeObstructionId id) { return le::ObstructionId{.index = id.index, .generation = id.generation}; }
-    le::ShapeId from_c(LeShapeId id) { return le::ShapeId{.index = id.index, .generation = id.generation}; }
-
     // Below this many pixels of down-to-up movement, le_mouse_up treats a
     // gesture as a click rather than a drag-select - small enough that an
     // intended click with a little hand tremor still registers as one,
@@ -275,15 +210,8 @@ namespace
 
     const std::unordered_map<std::string, FilterFieldTable> &filter_field_tables()
     {
-        static const std::unordered_map<std::string, FilterFieldTable> tables = {
-            {"Library", {{"name"}, {{"designs", "Design"}}}},
-            {"Design", {{"name"}, {{"library", "Library"}, {"abstract", "Abstract"}}}},
-            {"Abstract", {{"type", "site", "eeq", "leq", "power", "source", "is_fixed_mask"}, {{"design", "Design"}, {"terminals", "Terminal"}, {"obstructions", "Obstruction"}}}},
-            {"Terminal", {{"name", "direction", "shape", "use", "must_join", "net_expr", "leq", "taper_rule", "supply_sensitivity", "ground_sensitivity", "rise_slew_limit", "fall_slew_limit", "max_load"}, {{"abstract", "Abstract"}, {"ports", "TerminalPort"}}}},
-            {"TerminalPort", {{"port_class"}, {{"terminal", "Terminal"}, {"shapes", "Shape"}}}},
-            {"Obstruction", {{}, {{"abstract", "Abstract"}, {"shapes", "Shape"}}}},
-            {"Shape", {{"layer_name", "spacing", "design_rule_width", "except_pg_net"}, {{"obstruction", "Obstruction"}, {"terminal_port", "TerminalPort"}}}},
-        };
+        static const std::unordered_map<std::string, FilterFieldTable> tables =
+#include "generated_tcl/filter_tables.inc"
         return tables;
     }
 
@@ -422,106 +350,19 @@ namespace
         return std::nullopt;
     }
 
-    // Backs le_terminal_property_count/_at (Phase 4's by-id CRUD surface),
-    // and - via le_object_property_count/_at's dispatch - the Property
-    // Viewer's Terminal rows too (UPDATES.md 7.2's later shape-level-
-    // selection redesign). Just codegen's generated to_properties() plus a
-    // derived "port_count" row (ports is an is_child field, not a struct
-    // field in INDEXED_POOLS style, so it isn't in to_properties() at
-    // all). Returns an empty vector if id doesn't name a Terminal on this
-    // handle.
-    std::vector<le::PropertyValue> build_terminal_properties(const le::Root &root, le::TerminalId id)
-    {
-        const le::TerminalData *terminal = root.get_terminal(id);
-        if (!terminal)
-            return {};
-
-        std::vector<le::PropertyValue> properties = le::to_properties(*terminal, display_dbu_per_um(root));
-        properties.push_back(le::PropertyValue::make_int("port_count", static_cast<int64_t>(root.get_terminal_ports(id).size())));
-        return properties;
-    }
-
-    // Same pattern as build_terminal_properties, for TerminalPort/
-    // Obstruction. "shapes_count" is a derived row (Root::get_x_shapes()'s
-    // own size), not part of codegen's generated to_properties() - `shapes`
-    // is an is_child field (Shape is pooled, TCL_EXPLORATION.md Phase 3), so
-    // it isn't a struct field at all, same reasoning as Terminal's own
-    // "port_count" row in build_terminal_properties above.
-    std::vector<le::PropertyValue> build_terminal_port_properties(const le::Root &root, le::TerminalPortId id)
-    {
-        const le::TerminalPortData *port = root.get_terminal_port(id);
-        if (!port)
-            return {};
-        std::vector<le::PropertyValue> properties = le::to_properties(*port, display_dbu_per_um(root));
-        properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_terminal_port_shapes(id).size())));
-        return properties;
-    }
-
-    std::vector<le::PropertyValue> build_obstruction_properties(const le::Root &root, le::ObstructionId id)
-    {
-        const le::ObstructionData *obstruction = root.get_obstruction(id);
-        if (!obstruction)
-            return {};
-        std::vector<le::PropertyValue> properties = le::to_properties(*obstruction, display_dbu_per_um(root));
-        properties.push_back(le::PropertyValue::make_int("shapes_count", static_cast<int64_t>(root.get_obstruction_shapes(id).size())));
-        return properties;
-    }
-
-    // UPDATES.md item 19.2 (get_properties/report_properties) - Library/
-    // Design/Abstract/Shape backing for the same by-id property surface
-    // Terminal/TerminalPort/Obstruction already have. Unlike those three,
-    // no derived child-pool "_count" row is added here (Library->Designs,
-    // Abstract->Terminals/Obstructions) - item 19.2 asked for a unified
-    // way to list what to_properties() already exposes, not new fields;
-    // easy to add later following the exact same pattern above if wanted.
-    std::vector<le::PropertyValue> build_library_properties(const le::Root &root, le::LibraryId id)
-    {
-        const le::LibraryData *library = root.get_library(id);
-        if (!library)
-            return {};
-        return le::to_properties(*library, display_dbu_per_um(root));
-    }
-
-    std::vector<le::PropertyValue> build_design_properties(const le::Root &root, le::DesignId id)
-    {
-        const le::DesignData *design = root.get_design(id);
-        if (!design)
-            return {};
-        return le::to_properties(*design, display_dbu_per_um(root));
-    }
-
-    std::vector<le::PropertyValue> build_abstract_properties(const le::Root &root, le::AbstractId id)
-    {
-        const le::AbstractData *abstract = root.get_abstract(id);
-        if (!abstract)
-            return {};
-        return le::to_properties(*abstract, display_dbu_per_um(root));
-    }
-
-    // codegen's generated to_properties(ShapeData, dbu_per_um) now
-    // produces the exact same clean, micron-converted, brace-nested
-    // "rects"/"polygons"/"paths" rows this file used to hand-build (via a
-    // since-deleted format_rect_um/format_polygon_um/format_path_um +
-    // replace_shape_geometry_properties override) - the codegen fix that
-    // made every `dbu` field convert to microns, and every embedded-klass
-    // reference brace-wrap itself, generalizes Shape's old one-off
-    // special case to every class. No override needed anymore.
-    std::vector<le::PropertyValue> build_shape_properties(const le::Root &root, le::ShapeId id)
-    {
-        const le::ShapeData *shape = root.get_shape(id);
-        if (!shape)
-            return {};
-        return le::to_properties(*shape, display_dbu_per_um(root));
-    }
-
     // Generated TCL property-reading surface (internal helpers only -
-    // build_X_properties/to_c/from_c overloads; these stay inside this
-    // anonymous namespace, same as build_shape_properties above - see
+    // build_X_properties/to_c/from_c overloads, for every TCL-readable
+    // class - these stay inside this anonymous namespace since they're
+    // never called from another translation unit; see
     // generated_tcl/property_accessors_public.inc, included later in
     // this file inside extern "C", for the externally-linked
-    // le_X_property_count/_at/_path etc. Never edit
-    // generated_tcl/property_accessors_internal.inc directly - regenerate
-    // via the regen-tcl skill instead.
+    // le_X_property_count/_at/_path etc. build_terminal_properties/
+    // build_library_properties/etc.'s own derived "<field>_count" rows
+    // (e.g. Terminal's "ports_count") come from here now too - matches
+    // every other is_child-field-derived count row exactly (was
+    // hand-abbreviated to "port_count" before this migration; see
+    // api_test.cpp). Never edit generated_tcl/property_accessors_internal.inc
+    // directly - regenerate via the regen-tcl skill instead.
 #include "generated_tcl/property_accessors_internal.inc"
 
     // Shared by le_add_shape_polygon/le_add_shape_path - builds a Polygon
@@ -909,6 +750,12 @@ extern "C"
     // Never edit that file directly - regenerate via the regen-tcl skill.
 #include "generated_tcl/property_accessors_public.inc"
 
+    // Generated get_<type> search (le_get_X/le_search_result_X_at) for
+    // every TCL-readable class - same external-linkage requirement as
+    // property_accessors_public.inc above. Never edit that file directly
+    // - regenerate via the regen-tcl skill.
+#include "generated_tcl/search.inc"
+
     LeHandle *le_create(void)
     {
         return new LeHandle();
@@ -981,6 +828,19 @@ extern "C"
             }
 
             handle->view_layers = le::ViewLayerSet::build_for_technology(handle->root, technology_ids.front());
+
+            // Also selects the singleton Technology as the current one for
+            // the generated TCL current-instance mechanism (see
+            // codegen/codegen/tcl_scope.py's own module docstring for why
+            // get_layers/get_vias/etc.'s default scope needs this) -
+            // Technology has no separate "open" step the way a Design/
+            // Abstract does (le_tcl_procs.tcl's open_design), it's
+            // implicitly read alongside everything else in a LEF file, so
+            // this is the one natural chokepoint - shared by every caller
+            // (Dart FFI direct, or TCL's own read_lef, which calls this
+            // same function), not just the TCL-facing shim. Idempotent to
+            // repeat across multiple le_read_lef calls on the same handle.
+            handle->current_technology_id = technology_ids.front();
         }
 
         return 0;
@@ -1132,195 +992,6 @@ extern "C"
 
         handle->scene.set_current_abstract(handle->root.get_design_abstract(id));
         return 0;
-    }
-
-    LeDesignId le_design_by_name(LeHandle *handle, const char *name)
-    {
-        const LeDesignId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || !name)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        return to_c(handle->root.get_design_by_name(name));
-    }
-
-    LeLibraryId le_library_by_name(LeHandle *handle, const char *name)
-    {
-        const LeLibraryId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || !name)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        return to_c(handle->root.get_library_by_name(name));
-    }
-
-    const char *le_library_name(LeHandle *handle, LeLibraryId id)
-    {
-        if (!handle)
-            return nullptr;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::LibraryData *library = handle->root.get_library(from_c(id));
-        return library ? library->name.c_str() : nullptr;
-    }
-
-    const char *le_design_name_by_id(LeHandle *handle, LeDesignId id)
-    {
-        if (!handle)
-            return nullptr;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::DesignData *design = handle->root.get_design(from_c(id));
-        return design ? design->name.c_str() : nullptr;
-    }
-
-    int32_t le_get_libraries(LeHandle *handle, const char *name_expression, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_libraries", "Library", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        handle->library_search_results.clear();
-        for (const le::LibraryId id : handle->root.get_library_ids())
-        {
-            const le::LibraryData *data = handle->root.get_library(id);
-            if (!data)
-                continue;
-            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
-                continue;
-            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
-                continue;
-            handle->library_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->library_search_results.size());
-    }
-
-    LeLibraryId le_search_result_library_at(LeHandle *handle, int32_t index)
-    {
-        const LeLibraryId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->library_search_results.size())
-            return invalid;
-        return to_c(handle->library_search_results[static_cast<size_t>(index)]);
-    }
-
-    int32_t le_get_designs(LeHandle *handle, LeLibraryId of_library, const char *name_expression, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_designs", "Design", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // -of given and valid -> scoped to that Library. Otherwise ->
-        // default scope: the current view's own Design's Library if a
-        // Design is currently selected, else every Design on this handle.
-        std::vector<le::DesignId> candidates;
-        const le::LibraryId library = from_c(of_library);
-        if (handle->root.get_library(library))
-        {
-            candidates = handle->root.get_library_designs(library);
-        }
-        else
-        {
-            const le::AbstractData *current_abstract = handle->root.get_abstract(handle->scene.current_abstract());
-            if (current_abstract)
-            {
-                const le::DesignData *current_design = handle->root.get_design(current_abstract->design);
-                if (current_design)
-                    candidates = handle->root.get_library_designs(current_design->library);
-            }
-            else
-            {
-                candidates = handle->root.get_design_ids();
-            }
-        }
-
-        handle->design_search_results.clear();
-        for (const le::DesignId id : candidates)
-        {
-            const le::DesignData *data = handle->root.get_design(id);
-            if (!data)
-                continue;
-            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
-                continue;
-            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
-                continue;
-            handle->design_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->design_search_results.size());
-    }
-
-    LeDesignId le_search_result_design_at(LeHandle *handle, int32_t index)
-    {
-        const LeDesignId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->design_search_results.size())
-            return invalid;
-        return to_c(handle->design_search_results[static_cast<size_t>(index)]);
-    }
-
-    int32_t le_get_abstracts(LeHandle *handle, LeDesignId of_design, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_abstracts", "Abstract", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // -of given and valid -> that Design's own Abstract (today always
-        // at most one). Otherwise -> default scope: the currently
-        // selected Abstract, if any.
-        std::vector<le::AbstractId> candidates;
-        const le::DesignData *design = handle->root.get_design(from_c(of_design));
-        if (design)
-        {
-            const le::AbstractId abstract = handle->root.get_design_abstract(from_c(of_design));
-            if (handle->root.get_abstract(abstract))
-                candidates.push_back(abstract);
-        }
-        else if (handle->root.get_abstract(handle->scene.current_abstract()))
-        {
-            candidates.push_back(handle->scene.current_abstract());
-        }
-
-        handle->abstract_search_results.clear();
-        for (const le::AbstractId id : candidates)
-        {
-            const le::AbstractData *data = handle->root.get_abstract(id);
-            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
-                handle->abstract_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->abstract_search_results.size());
-    }
-
-    LeAbstractId le_search_result_abstract_at(LeHandle *handle, int32_t index)
-    {
-        const LeAbstractId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->abstract_search_results.size())
-            return invalid;
-        return to_c(handle->abstract_search_results[static_cast<size_t>(index)]);
     }
 
     int32_t le_layer_count(LeHandle *handle)
@@ -1997,376 +1668,6 @@ extern "C"
         return terminal ? terminal->name.c_str() : nullptr;
     }
 
-    int32_t le_terminal_property_count(LeHandle *handle, LeTerminalId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalId terminal_id = from_c(id);
-        handle->cached_terminal_properties = build_terminal_properties(handle->root, terminal_id);
-        handle->cached_terminal_property_id = terminal_id;
-        return static_cast<int32_t>(handle->cached_terminal_properties.size());
-    }
-
-    LeProperty le_terminal_property_at(LeHandle *handle, LeTerminalId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalId terminal_id = from_c(id);
-        if (handle->cached_terminal_property_id != terminal_id)
-        {
-            handle->cached_terminal_properties = build_terminal_properties(handle->root, terminal_id);
-            handle->cached_terminal_property_id = terminal_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_terminal_properties.size())
-            return invalid;
-        return to_c(handle->cached_terminal_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_terminal_property_path(LeHandle *handle, LeTerminalId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::TerminalId terminal_id = from_c(id);
-        const le::TerminalData *data = handle->root.get_terminal(terminal_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_terminal_properties(handle->root, terminal_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: unknown field '{}' on Terminal", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Terminal", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, terminal_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
-    }
-
-    int32_t le_library_property_count(LeHandle *handle, LeLibraryId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::LibraryId library_id = from_c(id);
-        handle->cached_library_properties = build_library_properties(handle->root, library_id);
-        handle->cached_library_property_id = library_id;
-        return static_cast<int32_t>(handle->cached_library_properties.size());
-    }
-
-    LeProperty le_library_property_at(LeHandle *handle, LeLibraryId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::LibraryId library_id = from_c(id);
-        if (handle->cached_library_property_id != library_id)
-        {
-            handle->cached_library_properties = build_library_properties(handle->root, library_id);
-            handle->cached_library_property_id = library_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_library_properties.size())
-            return invalid;
-        return to_c(handle->cached_library_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_library_property_path(LeHandle *handle, LeLibraryId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::LibraryId library_id = from_c(id);
-        const le::LibraryData *data = handle->root.get_library(library_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_library_properties(handle->root, library_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: unknown field '{}' on Library", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Library", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_library_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, library_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
-    }
-
-    int32_t le_design_property_count(LeHandle *handle, LeDesignId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::DesignId design_id = from_c(id);
-        handle->cached_design_properties = build_design_properties(handle->root, design_id);
-        handle->cached_design_property_id = design_id;
-        return static_cast<int32_t>(handle->cached_design_properties.size());
-    }
-
-    LeProperty le_design_property_at(LeHandle *handle, LeDesignId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::DesignId design_id = from_c(id);
-        if (handle->cached_design_property_id != design_id)
-        {
-            handle->cached_design_properties = build_design_properties(handle->root, design_id);
-            handle->cached_design_property_id = design_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_design_properties.size())
-            return invalid;
-        return to_c(handle->cached_design_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_design_property_path(LeHandle *handle, LeDesignId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::DesignId design_id = from_c(id);
-        const le::DesignData *data = handle->root.get_design(design_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_design_properties(handle->root, design_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: unknown field '{}' on Design", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Design", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_design_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, design_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
-    }
-
-    int32_t le_abstract_property_count(LeHandle *handle, LeAbstractId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::AbstractId abstract_id = from_c(id);
-        handle->cached_abstract_properties = build_abstract_properties(handle->root, abstract_id);
-        handle->cached_abstract_property_id = abstract_id;
-        return static_cast<int32_t>(handle->cached_abstract_properties.size());
-    }
-
-    LeProperty le_abstract_property_at(LeHandle *handle, LeAbstractId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::AbstractId abstract_id = from_c(id);
-        if (handle->cached_abstract_property_id != abstract_id)
-        {
-            handle->cached_abstract_properties = build_abstract_properties(handle->root, abstract_id);
-            handle->cached_abstract_property_id = abstract_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_abstract_properties.size())
-            return invalid;
-        return to_c(handle->cached_abstract_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_abstract_property_path(LeHandle *handle, LeAbstractId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::AbstractId abstract_id = from_c(id);
-        const le::AbstractData *data = handle->root.get_abstract(abstract_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_abstract_properties(handle->root, abstract_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: unknown field '{}' on Abstract", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Abstract", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_abstract_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, abstract_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
-    }
-
-    int32_t le_shape_property_count(LeHandle *handle, LeShapeId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ShapeId shape_id = from_c(id);
-        handle->cached_shape_properties = build_shape_properties(handle->root, shape_id);
-        handle->cached_shape_property_id = shape_id;
-        return static_cast<int32_t>(handle->cached_shape_properties.size());
-    }
-
-    LeProperty le_shape_property_at(LeHandle *handle, LeShapeId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ShapeId shape_id = from_c(id);
-        if (handle->cached_shape_property_id != shape_id)
-        {
-            handle->cached_shape_properties = build_shape_properties(handle->root, shape_id);
-            handle->cached_shape_property_id = shape_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_shape_properties.size())
-            return invalid;
-        return to_c(handle->cached_shape_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_shape_property_path(LeHandle *handle, LeShapeId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::ShapeId shape_id = from_c(id);
-        const le::ShapeData *data = handle->root.get_shape(shape_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_shape_properties(handle->root, shape_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: unknown field '{}' on Shape", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Shape", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_shape_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, shape_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
-    }
-
     int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name)
     {
         if (!handle || !name)
@@ -2446,50 +1747,6 @@ extern "C"
         return static_cast<int32_t>(handle->terminal_search_results.size());
     }
 
-    LeTerminalId le_search_result_terminal_at(LeHandle *handle, int32_t index)
-    {
-        const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->terminal_search_results.size())
-            return invalid;
-        return to_c(handle->terminal_search_results[static_cast<size_t>(index)]);
-    }
-
-    int32_t le_get_terminals(LeHandle *handle, LeAbstractId of_abstract, const char *name_expression, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_terminals", "Terminal", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // -of given and valid -> that Abstract's own Terminals.
-        // Otherwise -> the currently selected Abstract (item 17's
-        // current-view default), or none.
-        const le::AbstractId abstract = handle->root.get_abstract(from_c(of_abstract)) ? from_c(of_abstract) : handle->scene.current_abstract();
-        const std::vector<le::TerminalId> &candidates = handle->root.get_abstract_terminals(abstract);
-
-        handle->terminal_search_results.clear();
-        for (const le::TerminalId id : candidates)
-        {
-            const le::TerminalData *data = handle->root.get_terminal(id);
-            if (!data)
-                continue;
-            if (name_expression && name_expression[0] != '\0' && !le::filter_detail::glob_match(name_expression, data->name))
-                continue;
-            if (expr && !le::evaluate_filter(*expr, handle->root, id, *data))
-                continue;
-            handle->terminal_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->terminal_search_results.size());
-    }
-
     LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id)
     {
         const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
@@ -2504,80 +1761,6 @@ extern "C"
         const LeTerminalPortId result = to_c(handle->root.create_terminal_port(le::TerminalPortData{.terminal = terminal}));
         handle->root.bump_mutation_version();
         return result;
-    }
-
-    int32_t le_terminal_port_property_count(LeHandle *handle, LeTerminalPortId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalPortId port_id = from_c(id);
-        handle->cached_terminal_port_properties = build_terminal_port_properties(handle->root, port_id);
-        handle->cached_terminal_port_property_id = port_id;
-        return static_cast<int32_t>(handle->cached_terminal_port_properties.size());
-    }
-
-    LeProperty le_terminal_port_property_at(LeHandle *handle, LeTerminalPortId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalPortId port_id = from_c(id);
-        if (handle->cached_terminal_port_property_id != port_id)
-        {
-            handle->cached_terminal_port_properties = build_terminal_port_properties(handle->root, port_id);
-            handle->cached_terminal_port_property_id = port_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_terminal_port_properties.size())
-            return invalid;
-        return to_c(handle->cached_terminal_port_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_terminal_port_property_path(LeHandle *handle, LeTerminalPortId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::TerminalPortId port_id = from_c(id);
-        const le::TerminalPortData *data = handle->root.get_terminal_port(port_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_terminal_port_properties(handle->root, port_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: unknown field '{}' on TerminalPort", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("TerminalPort", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_terminal_port_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, port_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
     }
 
     int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id)
@@ -2621,61 +1804,6 @@ extern "C"
         return static_cast<int32_t>(handle->terminal_port_search_results.size());
     }
 
-    LeTerminalPortId le_search_result_terminal_port_at(LeHandle *handle, int32_t index)
-    {
-        const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->terminal_port_search_results.size())
-            return invalid;
-        return to_c(handle->terminal_port_search_results[static_cast<size_t>(index)]);
-    }
-
-    int32_t le_get_terminal_ports(LeHandle *handle, LeTerminalId of_terminal, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_terminal_ports", "TerminalPort", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // -of given and valid -> that Terminal's own Ports. Otherwise ->
-        // default scope: every TerminalPort under every Terminal of the
-        // currently selected Abstract (TerminalPort has no direct
-        // Abstract field - it's one hop away via its parent Terminal, so
-        // this unions each Terminal's own port list rather than filtering
-        // the whole TerminalPort pool by a hop expression - .abstract
-        // isn't a filterable leaf field at all, see UPDATES.md item 17).
-        std::vector<le::TerminalPortId> candidates;
-        if (handle->root.get_terminal(from_c(of_terminal)))
-        {
-            const auto &ports = handle->root.get_terminal_ports(from_c(of_terminal));
-            candidates.assign(ports.begin(), ports.end());
-        }
-        else
-        {
-            for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(handle->scene.current_abstract()))
-            {
-                const auto &ports = handle->root.get_terminal_ports(terminal_id);
-                candidates.insert(candidates.end(), ports.begin(), ports.end());
-            }
-        }
-
-        handle->terminal_port_search_results.clear();
-        for (const le::TerminalPortId id : candidates)
-        {
-            const le::TerminalPortData *data = handle->root.get_terminal_port(id);
-            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
-                handle->terminal_port_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->terminal_port_search_results.size());
-    }
-
     LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id)
     {
         const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
@@ -2690,80 +1818,6 @@ extern "C"
         const LeObstructionId result = to_c(handle->root.create_obstruction(le::ObstructionData{.abstract = abstract}));
         handle->root.bump_mutation_version();
         return result;
-    }
-
-    int32_t le_obstruction_property_count(LeHandle *handle, LeObstructionId id)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ObstructionId obstruction_id = from_c(id);
-        handle->cached_obstruction_properties = build_obstruction_properties(handle->root, obstruction_id);
-        handle->cached_obstruction_property_id = obstruction_id;
-        return static_cast<int32_t>(handle->cached_obstruction_properties.size());
-    }
-
-    LeProperty le_obstruction_property_at(LeHandle *handle, LeObstructionId id, int32_t index)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ObstructionId obstruction_id = from_c(id);
-        if (handle->cached_obstruction_property_id != obstruction_id)
-        {
-            handle->cached_obstruction_properties = build_obstruction_properties(handle->root, obstruction_id);
-            handle->cached_obstruction_property_id = obstruction_id;
-        }
-
-        if (static_cast<size_t>(index) >= handle->cached_obstruction_properties.size())
-            return invalid;
-        return to_c(handle->cached_obstruction_properties[static_cast<size_t>(index)]);
-    }
-
-    LeProperty le_obstruction_property_path(LeHandle *handle, LeObstructionId id, const char *path)
-    {
-        const LeProperty invalid{.name = nullptr, .type = LE_PROPERTY_TYPE_STRING, .string_value = nullptr, .int_value = 0, .double_value = 0.0};
-        if (!handle || !path)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        auto parsed = le::parse_property_path(path);
-        if (!parsed)
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: {}", parsed.error()));
-            return invalid;
-        }
-
-        const le::ObstructionId obstruction_id = from_c(id);
-        const le::ObstructionData *data = handle->root.get_obstruction(obstruction_id);
-        if (!data)
-            return invalid;
-
-        if (parsed->size() == 1)
-        {
-            if (auto found = find_property_by_name(build_obstruction_properties(handle->root, obstruction_id), (*parsed)[0]))
-            {
-                handle->cached_property_path_value = std::move(*found);
-                return to_c(handle->cached_property_path_value);
-            }
-            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: unknown field '{}' on Obstruction", (*parsed)[0]));
-            return invalid;
-        }
-
-        if (auto error = validate_filter_path("Obstruction", *parsed))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_obstruction_property_path: {}", *error));
-            return invalid;
-        }
-
-        auto value = le::resolve_property_path(handle->root, obstruction_id, *data, *parsed);
-        if (!value)
-            return invalid;
-        handle->cached_property_path_value = std::move(*value);
-        return to_c(handle->cached_property_path_value);
     }
 
     int le_delete_obstruction(LeHandle *handle, LeObstructionId id)
@@ -2802,44 +1856,6 @@ extern "C"
         handle->obstruction_search_results = handle->root.search_obstruction(
             [&expr](const le::Root &root, le::ObstructionId id, const le::ObstructionData &data)
             { return le::evaluate_filter(*expr, root, id, data); });
-        return static_cast<int32_t>(handle->obstruction_search_results.size());
-    }
-
-    LeObstructionId le_search_result_obstruction_at(LeHandle *handle, int32_t index)
-    {
-        const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->obstruction_search_results.size())
-            return invalid;
-        return to_c(handle->obstruction_search_results[static_cast<size_t>(index)]);
-    }
-
-    int32_t le_get_obstructions(LeHandle *handle, LeAbstractId of_abstract, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_obstructions", "Obstruction", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // -of given and valid -> that Abstract's own Obstructions.
-        // Otherwise -> the currently selected Abstract.
-        const le::AbstractId abstract = handle->root.get_abstract(from_c(of_abstract)) ? from_c(of_abstract) : handle->scene.current_abstract();
-        const std::vector<le::ObstructionId> &candidates = handle->root.get_abstract_obstructions(abstract);
-
-        handle->obstruction_search_results.clear();
-        for (const le::ObstructionId id : candidates)
-        {
-            const le::ObstructionData *data = handle->root.get_obstruction(id);
-            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
-                handle->obstruction_search_results.push_back(id);
-        }
         return static_cast<int32_t>(handle->obstruction_search_results.size());
     }
 
@@ -2896,78 +1912,6 @@ extern "C"
         const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
         handle->root.bump_mutation_version();
         return result;
-    }
-
-    int32_t le_get_shapes(LeHandle *handle, LeTerminalPortId of_terminal_port, LeObstructionId of_obstruction, const char *filter_expression)
-    {
-        if (!handle)
-            return 0;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        bool ok = true;
-        auto expr = parse_and_validate_filter(handle, "le_get_shapes", "Shape", filter_expression, ok);
-        if (!ok)
-            return -1;
-
-        // Either -of parameter (or both) contributes its own Shapes;
-        // if neither is valid, fall back to the current-view default: a
-        // union of every Shape under the current Abstract's Terminals'
-        // Ports and every Shape under its own Obstructions - one hop
-        // further than le_get_terminal_ports' own 2-hop default.
-        std::vector<le::ShapeId> candidates;
-        const le::TerminalPortId port = from_c(of_terminal_port);
-        const le::ObstructionId obstruction = from_c(of_obstruction);
-        const bool port_valid = handle->root.get_terminal_port(port) != nullptr;
-        const bool obstruction_valid = handle->root.get_obstruction(obstruction) != nullptr;
-
-        if (port_valid)
-        {
-            const auto &shapes = handle->root.get_terminal_port_shapes(port);
-            candidates.insert(candidates.end(), shapes.begin(), shapes.end());
-        }
-        if (obstruction_valid)
-        {
-            const auto &shapes = handle->root.get_obstruction_shapes(obstruction);
-            candidates.insert(candidates.end(), shapes.begin(), shapes.end());
-        }
-        if (!port_valid && !obstruction_valid)
-        {
-            const le::AbstractId current = handle->scene.current_abstract();
-            for (const le::TerminalId terminal_id : handle->root.get_abstract_terminals(current))
-            {
-                for (const le::TerminalPortId port_id : handle->root.get_terminal_ports(terminal_id))
-                {
-                    const auto &shapes = handle->root.get_terminal_port_shapes(port_id);
-                    candidates.insert(candidates.end(), shapes.begin(), shapes.end());
-                }
-            }
-            for (const le::ObstructionId obstruction_id : handle->root.get_abstract_obstructions(current))
-            {
-                const auto &shapes = handle->root.get_obstruction_shapes(obstruction_id);
-                candidates.insert(candidates.end(), shapes.begin(), shapes.end());
-            }
-        }
-
-        handle->shape_search_results.clear();
-        for (const le::ShapeId id : candidates)
-        {
-            const le::ShapeData *data = handle->root.get_shape(id);
-            if (data && (!expr || le::evaluate_filter(*expr, handle->root, id, *data)))
-                handle->shape_search_results.push_back(id);
-        }
-        return static_cast<int32_t>(handle->shape_search_results.size());
-    }
-
-    LeShapeId le_search_result_shape_at(LeHandle *handle, int32_t index)
-    {
-        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || index < 0)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        if (static_cast<size_t>(index) >= handle->shape_search_results.size())
-            return invalid;
-        return to_c(handle->shape_search_results[static_cast<size_t>(index)]);
     }
 
     int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)

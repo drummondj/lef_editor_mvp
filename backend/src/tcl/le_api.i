@@ -96,65 +96,19 @@ const char *technology_id();
 int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
-// --- Library/Design/Abstract search (UPDATES.md item 19.1) ---
-int get_libraries_cmd(const char *name_expression, const char *filter_expression);
-const char *get_libraries_at(int index);
-int get_designs_cmd(const char *of_library_token, const char *name_expression, const char *filter_expression);
-const char *get_designs_at(int index);
-const char *get_abstracts_cmd(const char *of_design_token, const char *filter_expression);
-
 // --- Terminal ---
 const char *create_terminal_cmd(long long abstract_id, const char *name, int direction);
-int terminal_property_count(const char *id);
-const char *terminal_property_name(const char *id, int index);
-const char *terminal_property_value(const char *id, int index);
-const char *terminal_property_path(const char *id, const char *path);
-
-// --- Library/Design/Abstract/Shape property rows (UPDATES.md item 19.2) ---
-int library_property_count(const char *id);
-const char *library_property_name(const char *id, int index);
-const char *library_property_value(const char *id, int index);
-const char *library_property_path(const char *id, const char *path);
-int design_property_count(const char *id);
-const char *design_property_name(const char *id, int index);
-const char *design_property_value(const char *id, int index);
-const char *design_property_path(const char *id, const char *path);
-int abstract_property_count(const char *id);
-const char *abstract_property_name(const char *id, int index);
-const char *abstract_property_value(const char *id, int index);
-const char *abstract_property_path(const char *id, const char *path);
-int shape_property_count(const char *id);
-const char *shape_property_name(const char *id, int index);
-const char *shape_property_value(const char *id, int index);
-const char *shape_property_path(const char *id, const char *path);
 int set_terminal_name(const char *id, const char *name);
 int set_terminal_direction_cmd(const char *id, int direction);
 int delete_terminal(const char *id);
-int get_terminals_cmd(const char *of_abstract_token, const char *name_expression, const char *filter_expression);
-const char *get_terminals_at(int index);
 
 // --- TerminalPort ---
 const char *create_terminal_port_cmd(const char *terminal_id);
-int terminal_port_property_count(const char *id);
-const char *terminal_port_property_name(const char *id, int index);
-const char *terminal_port_property_value(const char *id, int index);
-const char *terminal_port_property_path(const char *id, const char *path);
 int delete_terminal_port(const char *id);
-const char *get_terminal_ports_cmd(const char *of_terminal_token, const char *filter_expression);
-const char *terminal_port_shapes(const char *id);
 
 // --- Obstruction ---
 const char *create_obstruction_cmd(long long abstract_id);
-int obstruction_property_count(const char *id);
-const char *obstruction_property_name(const char *id, int index);
-const char *obstruction_property_value(const char *id, int index);
-const char *obstruction_property_path(const char *id, const char *path);
 int delete_obstruction(const char *id);
-const char *get_obstructions_cmd(const char *of_abstract_token, const char *filter_expression);
-const char *obstruction_shapes(const char *id);
-
-// --- Shape search (UPDATES.md item 19.1) ---
-const char *get_shapes_cmd(const char *of_terminal_port_token, const char *of_obstruction_token, const char *filter_expression);
 
 // --- Abstract boundary ---
 int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count);

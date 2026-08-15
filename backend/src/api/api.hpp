@@ -36,6 +36,8 @@ extern "C"
     /// C-compatible; the real struct is defined only in api.cpp.
     typedef struct LeHandle LeHandle;
 
+#include "generated_tcl/ids.inc"
+
     /// @brief Raw RGBA8888 pixel buffer, mirroring render::PixelBuffer but
     /// using explicit fixed-width types (not `int`/`size_t`, whose width
     /// isn't guaranteed identical across toolchains) for a stable FFI ABI.
@@ -52,35 +54,6 @@ extern "C"
         int32_t height;
         int64_t row_bytes;
     } LePixelBuffer;
-
-    /// @brief Mirrors the database's LibraryId handle (generated/ids.hpp's
-    /// `Id<LibraryTag>`) for the FFI boundary: a stable identity for one
-    /// Library, safe to hold onto and pass back into e.g.
-    /// le_set_current_design_by_id() later without re-deriving it from a
-    /// position in le_library_at()'s enumeration. `index ==
-    /// UINT32_MAX` (matching `Id<Tag>::valid()`) marks it invalid - never
-    /// construct one by hand, only copy one returned by this API.
-    typedef struct LeLibraryId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeLibraryId;
-
-    /// @brief Mirrors the database's DesignId handle - see LeLibraryId's
-    /// comment for the general contract.
-    typedef struct LeDesignId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeDesignId;
-
-    /// @brief Mirrors the database's AbstractId handle - see LeLibraryId's
-    /// comment for the general contract.
-    typedef struct LeAbstractId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeAbstractId;
 
     /// @brief One row of le_library_at(): a Library's identity and name.
     typedef struct LeLibraryInfo
@@ -250,99 +223,6 @@ extern "C"
     /// doesn't name a Design currently loaded on this handle - the current
     /// selection is left unchanged on failure.
     int le_set_current_design_by_id(LeHandle *handle, LeDesignId design_id);
-
-    /// @brief Look up the Design named `name` (exact match) on this
-    /// handle - lets a caller resolve a name straight to a LeDesignId
-    /// (e.g. for le_set_current_design_by_id) without walking the flat
-    /// le_library_design_at() enumeration by hand (UPDATES.md item 17's
-    /// `open_design <name>`). Returns an invalid id (index == UINT32_MAX)
-    /// if handle or name is null, or no Design with that name is loaded
-    /// on this handle.
-    LeDesignId le_design_by_name(LeHandle *handle, const char *name);
-
-    // --- UPDATES.md item 19.1: get_<type> enumeration (Library/Design/
-    // Abstract) ---
-    //
-    // A unified `get_<type> [<name-expr>] [-of <parent>] [-filter <expr>]`
-    // TCL command pattern sits on top of these - see le_get_terminals'
-    // own comment for the general contract (name-expression glob
-    // matching, filter-expression validation, "invalid parent id means
-    // use the default scope" convention) shared by every le_get_* function
-    // in this API, not just this section's three.
-
-    /// @brief Look up the Library named `name` (exact match) on this
-    /// handle - same contract as le_design_by_name, one level up. Returns
-    /// an invalid id (index == UINT32_MAX) if handle or name is null, or
-    /// no Library with that name is loaded on this handle.
-    LeLibraryId le_library_by_name(LeHandle *handle, const char *name);
-
-    /// @brief The Library at `id`'s own name - a direct field accessor
-    /// (same convention as le_terminal_name), for a caller that has an id
-    /// (e.g. from le_search_result_library_at) rather than a flat index
-    /// (le_library_at's own addressing). Returned pointer is owned by the
-    /// handle's Root - valid until the next call that mutates this
-    /// handle's Library pool - copy out immediately, don't hold across
-    /// another call. Returns nullptr if handle is null or id doesn't name
-    /// a Library on this handle.
-    const char *le_library_name(LeHandle *handle, LeLibraryId id);
-
-    /// @brief The Design at `id`'s own name - same contract as
-    /// le_library_name, one level down. Distinct from le_design_name
-    /// above (which is flat-index addressed, like le_library_at/
-    /// le_library_design_at's own enumeration) since this plain-C API
-    /// can't overload on parameter type.
-    const char *le_design_name_by_id(LeHandle *handle, LeDesignId id);
-
-    /// @brief Search every Library on this handle - unlike
-    /// le_get_terminals/le_get_designs/le_get_abstracts, Library has no
-    /// parent type, so there is no `-of`/default-scope concept here; this
-    /// always searches every Library loaded so far. `name_expression`
-    /// (glob-matched against Library::name, Tcl `string match` semantics)
-    /// and `filter_expression` (see backend/src/database/filter.hpp) are
-    /// each optional - pass null or "" to skip that axis. Returns the
-    /// match count (0 if handle is null or nothing matched), or -1 if
-    /// filter_expression fails to parse or references an unknown
-    /// field/hop (see le_message_count/le_message_at for either error).
-    /// Read results back via le_search_result_library_at, same "valid
-    /// until the next call" convention as this API's other cached-result
-    /// accessors.
-    int32_t le_get_libraries(LeHandle *handle, const char *name_expression, const char *filter_expression);
-
-    /// @brief The LeLibraryId at `index` (0..le_get_libraries' last
-    /// return value - 1) from the most recent le_get_libraries call.
-    /// Returns an invalid id (index == UINT32_MAX) if handle is null or
-    /// index is out of range.
-    LeLibraryId le_search_result_library_at(LeHandle *handle, int32_t index);
-
-    /// @brief Search Designs. `of_library` scopes to one Library's own
-    /// Designs (see le_library_by_name) - pass an invalid id (e.g. a
-    /// default-constructed LeLibraryId) to use the default scope instead:
-    /// the current view's own Design's Library if a Design is currently
-    /// selected (le_set_current_design/le_set_current_design_by_id), else
-    /// every Design loaded on this handle. `name_expression`/
-    /// `filter_expression` - see le_get_libraries' own comment. Returns
-    /// the match count, or -1 on a filter parse/validation error.
-    int32_t le_get_designs(LeHandle *handle, LeLibraryId of_library, const char *name_expression, const char *filter_expression);
-
-    /// @brief The LeDesignId at `index` from the most recent le_get_designs
-    /// call - see le_search_result_library_at's own contract.
-    LeDesignId le_search_result_design_at(LeHandle *handle, int32_t index);
-
-    /// @brief Search Abstracts. `of_design` scopes to one Design's own
-    /// Abstract (today always exactly one, per Design - see
-    /// le_design_by_name) - pass an invalid id to use the default scope:
-    /// the currently selected Design's Abstract if one is selected, else
-    /// none. Abstract has no name field (LEF has no concept of naming an
-    /// Abstract independently of its Design), so there is no
-    /// `name_expression` parameter here, only `filter_expression` - see
-    /// le_get_libraries' own comment. Returns the match count, or -1 on a
-    /// filter parse/validation error.
-    int32_t le_get_abstracts(LeHandle *handle, LeDesignId of_design, const char *filter_expression);
-
-    /// @brief The LeAbstractId at `index` from the most recent
-    /// le_get_abstracts call - see le_search_result_library_at's own
-    /// contract.
-    LeAbstractId le_search_result_abstract_at(LeHandle *handle, int32_t index);
 
     /// @brief Number of layer-widget rows currently available - mirrors
     /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
@@ -1006,30 +886,6 @@ extern "C"
     // address these same ids generically too - see LeObjectRef) - the
     // natural fit for a TCL caller that isn't driving the GUI at all. ---
 
-    /// @brief Mirrors the database's TerminalId handle - see LeLibraryId's
-    /// comment for the general contract.
-    typedef struct LeTerminalId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeTerminalId;
-
-    /// @brief Mirrors the database's TerminalPortId handle - see
-    /// LeLibraryId's comment for the general contract.
-    typedef struct LeTerminalPortId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeTerminalPortId;
-
-    /// @brief Mirrors the database's ObstructionId handle - see
-    /// LeLibraryId's comment for the general contract.
-    typedef struct LeObstructionId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeObstructionId;
-
     /// @brief Mirrors le::SignalDirection (generated/signal_direction.hpp)
     /// field-for-field - kept as an explicit enum (not a bare int) so a
     /// future reordering of either fails to compile instead of silently
@@ -1443,13 +1299,6 @@ extern "C"
     // (they're a Pipeline-computed render-time label, never LEF-authored
     // data, so there's nothing for a caller to create/read here). ---
 
-    /// @brief Mirrors the database's ShapeId handle - see LeLibraryId's
-    /// comment for the general contract.
-    typedef struct LeShapeId
-    {
-        uint32_t index;
-        uint32_t generation;
-    } LeShapeId;
 
     /// @brief One point, in microns - `le_shape_polygon_point_at`'s and
     /// `le_shape_path_point_at`'s return type.

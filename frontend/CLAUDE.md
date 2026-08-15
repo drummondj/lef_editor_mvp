@@ -1,12 +1,15 @@
 # LEF Layout Editor MVP — Frontend
 
-The real end-user desktop app — distinct from `../flutter_plugin/example`,
-which exists only to prove the plugin's texture path works. Loads a
-user-chosen LEF file and renders it via `lef_editor_plugin`'s
-`LeEditor`/`LeTexture`, which binds to the backend's C API
-(`../backend/src/api/api.hpp`) through Dart FFI. See `../backend/CLAUDE.md`
-for the backend architecture and `../flutter_plugin/CLAUDE.md` for the
-plugin's Dart FFI / native texture wiring — neither is duplicated here.
+The real end-user desktop app, and the only consumer of `lef_editor_plugin`
+now that its own `example/` app has been removed. Loads a user-chosen LEF
+file — via a Tcl `read_lef` command (see `LeProvider.readLef`/
+`LeEditor.createTclConsole`), not a direct Dart FFI call, so `read_lef` is
+the single entry point for reading a LEF file regardless of caller — and
+renders it via `lef_editor_plugin`'s `LeEditor`/`LeTexture`, which binds to
+the backend's C API (`../backend/src/api/api.hpp`) through Dart FFI. See
+`../backend/CLAUDE.md` for the backend architecture and
+`../flutter_plugin/CLAUDE.md` for the plugin's Dart FFI / native texture
+wiring — neither is duplicated here.
 
 ## Requirements (inherited from backend/README.md)
 
@@ -23,10 +26,10 @@ Early and minimal — not yet wired to the plugin:
 - `lib/pages/home.dart` — one "Open LEF ..." button. `openFilePicker()`
   uses `file_selector` to open a native, `.lef`-filtered dialog and
   currently only `debugPrint`s the chosen path — it does not yet call into
-  `lef_editor_plugin`'s `LeEditor` to read the file or display a `Texture`.
-  `../flutter_plugin/example/lib/main.dart` is the reference for that
-  wiring (load → `readLef`/`setCurrentDesign` → `createTexture` →
-  `Texture` widget) once this page grows past the picker.
+  `LeProvider`/`lef_editor_plugin`'s `LeEditor` to read the file or display
+  a `Texture`. `lib/providers/le_provider.dart`'s `readLef` (Tcl
+  `read_lef`) → `openDesign` (`setCurrentDesignById`) → `LeEditor.createTexture`
+  is the reference wiring once this page grows past the picker.
 - `pubspec.yaml` already declares `lef_editor_plugin: path: ../flutter_plugin`,
   so the backend's native code must be built (see the `build-test` skill)
   before `flutter run`/`build macos` will link successfully.

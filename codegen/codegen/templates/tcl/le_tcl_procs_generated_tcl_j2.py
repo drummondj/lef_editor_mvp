@@ -1,10 +1,14 @@
 TEMPLATE = """# GENERATED - do not edit by hand. Regenerate via the regen-tcl skill
 # (codegen --target tcl). Sourced once from le_tcl_procs.tcl.
 #
-# Replaces the old hand-written property_accessors_for_token (a 7-entry
-# if/elseif chain covering only Library/Design/Abstract/Terminal/
-# TerminalPort/Obstruction/Shape) with one covering every TCL-readable
-# pool-backed class - see codegen/codegen/schema.py's Klass.tcl_readable.
+# property_accessors_for_token (dispatches a friendly-id token to its
+# {count name value path} shim-function quadruplet by prefix, across
+# every TCL-readable class) and get_<type>/set_current_<type> - all
+# generated - see backend/CLAUDE.md's TCL codegen section. Never edit
+# this file directly, regenerate via the regen-tcl skill instead.
+# parse_get_args/check_of_prefixes/default_to_unset (le_tcl_procs.tcl)
+# are shared, class-agnostic helpers this file calls into, not generated
+# here.
 
 # Maps a friendly-id token to its {count name value path} shim-function
 # quadruplet - see le_tcl_procs.tcl's own property_accessors_for_token
@@ -19,11 +23,63 @@ proc property_accessors_for_token {token} {
     error "get_properties: unrecognized token \\"$token\\" - expected a friendly id ({% for klass in readable_classes %}{{klass.to_snake_case()}}:{% if not loop.last %}/{% endif %}{% endfor %})"
 }
 
-# is_child list field enumeration (e.g. technology_layers $id) needs no
-# Tcl-level wrapper here - the SWIG-wrapped bare C function of that exact
-# name (le_tcl_shim_generated.hpp/.inc) is already the callable Tcl
-# command, same as the hand-written terminal_port_shapes/
-# obstruction_shapes (le_tcl_shim.hpp) are called directly with no Tcl
-# proc of their own. A same-named `proc` here would shadow the C command
-# and recurse into itself instead of calling it.
+# --- Current-instance access ---
+{% for klass in current_access_classes %}
+# Sets the current {{klass.name}} (see current_{{klass.to_snake_case()}} to read it back) - every
+# other readable class's get_<type> default (-of omitted) scope derives
+# from this, see codegen/codegen/tcl_scope.py's own module docstring.
+proc set_current_{{klass.to_snake_case()}} {id} {
+    if {[set_current_{{klass.to_snake_case()}}_cmd $id] != 0} {
+        error "set_current_{{klass.to_snake_case()}}: failed to select \\"$id\\""
+    }
+    return {}
+}
+{% endfor %}
+
+# --- get_<type> search ---
+{% for klass in classes %}
+{%- set scope = search_scopes[klass.name] %}
+{%- set id_field = klass.tcl_friendly_id_field() %}
+{%- set plural = klass.tcl_plural_snake_case() %}
+proc get_{{plural}} {args} {
+    set parsed [parse_get_args get_{{plural}} $args {{ 1 if id_field else 0 }}]
+    if {[dict get $parsed help]} {
+        return "get_{{plural}} {% if id_field %}\\[<name-expr>...\\] {% endif %}{% if scope.of_params %}\\[-of <token>...\\] {% endif %}\\[-filter <expr>\\] \\[-help\\] - {{klass.description}}"
+    }
+    {%- if scope.of_params %}
+    check_of_prefixes get_{{plural}} [dict get $parsed of_tokens] {{'{'}}{% for op in scope.of_params %}{{op.parent_klass.to_snake_case()}}{% if not loop.last %} {% endif %}{% endfor %}{{'}'}}
+    {%- else %}
+    if {[llength [dict get $parsed of_tokens]] > 0} {
+        error "get_{{plural}}: -of is not valid here - {{klass.name}} has no parent object type"
+    }
+    {%- endif %}
+    set filter [dict get $parsed filter]
+
+    set result {}
+    foreach of_token [default_to_unset [dict get $parsed of_tokens]] {
+        {%- for op in scope.of_params %}
+        set of_{{op.parent_field.name}} {}
+        {%- endfor %}
+        {%- for op in scope.of_params %}
+        if {[string match "{{op.parent_klass.to_snake_case()}}:*" $of_token]} {
+            set of_{{op.parent_field.name}} $of_token
+        }
+        {%- endfor %}
+        {%- if id_field %}
+        foreach name_expr [default_to_unset [dict get $parsed name_exprs]] {
+            set count [get_{{plural}}_cmd {% for op in scope.of_params %}$of_{{op.parent_field.name}} {% endfor %}$name_expr $filter]
+            for {set i 0} {$i < $count} {incr i} {
+                lappend result [get_{{plural}}_at $i]
+            }
+        }
+        {%- else %}
+        set count [get_{{plural}}_cmd {% for op in scope.of_params %}$of_{{op.parent_field.name}} {% endfor %}$filter]
+        for {set i 0} {$i < $count} {incr i} {
+            lappend result [get_{{plural}}_at $i]
+        }
+        {%- endif %}
+    }
+    return [lsort -unique $result]
+}
+{% endfor %}
 """

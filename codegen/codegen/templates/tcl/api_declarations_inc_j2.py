@@ -4,31 +4,18 @@ TEMPLATE = """// GENERATED - do not edit by hand. Regenerate via the regen-tcl s
 // (backend/CLAUDE.md's Database codegen section; this is the TCL-surface
 // analog of it).
 //
-// Plain-C declarations for the generated TCL property-reading surface -
-// one Id typedef, friendly-id-by-name lookup (name-indexed classes
-// only), property table accessors, and is_child-field enumeration pairs
-// per class (see codegen/codegen/tcl_generator.py's HAND_WRITTEN_CLASSES
-// for which classes this covers - Library/Design/Abstract/Terminal/
-// TerminalPort/Obstruction/Shape already have their own hand-written
-// equivalents and are deliberately excluded here).
-
-// --- Id types (typedef'd first, in one pass, so every function below -
-// including another class's child-enumeration accessor returning this
-// class's Id - can reference any of them regardless of declaration
-// order in schema.py). ---
-{% for klass in classes %}
-/// @brief Mirrors the database's {{klass.name}}Id handle - see
-/// LeLibraryId's own comment (api.hpp) for the general contract.
-typedef struct Le{{klass.name}}Id
-{
-    uint32_t index;
-    uint32_t generation;
-} Le{{klass.name}}Id;
-{% endfor %}
+// Plain-C declarations for the generated TCL property-reading/search
+// surface - one Id typedef, friendly-id-by-name lookup (name-indexed
+// classes only), property table accessors, is_child-field enumeration
+// pairs, get_<type> search, and current-instance access (has_current_access
+// classes only), per class. Covers every TCL-readable class uniformly -
+// see codegen/codegen/tcl_generator.py's HAND_WRITTEN_CRUD_CLASSES for
+// which classes *also* have hand-written create_X/delete_X/set_X_<field>
+// mutation commands elsewhere (unrelated to this file).
 
 // --- Friendly-id-by-name lookups (name-indexed classes only) ---
 {% for klass in classes %}
-{%- set id_field = klass.tcl_friendly_id_field() %}
+{%- set id_field = klass.tcl_indexed_id_field() %}
 {%- if id_field %}
 /// @brief The {{klass.name}}Id whose {{id_field.name}} matches `{{id_field.name}}`
 /// (Root::get_{{klass.to_snake_case()}}_by_{{id_field.name}}, a real global cmg
@@ -38,10 +25,15 @@ Le{{klass.name}}Id le_{{klass.to_snake_case()}}_by_{{id_field.name}}(LeHandle *h
 
 /// @brief The {{id_field.name}} of the {{klass.name}} at `id` - the reverse of
 /// le_{{klass.to_snake_case()}}_by_{{id_field.name}} above, needed to format a friendly id
-/// from an Id alone (e.g. when enumerating a parent's children). Owned
-/// by the handle's Root - valid until the handle is destroyed. Returns
-/// nullptr if handle is null or id doesn't name a {{klass.name}} on this handle.
-const char *le_{{klass.to_snake_case()}}_{{id_field.name}}(LeHandle *handle, Le{{klass.name}}Id id);
+/// from an Id alone (e.g. when enumerating a parent's children). Named
+/// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+/// hand-written precedent) so it can never collide with an unrelated,
+/// differently-shaped accessor of the bare name for some other class
+/// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+/// enumeration accessor predating this generator). Owned by the handle's
+/// Root - valid until the handle is destroyed. Returns nullptr if handle
+/// is null or id doesn't name a {{klass.name}} on this handle.
+const char *le_{{klass.to_snake_case()}}_{{id_field.name}}_by_id(LeHandle *handle, Le{{klass.name}}Id id);
 {% endif -%}
 {% endfor %}
 
@@ -63,5 +55,27 @@ LeProperty le_{{klass.to_snake_case()}}_property_path(LeHandle *handle, Le{{klas
 int32_t le_{{klass.to_snake_case()}}_{{child_field.name}}_count(LeHandle *handle, Le{{klass.name}}Id id);
 Le{{child_field.type}}Id le_{{klass.to_snake_case()}}_{{child_field.name}}_at(LeHandle *handle, Le{{klass.name}}Id id, int32_t index);
 {% endfor -%}
+{% endfor %}
+
+// --- Current-instance access (has_current_access classes only) - see
+// codegen/codegen/tcl_scope.py's own module docstring for how every
+// other readable class's get_<type> default scope derives from these. ---
+{% for klass in current_access_classes %}
+/// @brief The current {{klass.name}} (invalid id, index == UINT32_MAX, if unset).
+Le{{klass.name}}Id le_current_{{klass.to_snake_case()}}(LeHandle *handle);
+/// @brief Sets the current {{klass.name}}. Returns 0 on success, nonzero if
+/// handle is null or id doesn't name a {{klass.name}} on this handle (the
+/// current value is left unchanged on failure).
+int le_set_current_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}Id id);
+{% endfor %}
+
+// --- get_<type> search (name-glob + -of + -filter) - see
+// codegen/codegen/tcl_scope.py's own module docstring for how the
+// default (-of omitted) scope is computed. ---
+{% for klass in classes %}
+{%- set scope = search_scopes[klass.name] %}
+{%- set id_field = klass.tcl_friendly_id_field() %}
+int32_t le_get_{{klass.tcl_plural_snake_case()}}(LeHandle *handle{% for op in scope.of_params %}, Le{{op.parent_klass.name}}Id of_{{op.parent_field.name}}{% endfor %}{% if id_field %}, const char *name_expression{% endif %}, const char *filter_expression);
+Le{{klass.name}}Id le_search_result_{{klass.to_snake_case()}}_at(LeHandle *handle, int32_t index);
 {% endfor %}
 """

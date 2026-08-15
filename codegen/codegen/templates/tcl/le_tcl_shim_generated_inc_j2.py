@@ -16,7 +16,15 @@ TEMPLATE = """// GENERATED - do not edit by hand. Regenerate via the regen-tcl s
 // them, e.g. an is_child enumeration function formatting a child's id
 // with a different class's own format_X_id). ---
 {% for klass in classes %}
-{%- set id_field = klass.tcl_friendly_id_field() %}
+{%- set id_field = klass.tcl_indexed_id_field() %}
+{%- set custom_id_field = klass.tcl_friendly_id_field() if id_field is none else none %}
+{%- if custom_id_field %}
+// {{klass.name}}'s friendly id uses `{{custom_id_field.name}}`, but that field isn't
+// globally indexed (see its own comment in backend/src/database/schema.py) -
+// there's no Root-level by-name lookup to generate a resolve/format pair
+// from, so k{{klass.name}}Prefix/resolve_{{klass.to_snake_case()}}_id/format_{{klass.to_snake_case()}}_id stay
+// hand-written (le_tcl_shim.cpp) instead.
+{% else -%}
 constexpr std::string_view k{{klass.name}}Prefix = "{{klass.to_snake_case()}}:";
 {% if id_field -%}
 std::string format_{{klass.to_snake_case()}}_id(const char *{{id_field.name}}) { return std::string(k{{klass.name}}Prefix) + ({{id_field.name}} ? {{id_field.name}} : ""); }
@@ -24,7 +32,7 @@ std::string format_{{klass.to_snake_case()}}_id(const char *{{id_field.name}}) {
 // Overload taking the Id directly (not just its {{id_field.name}}) - needed to
 // format a friendly id when only an Id is in hand, e.g. formatting each
 // element of a parent's child-enumeration list below.
-std::string format_{{klass.to_snake_case()}}_id(Le{{klass.name}}Id id) { return format_{{klass.to_snake_case()}}_id(le_{{klass.to_snake_case()}}_{{id_field.name}}(session(), id)); }
+std::string format_{{klass.to_snake_case()}}_id(Le{{klass.name}}Id id) { return format_{{klass.to_snake_case()}}_id(le_{{klass.to_snake_case()}}_{{id_field.name}}_by_id(session(), id)); }
 
 // Fixed-prefix compare, empty/malformed input degrades to the same
 // invalid sentinel as "no such object" - see resolve_library_id's own
@@ -42,6 +50,7 @@ Le{{klass.name}}Id resolve_{{klass.to_snake_case()}}_id(const char *s)
 {% else -%}
 Le{{klass.name}}Id resolve_{{klass.to_snake_case()}}_id(const char *s) { return resolve_numeric_friendly_id<Le{{klass.name}}Id>(s, k{{klass.name}}Prefix); }
 std::string format_{{klass.to_snake_case()}}_id(Le{{klass.name}}Id id) { return format_numeric_friendly_id(id, k{{klass.name}}Prefix); }
+{% endif %}
 {% endif %}
 {% endfor %}
 
@@ -91,5 +100,39 @@ const char *{{klass.to_snake_case()}}_{{child_field.name}}(const char *id)
     return return_string(out.str());
 }
 {% endfor -%}
+{% endfor %}
+
+// --- Current-instance access ---
+{% for klass in current_access_classes %}
+const char *current_{{klass.to_snake_case()}}()
+{
+    Le{{klass.name}}Id id = le_current_{{klass.to_snake_case()}}(session());
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    return return_string(format_{{klass.to_snake_case()}}_id(id));
+}
+
+int set_current_{{klass.to_snake_case()}}_cmd(const char *id)
+{
+    return le_set_current_{{klass.to_snake_case()}}(session(), resolve_{{klass.to_snake_case()}}_id(id));
+}
+{% endfor %}
+
+// --- get_<type> search ---
+{% for klass in classes %}
+{%- set scope = search_scopes[klass.name] %}
+{%- set id_field = klass.tcl_friendly_id_field() %}
+int get_{{klass.tcl_plural_snake_case()}}_cmd({% for op in scope.of_params %}const char *of_{{op.parent_field.name}}, {% endfor %}{% if id_field %}const char *name_expression, {% endif %}const char *filter_expression)
+{
+    return le_get_{{klass.tcl_plural_snake_case()}}(session(){% for op in scope.of_params %}, resolve_{{op.parent_klass.to_snake_case()}}_id(of_{{op.parent_field.name}}){% endfor %}{% if id_field %}, name_expression{% endif %}, filter_expression);
+}
+
+const char *get_{{klass.tcl_plural_snake_case()}}_at(int index)
+{
+    Le{{klass.name}}Id id = le_search_result_{{klass.to_snake_case()}}_at(session(), index);
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    return return_string(format_{{klass.to_snake_case()}}_id(id));
+}
 {% endfor %}
 """

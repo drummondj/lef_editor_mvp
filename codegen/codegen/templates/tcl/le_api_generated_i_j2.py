@@ -17,4 +17,16 @@ const char *{{klass.to_snake_case()}}_property_path(const char *id, const char *
 const char *{{klass.to_snake_case()}}_{{child_field.name}}(const char *id);
 {% endfor -%}
 {% endfor %}
+
+{% for klass in current_access_classes %}
+const char *current_{{klass.to_snake_case()}}();
+int set_current_{{klass.to_snake_case()}}_cmd(const char *id);
+{% endfor %}
+
+{% for klass in classes %}
+{%- set scope = search_scopes[klass.name] %}
+{%- set id_field = klass.tcl_friendly_id_field() %}
+int get_{{klass.tcl_plural_snake_case()}}_cmd({% for op in scope.of_params %}const char *of_{{op.parent_field.name}}, {% endfor %}{% if id_field %}const char *name_expression, {% endif %}const char *filter_expression);
+const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
+{% endfor %}
 """
