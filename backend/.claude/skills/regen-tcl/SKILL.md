@@ -1,6 +1,6 @@
 ---
 name: regen-tcl
-description: Regenerate the TCL/SWIG property-reading and search surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class or a has_current_access flag, or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope).
+description: Regenerate the TCL/SWIG property-reading, search, and create_<type> surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class, a has_current_access flag, or a create-field's optionality/type, or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope, stale create_<type> signature).
 user-invocable: true
 allowed-tools:
   - Bash
@@ -17,16 +17,20 @@ class's `get_<type>` default scope (`-of` omitted) is derived. Never edit
 `generated_tcl/`/`tcl/generated/` directly - re-run codegen instead.
 
 This is a **separate generation target** from `regen-database` - it
-covers property *reading* and `get_<type>` *search* for every TCL-readable
-class, uniformly (all 15 today - `Terminal`/`TerminalPort`/`Obstruction`/
-`Shape` also have hand-written CRUD elsewhere - see
-`codegen/codegen/tcl_generator.py`'s `HAND_WRITTEN_CRUD_CLASSES`, kept
-purely as documentation, not an exclusion set). `read_lef`, session/
-viewport/design-selection, Shape's rect/polygon/path CRUD + the
-coordinate-list SWIG typemap, `update_abstract_boundary`,
-`create_X`/`delete_X`/`set_X_<field>` for the CRUD classes, and the
-filter-expression evaluator itself (`filter.hpp`) all stay hand-written -
-none of that is per-class CRUD, so it doesn't belong in a generator.
+covers property *reading*, `get_<type>` *search*, and `create_<type>` for
+every TCL-readable class, uniformly (~35 today - `Terminal`/`TerminalPort`/
+`Obstruction`/`Shape` also have hand-written `delete_X`/`set_X_<field>`
+elsewhere - see `codegen/codegen/tcl_generator.py`'s
+`HAND_WRITTEN_CRUD_CLASSES`, kept purely as documentation of that, not an
+exclusion set for `create_X` - every class's `create_<type>` is generated,
+including these four). `read_lef`, session/viewport/design-selection,
+Shape's rect/polygon/path CRUD + the coordinate-list SWIG typemap,
+`update_abstract_boundary`, `delete_X`/`set_X_<field>` for the classes that
+still have hand-written CRUD, and the filter-expression evaluator itself
+(`filter.hpp`) all stay hand-written - none of that is per-class CRUD, so
+it doesn't belong in a generator. See `create_api_body()`'s own docstring
+(`codegen/codegen/schema.py`) for exactly what `create_<type>` covers
+(field scope, required-vs-optional, the multi-parent exactly-one check).
 
 ## Steps
 
@@ -69,17 +73,21 @@ class *out*, pass `tcl_readable=False` to its `Klass(...)` call.
 Its friendly id auto-derives to the field with `index=True` if one exists
 (name-based, `"type:NAME"`), else a numeric packed id (`"type:N"`) - pass
 `tcl_id_field="<field>"` to override which field backs the friendly id
-(used for glob-based `name_expression` search). If that field is *not*
-`index=True` (e.g. `Terminal`'s `name`, unique only per-Abstract, enforced
-by hand rather than a real global `index=True`), `Klass.tcl_indexed_id_field()`
-returns `None` for it even though `tcl_friendly_id_field()` still does -
-the generator then skips the Root-backed by-name lookup pair
-(`le_X_by_<field>`/`le_X_<field>_by_id`) and the friendly-id resolve/
-format pair (`resolve_X_id`/`format_X_id`) for that class, since there's
-no global index to build them from; a class in that situation needs its
+(used for glob-based `name_expression` search). If that field is `index=True`
+but also `unique_per_parent=True` (e.g. `Terminal`'s `name`, unique only
+per-Abstract, not globally - see `Field.unique_per_parent`'s own docstring),
+`Klass.tcl_indexed_id_field()` returns `None` for it even though
+`tcl_friendly_id_field()` still does - the generator then skips the
+Root-backed by-name lookup pair (`le_X_by_<field>`/`le_X_<field>_by_id`) and
+the friendly-id resolve/format pair (`resolve_X_id`/`format_X_id`) for that
+class, since the generated `Root::get_X_by_<field>()` for a
+`unique_per_parent` field takes an extra parent-id parameter, not the plain
+single-value lookup this pair assumes; a class in that situation needs its
 own hand-written `resolve_X_id`/`format_X_id`/`le_X_by_<field>` (see
 `Terminal`'s in `le_tcl_shim.cpp`/`api.cpp` for the pattern - current-
-abstract-scoped name lookup, not a flat Root index).
+abstract-scoped name lookup, not a flat Root index). `create_<type>` is
+unaffected either way - it never uses `tcl_indexed_id_field()`/
+`tcl_friendly_id_field()`, only `Klass.get_create_fields()`.
 
 ## `has_current_access` and the `get_<type>` default-scope algorithm
 
@@ -119,7 +127,8 @@ again on subsequent regenerations:
   generated, that names one of these types), and
   `#include "generated_tcl/declarations.inc"` further down (friendly-id-
   by-name lookups, property-table declarations, `is_child` enumeration,
-  current-instance access, `get_<type>` search declarations).
+  current-instance access, `get_<type>` search declarations, and
+  `le_create_<type>` declarations).
 - `api.cpp` - **four** injection points: `#include "generated_tcl/handle_fields.inc"`
   inside `struct LeHandle`'s body (per-class property-table caches,
   search-result caches, `current_X_id` fields); `#include "generated_tcl/property_accessors_internal.inc"`
@@ -127,8 +136,9 @@ again on subsequent regenerations:
   `build_X_properties`, `to_c`/`from_c` overloads - never called from
   another translation unit); `#include "generated_tcl/property_accessors_public.inc"`
   *inside* `extern "C" { ... }` (the real `le_X_property_count/_at/_path`,
-  friendly-id-by-name lookups, `current_X`/`set_current_X` - external C
-  linkage required since `le_tcl_shim.cpp` calls them; a function defined
+  friendly-id-by-name lookups, `current_X`/`set_current_X`, and
+  `le_create_X` - external C linkage required since `le_tcl_shim.cpp` calls
+  them; a function defined
   inside an anonymous namespace has internal linkage regardless of
   `extern "C"`, so putting these there produces unresolved-symbol link
   errors in `le_tcl.so` - don't merge the internal/public fragments back
@@ -151,8 +161,21 @@ again on subsequent regenerations:
   hand-written, shared/class-agnostic helpers the generated procs call
   into).
 
-If a future round generates a class's CRUD surface too (shrinking
-`HAND_WRITTEN_CRUD_CLASSES`), delete that class's hand-written CRUD from
-all of the files above first, to avoid duplicate-symbol link errors -
-property reading/search are already generated uniformly for every
-readable class today, so no further deletion is needed on that front.
+`create_<type>` is generated for every class already (property reading,
+search, and create are all uniform today) - `Terminal`/`TerminalPort`/
+`Obstruction`/`Shape` had hand-written `create_X` before this, deleted
+across every file above (`api.hpp`/`api.cpp`/`le_tcl_shim.hpp`/`.cpp`/
+`le_api.i`/`le_tcl_procs.tcl`) when the generated equivalents landed, to
+avoid duplicate-symbol link errors (`le_create_X`) or a stale hand-written
+Tcl `proc` silently shadowing the generated one (Tcl allows redefining a
+`proc` with no error - `le_tcl_procs.tcl` sources
+`generated/le_tcl_procs_generated.tcl` *before* its own hand-written procs,
+so a same-named hand-written one defined later always wins silently rather
+than erroring, which is exactly what happened until the stale ones were
+removed). `Shape`'s own `create_terminal_port_shape_cmd`/
+`create_obstruction_shape_cmd` split became one generated
+`create_shape -terminal_port|-obstruction`, not two - see
+`create_api_body()`'s exactly-one-parent check. If a future round generates
+`delete_X`/`set_X_<field>` too (shrinking `HAND_WRITTEN_CRUD_CLASSES`
+further), delete that class's hand-written versions from all of the files
+above first, the same way.

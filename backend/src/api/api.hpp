@@ -900,37 +900,17 @@ extern "C"
         LE_SIGNAL_DIRECTION_FEEDTHRU = 5,
     } LeSignalDirection;
 
-    /// @brief Create a Terminal (a.k.a. pin) on the Abstract at
-    /// `abstract_id` (UPDATES.md item 15's `create_terminal -name IN0
-    /// -direction IN`). Only name/direction are settable here - every
-    /// other Terminal field (LEF's optional use/shape/antenna/etc.
-    /// fields) defaults to its zero value; extend this function's
-    /// parameter list if a real caller needs to set one at creation time
-    /// rather than via a later le_set_terminal_* call. `name` must be
-    /// unique among Terminals already on `abstract_id` (a TCL script
-    /// addresses a Terminal by name - UPDATES.md's Terminal-friendly-id
-    /// item - so a collision would be genuinely ambiguous, not just
-    /// unusual; enforced by a linear scan over
-    /// Root::get_abstract_terminals, not a cmg index=True lookup, since
-    /// real LEF libraries legitimately reuse pin names like VDD/IN0
-    /// across different Abstracts and index=True's generated index is
-    /// flat/global, not per-Abstract). Returns an invalid LeTerminalId
-    /// (index == UINT32_MAX) if handle or name is null, abstract_id
-    /// doesn't name an Abstract on this handle, or name collides with an
-    /// existing Terminal on it (pushes an ERROR message the same way a
-    /// filter-expression parse error does - see le_message_count/
-    /// le_message_at).
-    LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction);
-
     /// @brief Find the Terminal named `name` (exact match) within the
     /// currently selected Design's Abstract (see le_set_current_design/
     /// le_set_current_design_by_id - same current-view scoping
     /// le_get_terminals already uses). A linear scan over
-    /// Root::get_abstract_terminals, not a cmg index=True lookup - see
-    /// le_create_terminal's own comment for why. Returns an invalid
-    /// LeTerminalId (index == UINT32_MAX) if handle or name is null, no
-    /// Design is currently selected, or no Terminal in the current
-    /// Abstract has that name.
+    /// Root::get_abstract_terminals, not a cmg index=True lookup - Terminal
+    /// name uniqueness is per-Abstract (unique_per_parent, see
+    /// backend/src/database/schema.py's own Terminal.name comment), not
+    /// global, so a flat index=True lookup would be the wrong shape here.
+    /// Returns an invalid LeTerminalId (index == UINT32_MAX) if handle or
+    /// name is null, no Design is currently selected, or no Terminal in
+    /// the current Abstract has that name.
     LeTerminalId le_terminal_by_name(LeHandle *handle, const char *name);
 
     /// @brief The Terminal at `id`'s own name - a direct field accessor
@@ -1053,17 +1033,16 @@ extern "C"
 
     /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
     /// `update_terminal_port -name ...` pattern, applied to Terminal
-    /// itself) - `name` isn't index=True so this is a direct field
-    /// mutation, not a generated Root::set_terminal_name (see
-    /// TCL_EXPLORATION.md's "cmg codegen design" for why only
-    /// indexed/parent fields get a generated setter). Same uniqueness
-    /// enforcement as le_create_terminal, scoped to the Terminal's own
-    /// Abstract - renaming to the Terminal's own current name is a no-op
+    /// itself) - delegates to the generated, unique_per_parent-aware
+    /// Root::set_terminal_name (see backend/src/database/schema.py's own
+    /// Terminal.name comment), which keeps the per-Abstract name index in
+    /// sync and rejects a collision with a sibling Terminal on the same
+    /// Abstract; renaming to the Terminal's own current name is a no-op
     /// success, not a self-collision. Returns 0 on success, nonzero if
     /// handle or name is null, id doesn't name a Terminal on this handle,
     /// or name collides with a different Terminal already on the same
-    /// Abstract (pushes an ERROR message, same convention as
-    /// le_create_terminal).
+    /// Abstract (pushes an ERROR message the same way le_create_terminal
+    /// does).
     int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name);
 
     /// @brief Change the Terminal at `id`'s signal direction. Returns 0
@@ -1130,23 +1109,17 @@ extern "C"
     /// le_message_at for either error).
     int32_t le_get_terminals(LeHandle *handle, LeAbstractId of_abstract, const char *name_expression, const char *filter_expression);
 
-    // --- TerminalPort/Obstruction CRUD + filter-search, and Abstract
+    // --- TerminalPort/Obstruction filter-search, and Abstract
     // boundary update (Phase 4, continued) ---
     //
-    // le_create_terminal_port/le_create_obstruction create an empty
-    // parent only - no layer, no geometry. Shape creation
-    // (le_create_terminal_port_shape/le_create_obstruction_shape) and all
-    // shape geometry (le_add_shape_rect/_polygon/_path, further below)
-    // are separate calls: rects aren't privileged over polygons/paths by
-    // being foldable into one "create" call while the others aren't -
-    // every shape member is added the same way, after the shape exists.
-
-    /// @brief Create an empty TerminalPort owned by the Terminal at
-    /// `terminal_id` - no shapes yet, see le_create_terminal_port_shape.
-    /// Returns an invalid LeTerminalPortId (index == UINT32_MAX) if
-    /// handle is null, or terminal_id doesn't name a Terminal on this
-    /// handle.
-    LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id);
+    // le_create_terminal_port/le_create_obstruction (an empty parent
+    // only - no layer, no geometry) are generated (generated_tcl/
+    // declarations.inc, below), not hand-written here. Shape creation
+    // (le_create_shape) and all shape geometry (le_add_shape_rect/
+    // _polygon/_path, further below) are separate calls: rects aren't
+    // privileged over polygons/paths by being foldable into one "create"
+    // call while the others aren't - every shape member is added the
+    // same way, after the shape exists.
 
     /// @brief Number of property rows for the TerminalPort at `id` - same
     /// by-id (not selection-scoped) shape as le_terminal_property_count.
@@ -1202,13 +1175,6 @@ extern "C"
     /// parameter, only `filter_expression`. Returns the match count, or
     /// -1 on a filter parse/validation error.
     int32_t le_get_terminal_ports(LeHandle *handle, LeTerminalId of_terminal, const char *filter_expression);
-
-    /// @brief Create an empty Obstruction on the Abstract at
-    /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
-    /// Returns an invalid LeObstructionId (index == UINT32_MAX) if
-    /// handle is null, or abstract_id doesn't name an Abstract on this
-    /// handle.
-    LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id);
 
     /// @brief Number of property rows for the Obstruction at `id` - same
     /// by-id shape as le_terminal_property_count. Rows: "shapes_count"
@@ -1278,9 +1244,12 @@ extern "C"
     // deleted independently of its parent). A shape's own id doesn't say
     // which kind of parent it belongs to - le_terminal_port_shape_at/
     // le_obstruction_shape_at are how a caller discovers a LeShapeId in
-    // the first place (enumerating a specific parent's shapes) or
-    // le_create_terminal_port_shape/le_create_obstruction_shape return
-    // one directly; after that, every le_shape_*/le_add_shape_*/
+    // the first place (enumerating a specific parent's shapes) or the
+    // generated le_create_shape (generated_tcl/declarations.inc, below -
+    // takes both a LeTerminalPortId and a LeObstructionId, exactly one of
+    // which must resolve, replacing this API's own former
+    // le_create_terminal_port_shape/le_create_obstruction_shape split)
+    // returns one directly; after that, every le_shape_*/le_add_shape_*/
     // le_remove_shape_*/le_delete_shape call below only needs the
     // LeShapeId itself.
     //
@@ -1318,18 +1287,6 @@ extern "C"
         double ur_y_um;
     } LeRectUm;
 
-    /// @brief Create an empty Shape (just `layer_name`, no geometry yet)
-    /// owned by the TerminalPort at `port_id`. Returns an invalid
-    /// LeShapeId (index == UINT32_MAX) if handle or layer_name is null,
-    /// or port_id doesn't name a TerminalPort on this handle.
-    LeShapeId le_create_terminal_port_shape(LeHandle *handle, LeTerminalPortId port_id, const char *layer_name);
-
-    /// @brief Create an empty Shape owned by the Obstruction at
-    /// `obstruction_id` - see le_create_terminal_port_shape's own
-    /// comment for the general contract. Returns an invalid LeShapeId if
-    /// handle or layer_name is null, or obstruction_id doesn't name an
-    /// Obstruction on this handle.
-    LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name);
 
     /// @brief Search Shapes (UPDATES.md item 19.1) - `of_terminal_port`/
     /// `of_obstruction` each independently scope to one TerminalPort's or
@@ -1531,12 +1488,17 @@ extern "C"
     /// this handle, or path_index is out of range.
     int le_remove_shape_path(LeHandle *handle, LeShapeId id, int32_t path_index);
 
-    // --- Generated TCL property-reading surface (see backend/CLAUDE.md's
-    // TCL section) - one Id typedef, friendly-id-by-name lookup, property
-    // table accessors, and is_child-field enumeration pairs, for every
-    // TCL-readable class not already covered by hand-written code above.
-    // Never edit generated_tcl/declarations.inc directly - regenerate via
-    // the regen-tcl skill instead. ---
+    // --- Generated TCL property-reading and create_<type> surface (see
+    // backend/CLAUDE.md's TCL section) - one Id typedef, friendly-id-by-
+    // name lookup, property table accessors, is_child-field enumeration
+    // pairs, get_<type> search, and create_<type> (le_create_terminal/
+    // le_create_terminal_port/le_create_obstruction/le_create_shape
+    // included - the last unifies the former hand-written
+    // le_create_terminal_port_shape/le_create_obstruction_shape split
+    // into one function taking both parent ids, exactly one of which
+    // must resolve), for every TCL-readable class. Never edit
+    // generated_tcl/declarations.inc directly - regenerate via the
+    // regen-tcl skill instead. ---
 #include "generated_tcl/declarations.inc"
 
     /// @brief The singleton Technology's friendly id (see

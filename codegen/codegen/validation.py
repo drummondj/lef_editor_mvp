@@ -286,6 +286,40 @@ class ChildHasParentRule(BaseRule):
         return errors
 
 
+class UniquePerParentRequiresIndexAndSingleParentRule(BaseRule):
+    """
+    Rule that checks unique_per_parent fields have index=True and that
+    their owning Klass has exactly one parent field (the scope a
+    per-parent uniqueness check is relative to would otherwise be
+    ambiguous - see Field.unique_per_parent's own docstring).
+
+    Attributes:
+        name: The name of the rule
+        description: The description of the rule
+    """
+
+    def validate(self, schema) -> List[RuleError]:
+        errors = []
+        for klass in schema.classes:
+            for field in klass.fields:
+                if not field.unique_per_parent:
+                    continue
+                if not field.index:
+                    errors.append(
+                        RuleError(
+                            f"Field {field.name} in klass {klass.name} has unique_per_parent=True but index=False"
+                        )
+                    )
+                parent_fields = klass.get_parent_fields()
+                if len(parent_fields) != 1:
+                    errors.append(
+                        RuleError(
+                            f"Field {field.name} in klass {klass.name} has unique_per_parent=True but its klass has {len(parent_fields)} parent fields (exactly 1 required)"
+                        )
+                    )
+        return errors
+
+
 class SchemaContainsOneRootKlassRule(BaseRule):
     """
     Rule that checks if the schema contains one root klass
@@ -345,6 +379,10 @@ class SchemaRuleSet(RuleSet):
             ChildHasParentRule(
                 "ChildHasParentRule",
                 "Checks if the child has a parent",
+            ),
+            UniquePerParentRequiresIndexAndSingleParentRule(
+                "UniquePerParentRequiresIndexAndSingleParentRule",
+                "Checks unique_per_parent fields have index=True and exactly one parent field",
             ),
             # SchemaContainsOneRootKlassRule(
             #     "SchemaContainsOneRootKlassRule",

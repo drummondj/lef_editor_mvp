@@ -2714,8 +2714,8 @@ TEST_F(ApiFixture, CreateTerminalWithNullHandleOrNameReturnsInvalidId)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
 
-    EXPECT_EQ(le_create_terminal(nullptr, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
-    EXPECT_EQ(le_create_terminal(handle, abstract_id, nullptr, LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal(nullptr, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal(handle, abstract_id, nullptr, "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0).index, UINT32_MAX);
 }
 
 TEST_F(ApiFixture, CreateTerminalWithUnknownAbstractIdReturnsInvalidId)
@@ -2723,7 +2723,7 @@ TEST_F(ApiFixture, CreateTerminalWithUnknownAbstractIdReturnsInvalidId)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId bogus{.index = UINT32_MAX, .generation = 0};
 
-    EXPECT_EQ(le_create_terminal(handle, bogus, "IN0", LE_SIGNAL_DIRECTION_INPUT).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal(handle, bogus, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0).index, UINT32_MAX);
 }
 
 TEST_F(ApiFixture, CreateTerminalSucceedsAndIsReadableViaProperties)
@@ -2731,7 +2731,7 @@ TEST_F(ApiFixture, CreateTerminalSucceedsAndIsReadableViaProperties)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
 
-    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     ASSERT_NE(id.index, UINT32_MAX);
 
     const int32_t count = le_terminal_property_count(handle, id);
@@ -2763,6 +2763,44 @@ TEST_F(ApiFixture, CreateTerminalSucceedsAndIsReadableViaProperties)
     EXPECT_TRUE(found_port_count);
 }
 
+TEST_F(ApiFixture, CreateTerminalWithADuplicateNameOnTheSameAbstractFailsButDifferentAbstractsBothSucceed)
+{
+    // Root::create_terminal is fallible (Terminal.name is unique_per_parent,
+    // scoped to Abstract) - le_create_terminal surfaces that as an invalid
+    // id, same as any other failure. Two different Abstracts legitimately
+    // reuse the same pin name (e.g. VDD/IN0 across a library's cells), so
+    // that must keep succeeding.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_read_lef(handle, fixture_path("othercell.lef").c_str()), 0);
+    const LeAbstractId testcell_id = testcell_abstract_id(handle);
+    const LeAbstractId othercell_id = le_library_design_at(handle, 1, 0).abstract_id;
+    ASSERT_NE(testcell_id.index, UINT32_MAX);
+    ASSERT_NE(othercell_id.index, UINT32_MAX);
+
+    const LeTerminalId first = le_create_terminal(handle, testcell_id, "DUPTEST", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    ASSERT_NE(first.index, UINT32_MAX);
+
+    const LeTerminalId duplicate = le_create_terminal(handle, testcell_id, "DUPTEST", "OUTPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    EXPECT_EQ(duplicate.index, UINT32_MAX);
+
+    const LeTerminalId other_abstract = le_create_terminal(handle, othercell_id, "DUPTEST", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    EXPECT_NE(other_abstract.index, UINT32_MAX);
+}
+
+TEST_F(ApiFixture, SetTerminalNameToADuplicateOnTheSameAbstractFailsButRenamingToItsOwnCurrentNameSucceeds)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    const LeTerminalId first = le_create_terminal(handle, abstract_id, "FIRST", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    const LeTerminalId second = le_create_terminal(handle, abstract_id, "SECOND", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    ASSERT_NE(first.index, UINT32_MAX);
+    ASSERT_NE(second.index, UINT32_MAX);
+
+    EXPECT_NE(le_set_terminal_name(handle, second, "FIRST"), 0);
+    EXPECT_EQ(le_set_terminal_name(handle, second, "SECOND"), 0);
+}
+
 TEST_F(ApiFixture, TerminalPropertyCountAndAtForUnknownIdDegradeGracefully)
 {
     const LeTerminalId bogus{.index = UINT32_MAX, .generation = 0};
@@ -2778,7 +2816,7 @@ TEST_F(ApiFixture, SetTerminalNameAndDirectionUpdateTheirProperties)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     ASSERT_NE(id.index, UINT32_MAX);
 
     EXPECT_EQ(le_set_terminal_name(handle, id, "IN0_RENAMED"), 0);
@@ -2818,7 +2856,7 @@ TEST_F(ApiFixture, DeleteTerminalRemovesItAndIsIdempotentlySafeAfterwards)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     ASSERT_NE(id.index, UINT32_MAX);
 
     EXPECT_EQ(le_delete_terminal(handle, id), 0);
@@ -2833,9 +2871,9 @@ TEST_F(ApiFixture, SearchTerminalFindsMatchesByFilterExpression)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
-    const LeTerminalId in1 = le_create_terminal(handle, abstract_id, "IN1", LE_SIGNAL_DIRECTION_INPUT);
-    le_create_terminal(handle, abstract_id, "OUT0", LE_SIGNAL_DIRECTION_OUTPUT);
+    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    const LeTerminalId in1 = le_create_terminal(handle, abstract_id, "IN1", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    le_create_terminal(handle, abstract_id, "OUT0", "OUTPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
 
     const int32_t count = le_search_terminal(handle, ".name =~ IN*");
     ASSERT_EQ(count, 2);
@@ -2886,8 +2924,8 @@ namespace
     // those three calls' own validation call them directly instead.
     LeTerminalPortId create_terminal_port_with_rect(LeHandle *handle, LeTerminalId terminal_id, const char *layer_name, const double rect_um[4])
     {
-        const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id);
-        const LeShapeId shape_id = le_create_terminal_port_shape(handle, port_id, layer_name);
+        const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id, nullptr);
+        const LeShapeId shape_id = le_create_shape(handle, port_id, LeObstructionId{.index = UINT32_MAX, .generation = 0}, layer_name, 0, 0.0, 0, 0.0, 0);
         le_add_shape_rect(handle, shape_id, rect_um[0], rect_um[1], rect_um[2], rect_um[3]);
         return port_id;
     }
@@ -2895,7 +2933,7 @@ namespace
     LeObstructionId create_obstruction_with_rect(LeHandle *handle, LeAbstractId abstract_id, const char *layer_name, const double rect_um[4])
     {
         const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
-        const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, layer_name);
+        const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, layer_name, 0, 0.0, 0, 0.0, 0);
         le_add_shape_rect(handle, shape_id, rect_um[0], rect_um[1], rect_um[2], rect_um[3]);
         return obstruction_id;
     }
@@ -2905,15 +2943,15 @@ TEST_F(ApiFixture, CreateTerminalPortWithNullHandleOrUnknownTerminalReturnsInval
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
 
-    EXPECT_EQ(le_create_terminal_port(nullptr, LeTerminalId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
-    EXPECT_EQ(le_create_terminal_port(handle, LeTerminalId{.index = UINT32_MAX, .generation = 0}).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal_port(nullptr, LeTerminalId{.index = UINT32_MAX, .generation = 0}, nullptr).index, UINT32_MAX);
+    EXPECT_EQ(le_create_terminal_port(handle, LeTerminalId{.index = UINT32_MAX, .generation = 0}, nullptr).index, UINT32_MAX);
 }
 
 TEST_F(ApiFixture, CreateTerminalPortSucceedsAndIsReadableViaProperties)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
 
     const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
     ASSERT_NE(port_id.index, UINT32_MAX);
@@ -2945,7 +2983,7 @@ TEST_F(ApiFixture, DeleteTerminalPortCascadesToItsShapesAndIsIdempotentlySafeAft
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
     ASSERT_NE(port_id.index, UINT32_MAX);
     const LeShapeId shape_id = le_terminal_port_shape_at(handle, port_id, 0);
@@ -2963,8 +3001,8 @@ TEST_F(ApiFixture, SearchTerminalPortFindsMatchesUsingUpdatesMdItem15SExampleExp
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
-    const LeTerminalId out0 = le_create_terminal(handle, abstract_id, "OUT0", LE_SIGNAL_DIRECTION_OUTPUT);
+    const LeTerminalId in0 = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    const LeTerminalId out0 = le_create_terminal(handle, abstract_id, "OUT0", "OUTPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     const LeTerminalPortId matching_port = create_terminal_port_with_rect(handle, in0, "M4", kRect0);
     create_terminal_port_with_rect(handle, in0, "M5", kRect0);  // wrong layer
     create_terminal_port_with_rect(handle, out0, "M4", kRect0); // wrong terminal name
@@ -3071,24 +3109,24 @@ TEST_F(ApiFixture, CreateShapeWithNullHandleOrLayerNameOrUnknownParentReturnsInv
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
-    const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
+    const LeTerminalPortId port_id = le_create_terminal_port(handle, terminal_id, nullptr);
     const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
 
-    EXPECT_EQ(le_create_terminal_port_shape(nullptr, port_id, "M4").index, UINT32_MAX);
-    EXPECT_EQ(le_create_terminal_port_shape(handle, port_id, nullptr).index, UINT32_MAX);
-    EXPECT_EQ(le_create_terminal_port_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, "M4").index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(nullptr, port_id, LeObstructionId{.index = UINT32_MAX, .generation = 0}, "M4", 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(handle, port_id, LeObstructionId{.index = UINT32_MAX, .generation = 0}, nullptr, 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, LeObstructionId{.index = UINT32_MAX, .generation = 0}, "M4", 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
 
-    EXPECT_EQ(le_create_obstruction_shape(nullptr, obstruction_id, "M4").index, UINT32_MAX);
-    EXPECT_EQ(le_create_obstruction_shape(handle, obstruction_id, nullptr).index, UINT32_MAX);
-    EXPECT_EQ(le_create_obstruction_shape(handle, LeObstructionId{.index = UINT32_MAX, .generation = 0}, "M4").index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(nullptr, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, nullptr, 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
+    EXPECT_EQ(le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, LeObstructionId{.index = UINT32_MAX, .generation = 0}, "M4", 0, 0.0, 0, 0.0, 0).index, UINT32_MAX);
 }
 
 TEST_F(ApiFixture, TerminalPortShapeCountAndAtEnumerateAndReadBackWhatWasCreated)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", LE_SIGNAL_DIRECTION_INPUT);
+    const LeTerminalId terminal_id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     const LeTerminalPortId port_id = create_terminal_port_with_rect(handle, terminal_id, "M4", kRect0);
     ASSERT_NE(port_id.index, UINT32_MAX);
 
@@ -3160,7 +3198,7 @@ TEST_F(ApiFixture, AddAndRemoveShapeRect)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
     const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
-    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, 0.0, 0, 0.0, 0);
     ASSERT_NE(shape_id.index, UINT32_MAX);
     ASSERT_EQ(le_shape_rect_count(handle, shape_id), 0);
 
@@ -3184,7 +3222,7 @@ TEST_F(ApiFixture, AddAndRemoveShapePolygon)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
     const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
-    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, 0.0, 0, 0.0, 0);
     ASSERT_NE(shape_id.index, UINT32_MAX);
 
     constexpr double triangle[] = {0.0, 0.0, 1.0, 0.0, 0.5, 1.0};
@@ -3212,7 +3250,7 @@ TEST_F(ApiFixture, AddAndRemoveShapePath)
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
     const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
-    const LeShapeId shape_id = le_create_obstruction_shape(handle, obstruction_id, "M4");
+    const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, 0.0, 0, 0.0, 0);
     ASSERT_NE(shape_id.index, UINT32_MAX);
 
     constexpr double centerline[] = {0.0, 0.0, 1.0, 0.0};

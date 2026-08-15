@@ -135,4 +135,22 @@ const char *get_{{klass.tcl_plural_snake_case()}}_at(int index)
     return return_string(format_{{klass.to_snake_case()}}_id(id));
 }
 {% endfor %}
+
+// --- create_<type> - mirrors create_terminal_port_cmd/create_obstruction_cmd's
+// own shape exactly (resolve each parent token, forward, format the new
+// id back into a friendly-id string on success, "" on failure - le_create_<type>
+// itself pushes the actual error message onto handle->messages) - always
+// uses the Id-taking format_<snake>_id() overload (present for every
+// class, hand-written or generated - see that overload's own comment)
+// rather than any class-specific field-taking overload some classes also
+// happen to have. ---
+{% for klass in classes %}
+const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}})
+{
+    Le{{klass.name}}Id id = le_create_{{klass.to_snake_case()}}(session(){% if klass.create_shim_forward_args() %}, {{klass.create_shim_forward_args()}}{% endif %});
+    if (id.index == UINT32_MAX)
+        return return_string("");
+    return return_string(format_{{klass.to_snake_case()}}_id(id));
+}
+{% endfor %}
 """

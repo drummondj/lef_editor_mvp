@@ -34,7 +34,12 @@ namespace
 
         TerminalId add_terminal_shape(const Shape &shape)
         {
-            TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+            // Terminal.name is unique_per_parent (per-Abstract) - a
+            // synthetic per-call name, since none of the tests using this
+            // helper care about the terminal's own name, just its
+            // existence/geometry, and several call it more than once
+            // against the same abstract_id.
+            TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "T" + std::to_string(next_terminal_index++)});
             add_port_shape(terminal_id, shape);
             return terminal_id;
         }
@@ -55,6 +60,7 @@ namespace
         ViewLayerSet view_layers;
         AbstractId abstract_id;
         Pipeline pipeline;
+        int next_terminal_index = 0;
     };
 
     // Whether any polygon in `polygons` has a point at exactly (x, y) -

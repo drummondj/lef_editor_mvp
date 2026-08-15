@@ -163,29 +163,6 @@ namespace
         };
     }
 
-    // le_create_terminal/le_set_terminal_name's uniqueness enforcement -
-    // a plain O(n) linear scan over the already Abstract-scoped
-    // Root::get_abstract_terminals, not a cmg index=True lookup: a
-    // generated index=True index is flat/global (see design_by_name/
-    // library_by_name), which would be wrong here since real LEF
-    // libraries legitimately reuse pin names like VDD/IN0 across many
-    // different Abstracts - uniqueness only ever needs to hold within
-    // one Abstract. `exclude` lets le_set_terminal_name skip the
-    // Terminal being renamed itself, so renaming to its own current name
-    // is a no-op success, not a self-collision.
-    bool terminal_name_taken(const le::Root &root, le::AbstractId abstract, const std::string &name, le::TerminalId exclude = {})
-    {
-        for (const le::TerminalId id : root.get_abstract_terminals(abstract))
-        {
-            if (id == exclude)
-                continue;
-            const le::TerminalData *terminal = root.get_terminal(id);
-            if (terminal && terminal->name == name)
-                return true;
-        }
-        return false;
-    }
-
     // UPDATES.md item 19.1's `-filter` validation (every le_get_* function
     // below) - a hand-maintained allowlist of each class's filterable leaf
     // fields and hops, cross-checked directly against each class's own
@@ -1616,32 +1593,6 @@ extern "C"
         return ref_from_id(LE_OBJECT_KIND_SHAPE, selection[static_cast<size_t>(selection_index)].shape_id);
     }
 
-    LeTerminalId le_create_terminal(LeHandle *handle, LeAbstractId abstract_id, const char *name, int32_t direction)
-    {
-        const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || !name)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::AbstractId abstract = from_c(abstract_id);
-        if (!handle->root.get_abstract(abstract))
-            return invalid;
-
-        if (terminal_name_taken(handle->root, abstract, name))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_create_terminal: a Terminal named '{}' already exists on this Abstract", name));
-            return invalid;
-        }
-
-        const LeTerminalId result = to_c(handle->root.create_terminal(le::TerminalData{
-            .abstract = abstract,
-            .name = name,
-            .direction = static_cast<le::SignalDirection>(direction),
-        }));
-        handle->root.bump_mutation_version();
-        return result;
-    }
-
     LeTerminalId le_terminal_by_name(LeHandle *handle, const char *name)
     {
         const LeTerminalId invalid{.index = UINT32_MAX, .generation = 0};
@@ -1675,17 +1626,21 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const le::TerminalId terminal_id = from_c(id);
-        le::TerminalData *terminal = handle->root.get_terminal(terminal_id);
-        if (!terminal)
+        if (!handle->root.get_terminal(terminal_id))
             return 1;
 
-        if (terminal_name_taken(handle->root, terminal->abstract, name, terminal_id))
+        // Root::set_terminal_name keeps the unique_per_parent index in
+        // sync (unlike mutating TerminalData::name directly through a
+        // get_terminal() pointer, which would leave a stale index entry
+        // behind) and is itself fallible on a same-Abstract name
+        // collision - already confirmed to exist above, so false here
+        // means the new name collides with a sibling Terminal.
+        if (!handle->root.set_terminal_name(terminal_id, name))
         {
             handle->messages.push_back(fmt::format("ERROR: le_set_terminal_name: a Terminal named '{}' already exists on this Abstract", name));
             return 1;
         }
 
-        terminal->name = name;
         handle->root.bump_mutation_version();
         return 0;
     }
@@ -1747,22 +1702,6 @@ extern "C"
         return static_cast<int32_t>(handle->terminal_search_results.size());
     }
 
-    LeTerminalPortId le_create_terminal_port(LeHandle *handle, LeTerminalId terminal_id)
-    {
-        const LeTerminalPortId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalId terminal = from_c(terminal_id);
-        if (!handle->root.get_terminal(terminal))
-            return invalid;
-
-        const LeTerminalPortId result = to_c(handle->root.create_terminal_port(le::TerminalPortData{.terminal = terminal}));
-        handle->root.bump_mutation_version();
-        return result;
-    }
-
     int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id)
     {
         if (!handle)
@@ -1802,22 +1741,6 @@ extern "C"
             [&expr](const le::Root &root, le::TerminalPortId id, const le::TerminalPortData &data)
             { return le::evaluate_filter(*expr, root, id, data); });
         return static_cast<int32_t>(handle->terminal_port_search_results.size());
-    }
-
-    LeObstructionId le_create_obstruction(LeHandle *handle, LeAbstractId abstract_id)
-    {
-        const LeObstructionId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::AbstractId abstract = from_c(abstract_id);
-        if (!handle->root.get_abstract(abstract))
-            return invalid;
-
-        const LeObstructionId result = to_c(handle->root.create_obstruction(le::ObstructionData{.abstract = abstract}));
-        handle->root.bump_mutation_version();
-        return result;
     }
 
     int le_delete_obstruction(LeHandle *handle, LeObstructionId id)
@@ -1880,38 +1803,6 @@ extern "C"
         abstract->boundary = {std::move(polygon)};
         handle->root.bump_mutation_version();
         return 0;
-    }
-
-    LeShapeId le_create_terminal_port_shape(LeHandle *handle, LeTerminalPortId port_id, const char *layer_name)
-    {
-        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || !layer_name)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalPortId port = from_c(port_id);
-        if (!handle->root.get_terminal_port(port))
-            return invalid;
-
-        const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.terminal_port = port, .layer_name = layer_name}));
-        handle->root.bump_mutation_version();
-        return result;
-    }
-
-    LeShapeId le_create_obstruction_shape(LeHandle *handle, LeObstructionId obstruction_id, const char *layer_name)
-    {
-        const LeShapeId invalid{.index = UINT32_MAX, .generation = 0};
-        if (!handle || !layer_name)
-            return invalid;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ObstructionId obstruction = from_c(obstruction_id);
-        if (!handle->root.get_obstruction(obstruction))
-            return invalid;
-
-        const LeShapeId result = to_c(handle->root.create_shape(le::ShapeData{.obstruction = obstruction, .layer_name = layer_name}));
-        handle->root.bump_mutation_version();
-        return result;
     }
 
     int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)

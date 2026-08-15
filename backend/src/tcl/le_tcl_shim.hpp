@@ -25,47 +25,54 @@
 // real interface?" - it wasn't; Phase 0 fixed that, and every Phase 4
 // CRUD command below follows the same shape.
 //
-// --- IDs (Phase 5, revised for friendly ids - UPDATES.md items 18/19.1) ---
-// AbstractId/DesignId's own CRUD-flag/session-selection uses
-// (design_abstract_id, design_by_name, set_current_design_cmd,
-// update_abstract_boundary_cmd's abstract_id argument, every `-abstract`
-// CRUD flag) are still a plain {uint32_t index, generation} struct in
-// api.hpp, packed into one int64_t (generation in the high 32 bits, index
-// in the low 32 bits, via pack<IdT>/unpack<IdT> in le_tcl_shim.cpp) -
-// int64_t is a fundamental type SWIG's stdint.i already marshals to/from
-// a plain Tcl integer with zero custom typemap code. kInvalidId
-// (0xFFFFFFFF) marks an invalid id for these two types in that role,
-// since a packed valid id (index != UINT32_MAX) can never equal it. Item
-// 19.1's own new get_libraries/get_designs/get_abstracts commands are
-// additive - they return/accept friendly strings (below), not a retrofit
-// of those already-shipped entry points (a deliberate, flagged choice,
-// see UPDATES.md item 19.1's own Resolution).
+// --- IDs (Phase 5, revised for friendly ids - UPDATES.md items 18/19.1;
+// generated create_<type> - see backend/CLAUDE.md's TCL codegen section -
+// later moved every CRUD-flag parent id onto this same token convention
+// too, so it's now the uniform rule, not an exception) ---
+// AbstractId/DesignId's own session-selection uses (design_abstract_id,
+// design_by_name, set_current_design_cmd, update_abstract_boundary_cmd's
+// abstract_id argument - none of these are create_<type> CRUD flags) are
+// still a plain {uint32_t index, generation} struct in api.hpp, packed
+// into one int64_t (generation in the high 32 bits, index in the low 32
+// bits, via pack<IdT>/unpack<IdT> in le_tcl_shim.cpp) - int64_t is a
+// fundamental type SWIG's stdint.i already marshals to/from a plain Tcl
+// integer with zero custom typemap code. kInvalidId (0xFFFFFFFF) marks an
+// invalid id for these two types in that role, since a packed valid id
+// (index != UINT32_MAX) can never equal it. Item 19.1's own new
+// get_libraries/get_designs/get_abstracts commands (and every generated
+// create_<type> parent flag, including `-abstract`) are additive - they
+// return/accept friendly strings (below), not a retrofit of those
+// already-shipped session-selection entry points (a deliberate, flagged
+// choice, see UPDATES.md item 19.1's own Resolution).
 //
-// Terminal/TerminalPort/Obstruction/Shape ids (item 18), and now also
-// Library/Design/Abstract ids wherever item 19.1's own get_* commands
-// return/accept them (though not the pre-existing CRUD-flag/session
-// entry points above), cross this shim as type-prefixed strings instead
-// - not user-friendly to hand a script a raw packed integer as its only
-// handle on an object. `"terminal:<name>"`/`"library:<name>"`/
-// `"design:<name>"` (each has a real, uniquely-indexed-or-uniqueness-
-// enforced .name field - Terminal's uniqueness is enforced per-Abstract
-// by api.hpp, Library/Design's is a real global cmg index=True) and
-// `"obstruction:<n>"`/`"terminal_port:<n>"`/`"shape:<n>"`/`"abstract:<n>"`
-// (no name field on any of these four - `<n>` is the same packed integer
-// as before, just type-prefixed for self-description, resolved with
-// resolve_numeric_friendly_id in le_tcl_shim.cpp) are built/parsed
-// entirely in le_tcl_shim.cpp - api.hpp's own return types for these are
-// unchanged (still typed LeTerminalId/etc structs), matching this shim's
-// usual "ergonomics stay here, not in the shared C API" split. Empty
-// string `""` is the uniform "not found / invalid" signal for all seven
-// - a malformed string or a wrong-type prefix (e.g. passing an
-// `"obstruction:..."` id where a `"terminal:..."` one is expected)
-// resolves to the same invalid sentinel api.hpp's own not-found paths
-// already produce, indistinguishable from "no such object" - no separate
-// error path needed for it. An empty *token* string is exactly what a
-// caller passes to mean "no -of given" too (see below) - it resolves the
-// same way (an unresolvable/absent token both look like "invalid" to the
-// resolver), which is exactly what "use the default scope" needs.
+// Every other class's ids (Terminal/TerminalPort/Obstruction/Shape from
+// item 18, every other pool-backed class from item 19.1's own get_*
+// commands and the generated create_<type> surface) cross this shim as
+// type-prefixed strings instead - not user-friendly to hand a script a
+// raw packed integer as its only handle on an object. `"terminal:<name>"`/
+// `"library:<name>"`/`"design:<name>"` (each has a real, uniquely-
+// indexed-or-uniqueness-enforced .name field - Terminal's uniqueness is
+// enforced per-Abstract via the generated unique_per_parent index, not
+// hand-written in api.hpp anymore; Library/Design's is a real global cmg
+// index=True) and `"obstruction:<n>"`/`"terminal_port:<n>"`/`"shape:<n>"`/
+// `"abstract:<n>"`/... (no name field on these - `<n>` is a packed
+// integer, type-prefixed for self-description, resolved with
+// resolve_numeric_friendly_id) are built/parsed entirely in
+// le_tcl_shim.cpp (hand-written ones) or le_tcl_shim_generated.inc
+// (everything else, including every generated create_<type>'s own
+// return value and parent-token parameters) - api.hpp's own return types
+// for these are unchanged (still typed LeTerminalId/etc structs),
+// matching this shim's usual "ergonomics stay here, not in the shared C
+// API" split. Empty string `""` is the uniform "not found / invalid"
+// signal for all of them - a malformed string or a wrong-type prefix
+// (e.g. passing an `"obstruction:..."` id where a `"terminal:..."` one is
+// expected) resolves to the same invalid sentinel api.hpp's own not-found
+// paths already produce, indistinguishable from "no such object" - no
+// separate error path needed for it. An empty *token* string is exactly
+// what a caller passes to mean "no -of given" (or "omit this optional
+// create_<type> flag" - see api_declarations_inc_j2's own comment) too -
+// it resolves the same way (an unresolvable/absent token both look like
+// "invalid" to the resolver), which is exactly what "use the default" needs.
 //
 // --- get_<type> command pattern (UPDATES.md item 19.1) ---
 // Every get_<type> command shares one shape at the api.hpp layer: zero or
@@ -84,10 +91,10 @@
 // expressions itself and unions the per-call results. Search-result
 // accessors are uniformly count+by-index (get_<type>_cmd/get_<type>_at),
 // same shape as every property table below - most of this surface is
-// generated (see backend/CLAUDE.md's TCL codegen section); only the
-// classes with hand-written CRUD above (Terminal/TerminalPort/
-// Obstruction/Shape's create_*/delete_*/set_*) keep bespoke code here at
-// all, and even those reuse generated property/search accessors.
+// generated (see backend/CLAUDE.md's TCL codegen section), including
+// every class's own create_<type> now; only delete_*/set_* for Terminal/
+// TerminalPort/Obstruction/Shape stay hand-written here, and even those
+// reuse generated property/search accessors.
 //
 // --- Property tables and search results (Phase 5) ---
 // Deliberately NOT built as Tcl lists/dicts in C++ here - that needs
@@ -124,9 +131,11 @@ int viewport_width();
 int viewport_height();
 
 /// @brief The AbstractId of the design at `design_index` (0..design_count()-1,
-/// same flat indexing as design_name) - the way a script gets an id to
-/// pass as `abstract_id` to create_terminal/create_obstruction/
-/// update_abstract_boundary below. Scoped to the first Library only
+/// same flat indexing as design_name) - the way a script gets a raw
+/// packed id to pass as `abstract_id` to update_abstract_boundary below
+/// (create_terminal/create_obstruction take an `"abstract:N"` friendly-id
+/// token instead - see get_abstracts/get_abstracts_at, or just format
+/// "abstract:" + this call's own result). Scoped to the first Library only
 /// (le_library_design_at's library_index=0) - correct as long as only
 /// one LEF file/library is in play, same assumption this project's
 /// single-shared-Technology convention already makes elsewhere. Superseded
@@ -183,17 +192,8 @@ constexpr long long kInvalidId = 0xFFFFFFFFLL;
 /// is never revisited afterward, injected or not.
 void set_session_handle(long long handle_address);
 
-// --- Terminal CRUD ---
-
-/// @brief Positional form behind `create_terminal -abstract ID -name NAME
-/// -direction DIR` (see le_tcl_procs.tcl; `direction` is one of
-/// INPUT/OUTPUT/INOUT/NONE/OUTPUT_TRISTATE/FEEDTHRU, parsed to an
-/// LeSignalDirection int by the Tcl proc). Returns a friendly
-/// `"terminal:NAME"` id (see this header's own "IDs" comment), or "" on
-/// failure - including a NAME collision with an existing Terminal on the
-/// same Abstract (see le_create_terminal's own uniqueness comment in
-/// api.hpp; check message_count() for the pushed error).
-const char *create_terminal_cmd(long long abstract_id, const char *name, int direction);
+// --- Terminal CRUD (create_terminal_cmd is generated - see
+// le_tcl_shim_generated.hpp - not hand-written here) ---
 
 /// @brief Rename the Terminal `id` refers to - note that `id` itself
 /// (`"terminal:OLDNAME"`) becomes stale/dangling the moment this
@@ -205,25 +205,18 @@ const char *create_terminal_cmd(long long abstract_id, const char *name, int dir
 int set_terminal_name(const char *id, const char *name);
 
 /// @brief Positional form behind `set_terminal_direction $id DIRECTION`
-/// (see le_tcl_procs.tcl - DIRECTION is a name, same mapping
-/// create_terminal_cmd's own direction argument uses, not a raw int).
+/// (see le_tcl_procs.tcl - DIRECTION is a name, same mapping the
+/// generated create_terminal_cmd's own direction argument uses, not a
+/// raw int).
 int set_terminal_direction_cmd(const char *id, int direction);
 int delete_terminal(const char *id);
 
-// --- TerminalPort CRUD ---
+// --- TerminalPort CRUD (create_terminal_port_cmd is generated) ---
 
-/// @brief Positional form behind `create_terminal_port -terminal ID`
-/// (see le_tcl_procs.tcl). `terminal_id` is a friendly `"terminal:NAME"`
-/// id. Returns a friendly `"terminal_port:N"` id, or "" on failure.
-const char *create_terminal_port_cmd(const char *terminal_id);
 int delete_terminal_port(const char *id);
 
-// --- Obstruction CRUD ---
+// --- Obstruction CRUD (create_obstruction_cmd is generated) ---
 
-/// @brief Positional form behind `create_obstruction -abstract ID` (see
-/// le_tcl_procs.tcl). Returns a friendly `"obstruction:N"` id, or "" on
-/// failure.
-const char *create_obstruction_cmd(long long abstract_id);
 int delete_obstruction(const char *id);
 
 // --- Abstract boundary ---
@@ -237,13 +230,12 @@ int update_abstract_boundary_cmd(long long abstract_id, const double *points_um,
 
 // --- Shape CRUD (rects/polygons/paths - texts deliberately excluded,
 // see TCL_EXPLORATION.md's round-7 finding: they're a Pipeline-computed
-// render-time label, never LEF-authored data) ---
+// render-time label, never LEF-authored data; create_shape_cmd is
+// generated - see le_tcl_shim_generated.hpp - takes both a
+// terminal_port_id and an obstruction_id token, exactly one of which
+// must resolve, replacing this header's former create_terminal_port_shape_cmd/
+// create_obstruction_shape_cmd split) ---
 
-/// @brief `terminal_port_id`/`obstruction_id` are friendly ids
-/// (`"terminal_port:N"`/`"obstruction:N"`); both return a friendly `"shape:N"` id,
-/// or "" on failure.
-const char *create_terminal_port_shape_cmd(const char *terminal_port_id, const char *layer_name);
-const char *create_obstruction_shape_cmd(const char *obstruction_id, const char *layer_name);
 const char *shape_layer_name(const char *id);
 int set_shape_layer_name(const char *id, const char *layer_name);
 int delete_shape(const char *id);

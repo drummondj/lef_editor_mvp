@@ -37,4 +37,15 @@ int set_current_{{klass.to_snake_case()}}_cmd(const char *id);
 int get_{{klass.tcl_plural_snake_case()}}_cmd({% for op in scope.of_params %}const char *of_{{op.parent_field.name}}, {% endfor %}{% if id_field %}const char *name_expression, {% endif %}const char *filter_expression);
 const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
 {% endfor %}
+
+// --- create_<type> - positional forms behind `create_<type> [-flag
+// value...]` (le_tcl_procs.tcl's own generated create_<type> proc parses
+// the flags then calls this). Each parent field takes a friendly-id
+// token (resolved via resolve_<parent_klass>_id inside the .cpp
+// definition), same as every other resolve_X_id-taking shim function -
+// see api_declarations_inc_j2's own comment for the rest of the field
+// conventions this follows uniformly. ---
+{% for klass in classes %}
+const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}});
+{% endfor %}
 """

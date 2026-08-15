@@ -101,7 +101,7 @@ namespace le
         // own FOREIGN grammar allows a bare "FOREIGN name ;" with no point,
         // and a point with no orientation) - passes 0.0/"" through exactly
         // when unset, real converted values otherwise.
-        static int write_via_foreign(const Foreign &foreign, double dbu_per_micron);
+        static int write_via_foreign(const ForeignData &foreign, double dbu_per_micron);
         // Shared by both the ROUTING and CUT branches of
         // write_technology_layers - lefwLayerAntennaModel/its per-field
         // siblings accept LEFW_LAYERROUTING(_START) AND LEFW_LAYER(_START)
@@ -110,7 +110,7 @@ namespace le
         // is_cut selects whether the "SideArea"-family fields are written -
         // see write_layer_antenna_models's own comment in lef_writer.cpp
         // for the vendored-writer gap this works around.
-        static int write_layer_antenna_models(const std::vector<AntennaModel> &models, bool is_cut);
+        static int write_layer_antenna_models(const std::vector<AntennaModelData> &models, bool is_cut);
         // Shared helper for write_terminal's 4 flat (value, layer)
         // PinAntennaValue lists - dispatches to the matching
         // lefwMacroPinAntenna*(double, const char*) writer per field.
@@ -124,7 +124,7 @@ namespace le
         // (a real value of exactly 0.0 would be misread as "open table
         // form").
         static int write_layer_current_density(
-            const std::vector<LayerDensityEntry> &entries,
+            const std::vector<LayerDensityEntryData> &entries,
             int (*current_density)(const char *, double),
             int (*frequency)(int, double *),
             int (*width)(int, double *),
@@ -140,7 +140,7 @@ namespace le
         // per-layer rect/polygon geometry, matching lefwNonDefaultRuleStartVia's
         // own doc comment that it's followed by the same lefwViaLayer*
         // calls as a top-level VIA.
-        static int write_via_layers(const std::vector<ViaLayer> &layers, double dbu_per_micron);
+        static int write_via_layers(const std::vector<ViaLayerData> &layers, double dbu_per_micron);
         static int write_macro(const Root &root, AbstractId abstract_id, double dbu_per_micron);
         static int write_terminal(const Root &root, TerminalId terminal_id, double dbu_per_micron);
         static int write_obstruction(const Root &root, ObstructionId obstruction_id, double dbu_per_micron);

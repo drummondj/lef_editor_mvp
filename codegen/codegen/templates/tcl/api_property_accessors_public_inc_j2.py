@@ -173,4 +173,19 @@ int le_set_current_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}I
     return 0;
 }
 {% endfor %}
+
+// --- create_<type> - see api_declarations_inc_j2's own comment for the
+// field-scope/optionality/dbu-microns/multi-parent conventions every one
+// of these follows uniformly. Mirrors le_create_terminal_port/
+// le_create_obstruction's own shape for the common case (one parent, no
+// optional/enum/dbu fields) and le_create_terminal's own shape (str/enum
+// fields, unique_per_parent handling) for the richer ones - generated
+// instead of duplicated per class (see Klass.create_api_body() for how
+// this body is actually built). ---
+{% for klass in classes %}
+Le{{klass.name}}Id le_create_{{klass.to_snake_case()}}(LeHandle *handle{% if klass.create_api_params() %}, {{klass.create_api_params()}}{% endif %})
+{
+{{klass.create_api_body()}}
+}
+{% endfor %}
 """

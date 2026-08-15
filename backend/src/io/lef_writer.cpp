@@ -118,15 +118,22 @@ namespace le
     int LEFWriter::write_property_definitions(const Root &root, TechnologyId technology_id)
     {
         const TechnologyData *technology = root.get_technology(technology_id);
-        if (!technology || technology->property_definitions.empty())
+        if (!technology)
+            return 0;
+        const auto &def_ids = root.get_technology_property_definitions(technology_id);
+        if (def_ids.empty())
             return 0;
 
         int status = lefwStartPropDef();
         if (status)
             return status;
 
-        for (const PropertyDefinition &def : technology->property_definitions)
+        for (const PropertyDefinitionId def_id : def_ids)
         {
+            const PropertyDefinitionData *def_ptr = root.get_property_definition(def_id);
+            if (!def_ptr)
+                continue;
+            const PropertyDefinitionData &def = *def_ptr;
             const double left = def.range_min.value_or(0.0);
             const double right = def.range_max.value_or(0.0);
             const std::string owner_type = to_upper(def.owner_type);
@@ -139,7 +146,7 @@ namespace le
             else if (def.data_type == "R")
                 status = lefwRealPropDef(owner_type.c_str(), def.name.c_str(), left, right, def.default_number.value_or(0.0));
             else
-                status = lefwStringPropDef(owner_type.c_str(), def.name.c_str(), left, right, def.default_string.empty() ? nullptr : def.default_string.c_str());
+                status = lefwStringPropDef(owner_type.c_str(), def.name.c_str(), left, right, def.default_string ? def.default_string->c_str() : nullptr);
             if (status)
                 return status;
         }
@@ -179,9 +186,9 @@ namespace le
         }
     }
 
-    int LEFWriter::write_layer_antenna_models(const std::vector<AntennaModel> &models, bool is_cut)
+    int LEFWriter::write_layer_antenna_models(const std::vector<AntennaModelData> &models, bool is_cut)
     {
-        for (const AntennaModel &model : models)
+        for (const AntennaModelData &model : models)
         {
             int status = lefwLayerAntennaModel(model.oxide.c_str());
             if (status)
@@ -293,7 +300,7 @@ namespace le
     {
         for (const PinAntennaValue &entry : values)
         {
-            const int status = writer(entry.value, entry.layer_name.empty() ? nullptr : entry.layer_name.c_str());
+            const int status = writer(entry.value, entry.layer_name ? entry.layer_name->c_str() : nullptr);
             if (status)
                 return status;
         }
@@ -301,7 +308,7 @@ namespace le
     }
 
     int LEFWriter::write_layer_current_density(
-        const std::vector<LayerDensityEntry> &entries,
+        const std::vector<LayerDensityEntryData> &entries,
         int (*current_density)(const char *, double),
         int (*frequency)(int, double *),
         int (*width)(int, double *),
@@ -309,7 +316,7 @@ namespace le
         int (*table_entries)(int, double *),
         double dbu_per_micron)
     {
-        for (const LayerDensityEntry &entry : entries)
+        for (const LayerDensityEntryData &entry : entries)
         {
             // KNOWN VENDORED-WRITER EDGE CASE: lefwLayerACCurrentDensity/
             // DCCurrentDensity dispatch on `if (value)` - a real one_entry
@@ -417,6 +424,53 @@ namespace le
             if (!layer)
                 continue;
 
+            // Moved to pooled classes (Phase 2) - materialized into plain
+            // local vectors once here (both the ROUTING and CUT branches
+            // below read the same layer, so this avoids re-materializing
+            // per branch), rather than reading layer->field directly.
+            std::vector<SpacingRuleData> spacing_rules;
+            for (const SpacingRuleId id : root.get_layer_spacing_rules(layer_id))
+                if (const SpacingRuleData *data = root.get_spacing_rule(id))
+                    spacing_rules.push_back(*data);
+            std::vector<MinimumCutData> minimum_cuts;
+            for (const MinimumCutId id : root.get_layer_minimum_cuts(layer_id))
+                if (const MinimumCutData *data = root.get_minimum_cut(id))
+                    minimum_cuts.push_back(*data);
+            std::vector<MinStepData> min_steps;
+            for (const MinStepId id : root.get_layer_min_steps(layer_id))
+                if (const MinStepData *data = root.get_min_step(id))
+                    min_steps.push_back(*data);
+            std::vector<InfluenceSpacingEntryData> spacing_table_influence;
+            for (const InfluenceSpacingEntryId id : root.get_layer_spacing_table_influence(layer_id))
+                if (const InfluenceSpacingEntryData *data = root.get_influence_spacing_entry(id))
+                    spacing_table_influence.push_back(*data);
+            std::vector<TwoWidthsSpacingEntryData> spacing_table_two_widths;
+            for (const TwoWidthsSpacingEntryId id : root.get_layer_spacing_table_two_widths(layer_id))
+                if (const TwoWidthsSpacingEntryData *data = root.get_two_widths_spacing_entry(id))
+                    spacing_table_two_widths.push_back(*data);
+            std::vector<PreferEnclosureEntryData> prefer_enclosures;
+            for (const PreferEnclosureEntryId id : root.get_layer_prefer_enclosures(layer_id))
+                if (const PreferEnclosureEntryData *data = root.get_prefer_enclosure_entry(id))
+                    prefer_enclosures.push_back(*data);
+            std::vector<EnclosureEntryData> enclosures;
+            for (const EnclosureEntryId id : root.get_layer_enclosures(layer_id))
+                if (const EnclosureEntryData *data = root.get_enclosure_entry(id))
+                    enclosures.push_back(*data);
+            std::vector<LayerDensityEntryData> ac_current_density;
+            for (const LayerDensityEntryId id : root.get_layer_ac_current_density(layer_id))
+                if (const LayerDensityEntryData *data = root.get_layer_density_entry(id))
+                    ac_current_density.push_back(*data);
+            std::vector<LayerDensityEntryData> dc_current_density;
+            for (const LayerDensityEntryId id : root.get_layer_dc_current_density(layer_id))
+                if (const LayerDensityEntryData *data = root.get_layer_density_entry(id))
+                    dc_current_density.push_back(*data);
+            std::vector<AntennaModelData> antenna_models;
+            for (const AntennaModelId id : root.get_layer_antenna_models(layer_id))
+                if (const AntennaModelData *data = root.get_antenna_model(id))
+                    antenna_models.push_back(*data);
+            const ArraySpacingId array_spacing_id = root.get_layer_array_spacing(layer_id);
+            const ArraySpacingData *array_spacing = root.get_array_spacing(array_spacing_id);
+
             const bool is_routing = layer->type == "ROUTING";
             int status;
 
@@ -512,7 +566,7 @@ namespace le
                     if (status)
                         return status;
                 }
-                for (const SpacingRule &rule : layer->spacing_rules)
+                for (const SpacingRuleData &rule : spacing_rules)
                 {
                     status = lefwLayerRoutingSpacing(to_microns(rule.distance, dbu_per_micron));
                     if (status)
@@ -606,7 +660,7 @@ namespace le
                     // are read-only.
                 }
 
-                for (const MinimumCut &cut : layer->minimum_cuts)
+                for (const MinimumCutData &cut : minimum_cuts)
                 {
                     if (cut.within)
                     {
@@ -621,9 +675,9 @@ namespace le
                             return status;
                     }
 
-                    if (!cut.connection.empty())
+                    if (cut.connection)
                     {
-                        status = lefwLayerRoutingMinimumcutConnections(cut.connection.c_str());
+                        status = lefwLayerRoutingMinimumcutConnections(cut.connection->c_str());
                         if (status)
                             return status;
                     }
@@ -635,7 +689,7 @@ namespace le
                     }
                 }
 
-                for (const MinStep &step : layer->min_steps)
+                for (const MinStepData &step : min_steps)
                 {
                     if (step.max_edges)
                     {
@@ -643,9 +697,9 @@ namespace le
                         if (status)
                             return status;
                     }
-                    else if (!step.min_step_type.empty() || step.lengthsum)
+                    else if (step.min_step_type || step.lengthsum)
                     {
-                        status = lefwLayerRoutingMinstepWithOptions(to_microns(step.distance, dbu_per_micron), step.min_step_type.empty() ? nullptr : step.min_step_type.c_str(), step.lengthsum ? to_microns(*step.lengthsum, dbu_per_micron) : 0.0);
+                        status = lefwLayerRoutingMinstepWithOptions(to_microns(step.distance, dbu_per_micron), step.min_step_type ? step.min_step_type->c_str() : nullptr, step.lengthsum ? to_microns(*step.lengthsum, dbu_per_micron) : 0.0);
                         if (status)
                             return status;
                     }
@@ -702,13 +756,13 @@ namespace le
                         return status;
                 }
 
-                if (!layer->spacing_table_influence.empty())
+                if (!spacing_table_influence.empty())
                 {
                     status = lefwLayerRoutingStartSpacingtableInfluence();
                     if (status)
                         return status;
 
-                    for (const InfluenceSpacingEntry &entry : layer->spacing_table_influence)
+                    for (const InfluenceSpacingEntryData &entry : spacing_table_influence)
                     {
                         status = lefwLayerRoutingSpacingInfluenceWidth(to_microns(entry.width, dbu_per_micron), to_microns(entry.distance, dbu_per_micron), to_microns(entry.spacing, dbu_per_micron));
                         if (status)
@@ -720,7 +774,7 @@ namespace le
                         return status;
                 }
 
-                if (!layer->spacing_table_two_widths.empty())
+                if (!spacing_table_two_widths.empty())
                 {
                     // lefwLayerRoutingStartSpacingtableTwoWidths is
                     // ROUTING-only (LEFW_LAYERROUTING_START/LEFW_LAYERROUTING
@@ -738,7 +792,7 @@ namespace le
                     // complete.5.8.lef's own "WIDTH 0.25 PRL 0.0 ...") is
                     // indistinguishable from "no PRL" and gets silently
                     // dropped. Not worked around here (vendored code).
-                    for (const TwoWidthsSpacingEntry &entry : layer->spacing_table_two_widths)
+                    for (const TwoWidthsSpacingEntryData &entry : spacing_table_two_widths)
                     {
                         std::vector<double> spacings_um;
                         spacings_um.reserve(entry.spacings.size());
@@ -891,14 +945,14 @@ namespace le
                         return status;
                 }
 
-                status = write_layer_current_density(layer->ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
+                status = write_layer_current_density(ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
                 if (status)
                     return status;
-                status = write_layer_current_density(layer->dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
+                status = write_layer_current_density(dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
                 if (status)
                     return status;
 
-                status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/false);
+                status = write_layer_antenna_models(antenna_models, /*is_cut=*/false);
                 if (status)
                     return status;
 
@@ -929,7 +983,7 @@ namespace le
                     if (status)
                         return status;
                 }
-                for (const SpacingRule &rule : layer->spacing_rules)
+                for (const SpacingRuleData &rule : spacing_rules)
                 {
                     status = lefwLayerCutSpacing(to_microns(rule.distance, dbu_per_micron));
                     if (status)
@@ -951,9 +1005,9 @@ namespace le
                     // At most one of LAYER/ADJACENTCUTS/PARALLELOVERLAP/AREA
                     // follows a CUT SPACING statement (lefwWriter.hpp's own
                     // "either this routine ... or ..." comments on each).
-                    if (!rule.second_layer_name.empty())
+                    if (rule.second_layer_name)
                     {
-                        status = lefwLayerCutSpacingLayer(rule.second_layer_name.c_str(), rule.second_layer_stack ? 1 : 0);
+                        status = lefwLayerCutSpacingLayer(rule.second_layer_name->c_str(), rule.second_layer_stack ? 1 : 0);
                         if (status)
                             return status;
                     }
@@ -1003,7 +1057,7 @@ namespace le
                 // populate it there (e.g. complete.5.8.lef's LAYER cut24,
                 // TYPE ROUTING, uses ARRAYSPACING). Still fully read; just
                 // never re-written for a ROUTING-typed layer.
-                if (!layer->array_cuts.empty() || layer->array_spacing)
+                if (!layer->array_cuts.empty() || array_spacing)
                 {
                     std::vector<int> cuts;
                     std::vector<double> spacings_um;
@@ -1014,17 +1068,17 @@ namespace le
                         cuts.push_back(entry.cuts);
                         spacings_um.push_back(to_microns(entry.spacing, dbu_per_micron));
                     }
-                    const bool long_array = layer->array_spacing && layer->array_spacing->long_array;
-                    const double via_width_um = (layer->array_spacing && layer->array_spacing->via_width) ? to_microns(*layer->array_spacing->via_width, dbu_per_micron) : 0.0;
-                    const double cut_spacing_um = layer->array_spacing ? to_microns(layer->array_spacing->cut_spacing, dbu_per_micron) : 0.0;
+                    const bool long_array = array_spacing && array_spacing->long_array;
+                    const double via_width_um = (array_spacing && array_spacing->via_width) ? to_microns(*array_spacing->via_width, dbu_per_micron) : 0.0;
+                    const double cut_spacing_um = array_spacing ? to_microns(array_spacing->cut_spacing, dbu_per_micron) : 0.0;
                     status = lefwLayerArraySpacing(long_array ? 1 : 0, via_width_um, cut_spacing_um, static_cast<int>(cuts.size()), cuts.data(), spacings_um.data());
                     if (status)
                         return status;
                 }
 
-                for (const PreferEnclosureEntry &entry : layer->prefer_enclosures)
+                for (const PreferEnclosureEntryData &entry : prefer_enclosures)
                 {
-                    status = lefwLayerPreferEnclosure(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), entry.min_width ? to_microns(*entry.min_width, dbu_per_micron) : 0.0);
+                    status = lefwLayerPreferEnclosure(entry.location.value_or("").c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), entry.min_width ? to_microns(*entry.min_width, dbu_per_micron) : 0.0);
                     if (status)
                         return status;
                 }
@@ -1032,14 +1086,14 @@ namespace le
                 // width/except_extra_cut and min_length are mutually
                 // exclusive per the vendored writer's own three ENCLOSURE
                 // variants (see lefrLayerCbkFn's own matching read side).
-                for (const EnclosureEntry &entry : layer->enclosures)
+                for (const EnclosureEntryData &entry : enclosures)
                 {
                     if (entry.width)
-                        status = lefwLayerEnclosureWidth(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.width, dbu_per_micron), entry.except_extra_cut ? to_microns(*entry.except_extra_cut, dbu_per_micron) : 0.0);
+                        status = lefwLayerEnclosureWidth(entry.location.value_or("").c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.width, dbu_per_micron), entry.except_extra_cut ? to_microns(*entry.except_extra_cut, dbu_per_micron) : 0.0);
                     else if (entry.min_length)
-                        status = lefwLayerEnclosureLength(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.min_length, dbu_per_micron));
+                        status = lefwLayerEnclosureLength(entry.location.value_or("").c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), to_microns(*entry.min_length, dbu_per_micron));
                     else
-                        status = lefwLayerEnclosure(entry.location.c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), 0.0);
+                        status = lefwLayerEnclosure(entry.location.value_or("").c_str(), to_microns(entry.overhang1, dbu_per_micron), to_microns(entry.overhang2, dbu_per_micron), 0.0);
                     if (status)
                         return status;
                 }
@@ -1056,14 +1110,14 @@ namespace le
                 // is read-only for CUT layers with this vendored writer
                 // version (still fully written for ROUTING layers above).
 
-                status = write_layer_current_density(layer->ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
+                status = write_layer_current_density(ac_current_density, lefwLayerACCurrentDensity, lefwLayerACFrequency, lefwLayerACWidth, lefwLayerACCutarea, lefwLayerACTableEntries, dbu_per_micron);
                 if (status)
                     return status;
-                status = write_layer_current_density(layer->dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
+                status = write_layer_current_density(dc_current_density, lefwLayerDCCurrentDensity, nullptr, lefwLayerDCWidth, lefwLayerDCCutarea, lefwLayerDCTableEntries, dbu_per_micron);
                 if (status)
                     return status;
 
-                status = write_layer_antenna_models(layer->antenna_models, /*is_cut=*/true);
+                status = write_layer_antenna_models(antenna_models, /*is_cut=*/true);
                 if (status)
                     return status;
 
@@ -1080,12 +1134,12 @@ namespace le
         return 0;
     }
 
-    int LEFWriter::write_via_layers(const std::vector<ViaLayer> &layers, double dbu_per_micron)
+    int LEFWriter::write_via_layers(const std::vector<ViaLayerData> &layers, double dbu_per_micron)
     {
         auto to_um = [&](int64_t v)
         { return to_microns(v, dbu_per_micron); };
 
-        for (const ViaLayer &layer : layers)
+        for (const ViaLayerData &layer : layers)
         {
             int status = lefwViaLayer(layer.layer_name.c_str());
             if (status)
@@ -1137,7 +1191,7 @@ namespace le
         return 0;
     }
 
-    int LEFWriter::write_via_foreign(const Foreign &foreign, double dbu_per_micron)
+    int LEFWriter::write_via_foreign(const ForeignData &foreign, double dbu_per_micron)
     {
         // lefwViaForeignStr treats xl==0.0 && yl==0.0 as "no point" (unless
         // orient is also set, in which case it assumes the point really is
@@ -1172,14 +1226,19 @@ namespace le
             if (status)
                 return status;
 
-            if (via->foreign)
+            // foreign/via_rule/layers moved to pooled classes (Phase 2) -
+            // materialized from the pool here rather than read as plain
+            // fields on via.
+            const ForeignId foreign_id = root.get_via_foreign(via_id);
+            const ForeignData *foreign = root.get_foreign(foreign_id);
+            if (foreign)
             {
                 // lefwViaForeignStr's own xl/yl/orient are each independently
                 // optional(0)/optional("") - see write_via_foreign's own
                 // comment (shared by every FOREIGN write site) for why 0.0/""
                 // is passed through untouched rather than mapped to some
                 // other sentinel.
-                status = write_via_foreign(*via->foreign, dbu_per_micron);
+                status = write_via_foreign(*foreign, dbu_per_micron);
                 if (status)
                     return status;
             }
@@ -1193,23 +1252,31 @@ namespace le
                 if (status)
                     return status;
             }
-            else if (via->via_rule)
+            else
             {
-                const ViaRuleReference &vr = *via->via_rule;
-                status = lefwViaViarule(vr.via_rule_name.c_str(), to_um(vr.cut_size.x), to_um(vr.cut_size.y),
-                                         vr.bot_layer_name.c_str(), vr.cut_layer_name.c_str(), vr.top_layer_name.c_str(),
-                                         to_um(vr.cut_spacing.x), to_um(vr.cut_spacing.y),
-                                         to_um(vr.bot_enclosure.x), to_um(vr.bot_enclosure.y),
-                                         to_um(vr.top_enclosure.x), to_um(vr.top_enclosure.y));
-                if (status)
-                    return status;
+                const ViaRuleReferenceId via_rule_ref_id = root.get_via_via_rule(via_id);
+                if (const ViaRuleReferenceData *vr_ptr = root.get_via_rule_reference(via_rule_ref_id))
+                {
+                    const ViaRuleReferenceData &vr = *vr_ptr;
+                    status = lefwViaViarule(vr.via_rule_name.c_str(), to_um(vr.cut_size.x), to_um(vr.cut_size.y),
+                                             vr.bot_layer_name.c_str(), vr.cut_layer_name.c_str(), vr.top_layer_name.c_str(),
+                                             to_um(vr.cut_spacing.x), to_um(vr.cut_spacing.y),
+                                             to_um(vr.bot_enclosure.x), to_um(vr.bot_enclosure.y),
+                                             to_um(vr.top_enclosure.x), to_um(vr.top_enclosure.y));
+                    if (status)
+                        return status;
+                }
             }
 
             status = write_properties(via->properties);
             if (status)
                 return status;
 
-            status = write_via_layers(via->layers, dbu_per_micron);
+            std::vector<ViaLayerData> layers;
+            for (const ViaLayerId id : root.get_via_layers(via_id))
+                if (const ViaLayerData *data = root.get_via_layer(id))
+                    layers.push_back(*data);
+            status = write_via_layers(layers, dbu_per_micron);
             if (status)
                 return status;
 
@@ -1238,6 +1305,11 @@ namespace le
             if (!via_rule)
                 continue;
 
+            std::vector<ViaRuleLayerData> layers;
+            for (const ViaRuleLayerId id : root.get_via_rule_layers(via_rule_id))
+                if (const ViaRuleLayerData *data = root.get_via_rule_layer(id))
+                    layers.push_back(*data);
+
             int status;
             if (via_rule->is_generate)
             {
@@ -1262,7 +1334,7 @@ namespace le
                 // fixed index - the two "regular" (ENCLOSURE-bearing) layers
                 // are whichever ones don't.
                 size_t regular_written = 0;
-                for (const ViaRuleLayer &layer : via_rule->layers)
+                for (const ViaRuleLayerData &layer : layers)
                 {
                     if (layer.rect)
                         continue;
@@ -1285,7 +1357,7 @@ namespace le
                         return status;
                 }
 
-                for (const ViaRuleLayer &cut_layer : via_rule->layers)
+                for (const ViaRuleLayerData &cut_layer : layers)
                 {
                     if (!cut_layer.rect)
                         continue;
@@ -1360,7 +1432,7 @@ namespace le
             if (!symmetry.empty())
                 symmetry.pop_back(); // trailing space
 
-            int status = lefwSite(site->name.c_str(), site->site_class.empty() ? nullptr : site->site_class.c_str(),
+            int status = lefwSite(site->name.c_str(), site->site_class ? site->site_class->c_str() : nullptr,
                                    symmetry.empty() ? nullptr : symmetry.c_str(),
                                    site->size ? to_um(site->size->x) : 0.0, site->size ? to_um(site->size->y) : 0.0);
             if (status)
@@ -1422,7 +1494,12 @@ namespace le
                     return status;
             }
 
-            for (const NonDefaultRuleLayer &layer : rule->layers)
+            std::vector<NonDefaultRuleLayerData> layers;
+            for (const NonDefaultRuleLayerId id : root.get_non_default_rule_layers(rule_id))
+                if (const NonDefaultRuleLayerData *data = root.get_non_default_rule_layer(id))
+                    layers.push_back(*data);
+
+            for (const NonDefaultRuleLayerData &layer : layers)
             {
                 // diag_width has no writer parameter in this vendored
                 // version's lefwNonDefaultRuleLayer (confirmed against
@@ -1441,21 +1518,25 @@ namespace le
                     return status;
             }
 
-            for (const NonDefaultRuleVia &via : rule->vias)
+            for (const NonDefaultRuleViaId via_id : root.get_non_default_rule_vias(rule_id))
             {
-                status = lefwNonDefaultRuleStartVia(via.name.c_str(), via.is_default ? "DEFAULT" : nullptr);
+                const NonDefaultRuleViaData *via = root.get_non_default_rule_via(via_id);
+                if (!via)
+                    continue;
+
+                status = lefwNonDefaultRuleStartVia(via->name.c_str(), via->is_default ? "DEFAULT" : nullptr);
                 if (status)
                     return status;
 
-                if (via.foreign)
+                if (const ForeignData *foreign = root.get_foreign(root.get_non_default_rule_via_foreign(via_id)))
                 {
-                    status = write_via_foreign(*via.foreign, dbu_per_micron);
+                    status = write_via_foreign(*foreign, dbu_per_micron);
                     if (status)
                         return status;
                 }
-                if (via.resistance)
+                if (via->resistance)
                 {
-                    status = lefwViaResistance(*via.resistance);
+                    status = lefwViaResistance(*via->resistance);
                     if (status)
                         return status;
                 }
@@ -1465,15 +1546,20 @@ namespace le
                 // write_properties' generic property functions already
                 // accept that state (see its own comment), so this works
                 // without any of the SITE/NONDEFAULTRULE-itself gaps.
-                status = write_properties(via.properties);
+                status = write_properties(via->properties);
                 if (status)
                     return status;
 
-                status = write_via_layers(via.layers, dbu_per_micron);
+                std::vector<ViaLayerData> via_layers;
+                for (const ViaLayerId layer_id : root.get_non_default_rule_via_layers(via_id))
+                    if (const ViaLayerData *layer_data = root.get_via_layer(layer_id))
+                        via_layers.push_back(*layer_data);
+
+                status = write_via_layers(via_layers, dbu_per_micron);
                 if (status)
                     return status;
 
-                status = lefwNonDefaultRuleEndVia(via.name.c_str());
+                status = lefwNonDefaultRuleEndVia(via->name.c_str());
                 if (status)
                     return status;
             }
@@ -1710,48 +1796,48 @@ namespace le
             if (status)
                 return status;
         }
-        if (!terminal->use.empty())
+        if (terminal->use)
         {
-            status = lefwMacroPinUse(terminal->use.c_str());
+            status = lefwMacroPinUse(terminal->use->c_str());
             if (status)
                 return status;
         }
-        if (!terminal->shape.empty())
+        if (terminal->shape)
         {
-            status = lefwMacroPinShape(terminal->shape.c_str());
+            status = lefwMacroPinShape(terminal->shape->c_str());
             if (status)
                 return status;
         }
-        if (!terminal->must_join.empty())
+        if (terminal->must_join)
         {
-            status = lefwMacroPinMustjoin(terminal->must_join.c_str());
+            status = lefwMacroPinMustjoin(terminal->must_join->c_str());
             if (status)
                 return status;
         }
-        if (!terminal->net_expr.empty())
+        if (terminal->net_expr)
         {
-            status = lefwMacroPinNetExpr(terminal->net_expr.c_str());
+            status = lefwMacroPinNetExpr(terminal->net_expr->c_str());
             if (status)
                 return status;
         }
         // terminal->leq is deliberately never written - lefwMacroPinLEQ is
         // obsoleted for VERSION >= 5.6 with no replacement (same
         // unreachable-at-5.8 gap as the macro-level LEQ above).
-        if (!terminal->taper_rule.empty())
+        if (terminal->taper_rule)
         {
-            status = lefwMacroPinTaperRule(terminal->taper_rule.c_str());
+            status = lefwMacroPinTaperRule(terminal->taper_rule->c_str());
             if (status)
                 return status;
         }
-        if (!terminal->supply_sensitivity.empty())
+        if (terminal->supply_sensitivity)
         {
-            status = lefwMacroPinSupplySensitivity(terminal->supply_sensitivity.c_str());
+            status = lefwMacroPinSupplySensitivity(terminal->supply_sensitivity->c_str());
             if (status)
                 return status;
         }
-        if (!terminal->ground_sensitivity.empty())
+        if (terminal->ground_sensitivity)
         {
-            status = lefwMacroPinGroundSensitivity(terminal->ground_sensitivity.c_str());
+            status = lefwMacroPinGroundSensitivity(terminal->ground_sensitivity->c_str());
             if (status)
                 return status;
         }
@@ -1796,8 +1882,12 @@ namespace le
         // 5.5 oxide-scoped antenna models - lefwMacroPinAntennaModel sets
         // "current oxide" state, no explicit end call (same flat
         // sequential-call pattern as lefwLayerAntennaModel above).
-        for (const PinAntennaModel &model : terminal->antenna_models)
+        for (const PinAntennaModelId model_id : root.get_terminal_antenna_models(terminal_id))
         {
+            const PinAntennaModelData *model_ptr = root.get_pin_antenna_model(model_id);
+            if (!model_ptr)
+                continue;
+            const PinAntennaModelData &model = *model_ptr;
             status = lefwMacroPinAntennaModel(model.oxide.c_str());
             if (status)
                 return status;
@@ -1829,7 +1919,7 @@ namespace le
             if (!port)
                 continue;
 
-            status = lefwStartMacroPinPort(port->port_class.empty() ? nullptr : port->port_class.c_str());
+            status = lefwStartMacroPinPort(port->port_class ? port->port_class->c_str() : nullptr);
             if (status)
                 return status;
 
@@ -1891,7 +1981,7 @@ namespace le
         if (status)
             return status;
 
-        if (!abstract->type.empty())
+        if (abstract->type)
         {
             // abstract->type stores LEF's `CLASS <base> [<subtype>] ;`
             // verbatim as ONE space-joined string (confirmed by reading
@@ -1903,9 +1993,9 @@ namespace le
             // string as a single argument never matches and fails the
             // whole MACRO write with LEFW_BAD_DATA, silently losing 100%
             // of that macro's content. Split back apart here.
-            const size_t space_pos = abstract->type.find(' ');
-            const std::string macro_class = space_pos == std::string::npos ? abstract->type : abstract->type.substr(0, space_pos);
-            const std::string macro_subclass = space_pos == std::string::npos ? std::string() : abstract->type.substr(space_pos + 1);
+            const size_t space_pos = abstract->type->find(' ');
+            const std::string macro_class = space_pos == std::string::npos ? *abstract->type : abstract->type->substr(0, space_pos);
+            const std::string macro_subclass = space_pos == std::string::npos ? std::string() : abstract->type->substr(space_pos + 1);
             status = lefwMacroClass(macro_class.c_str(), macro_subclass.empty() ? nullptr : macro_subclass.c_str());
             if (status)
                 return status;
@@ -1920,9 +2010,9 @@ namespace le
         // populated in the first place), so this is a consistent,
         // unreachable-at-5.8 gap on both sides, not an asymmetry to work
         // around.
-        if (!abstract->eeq.empty())
+        if (abstract->eeq)
         {
-            status = lefwMacroEEQ(abstract->eeq.c_str());
+            status = lefwMacroEEQ(abstract->eeq->c_str());
             if (status)
                 return status;
         }
@@ -1938,12 +2028,15 @@ namespace le
         // relies on for the VIA-context FOREIGN sites, just a different
         // vendored function (a MACRO can have several FOREIGNs, a VIA only
         // one, so there's no single shared call site to factor this into).
-        for (const Foreign &foreign : abstract->foreigns)
+        for (const ForeignId foreign_id : root.get_abstract_foreigns(abstract_id))
         {
-            const double xl = foreign.origin ? to_um(foreign.origin->x) : 0.0;
-            const double yl = foreign.origin ? to_um(foreign.origin->y) : 0.0;
-            const std::string orient = foreign.orient ? orientation_to_string(*foreign.orient) : "";
-            status = lefwMacroForeignStr(foreign.name.c_str(), xl, yl, orient.c_str());
+            const ForeignData *foreign = root.get_foreign(foreign_id);
+            if (!foreign)
+                continue;
+            const double xl = foreign->origin ? to_um(foreign->origin->x) : 0.0;
+            const double yl = foreign->origin ? to_um(foreign->origin->y) : 0.0;
+            const std::string orient = foreign->orient ? orientation_to_string(*foreign->orient) : "";
+            status = lefwMacroForeignStr(foreign->name.c_str(), xl, yl, orient.c_str());
             if (status)
                 return status;
         }
@@ -1971,9 +2064,9 @@ namespace le
                 return status;
         }
 
-        if (!abstract->site.empty())
+        if (abstract->site)
         {
-            status = lefwMacroSite(abstract->site.c_str());
+            status = lefwMacroSite(abstract->site->c_str());
             if (status)
                 return status;
         }
@@ -1981,11 +2074,14 @@ namespace le
         // Distinct, mutually-exclusive grammar alternative from the
         // singular site name above (see lefrMacroCbkFn's own comment on
         // setSiteName vs setSitePattern).
-        for (const MacroSitePlacement &placement : abstract->site_placements)
+        for (const MacroSitePlacementId placement_id : root.get_abstract_site_placements(abstract_id))
         {
-            status = lefwMacroSitePatternStr(placement.site_name.c_str(), to_um(placement.origin.x), to_um(placement.origin.y), orientation_to_string(placement.orient),
-                                              placement.num_x.value_or(0), placement.num_y.value_or(0),
-                                              placement.step_x ? to_um(*placement.step_x) : 0.0, placement.step_y ? to_um(*placement.step_y) : 0.0);
+            const MacroSitePlacementData *placement = root.get_macro_site_placement(placement_id);
+            if (!placement)
+                continue;
+            status = lefwMacroSitePatternStr(placement->site_name.c_str(), to_um(placement->origin.x), to_um(placement->origin.y), orientation_to_string(placement->orient),
+                                              placement->num_x.value_or(0), placement->num_y.value_or(0),
+                                              placement->step_x ? to_um(*placement->step_x) : 0.0, placement->step_y ? to_um(*placement->step_y) : 0.0);
             if (status)
                 return status;
         }
@@ -2066,18 +2162,18 @@ namespace le
                 return status;
             }
         }
-        if (technology && !technology->bus_bit_chars.empty())
+        if (technology && technology->bus_bit_chars)
         {
-            status = lefwBusBitChars(technology->bus_bit_chars.c_str());
+            status = lefwBusBitChars(technology->bus_bit_chars->c_str());
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: lefwBusBitChars failed with status {}.", status));
                 return status;
             }
         }
-        if (technology && !technology->divider_char.empty())
+        if (technology && technology->divider_char)
         {
-            status = lefwDividerChar(technology->divider_char.c_str());
+            status = lefwDividerChar(technology->divider_char->c_str());
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: lefwDividerChar failed with status {}.", status));
@@ -2102,9 +2198,9 @@ namespace le
                 return status;
             }
         }
-        if (technology && !technology->clearance_measure.empty())
+        if (technology && technology->clearance_measure)
         {
-            status = lefwClearanceMeasure(technology->clearance_measure.c_str());
+            status = lefwClearanceMeasure(technology->clearance_measure->c_str());
             if (status)
             {
                 messages_.push_back(fmt::format("ERROR: lefwClearanceMeasure failed with status {}.", status));
@@ -2156,8 +2252,8 @@ namespace le
             if (technology->max_via_stack)
             {
                 status = lefwMaxviastack(*technology->max_via_stack,
-                                          technology->max_via_stack_bottom_layer.empty() ? nullptr : technology->max_via_stack_bottom_layer.c_str(),
-                                          technology->max_via_stack_top_layer.empty() ? nullptr : technology->max_via_stack_top_layer.c_str());
+                                          technology->max_via_stack_bottom_layer ? technology->max_via_stack_bottom_layer->c_str() : nullptr,
+                                          technology->max_via_stack_top_layer ? technology->max_via_stack_top_layer->c_str() : nullptr);
                 if (status)
                 {
                     messages_.push_back(fmt::format("ERROR: lefwMaxviastack failed with status {}.", status));

@@ -50,6 +50,13 @@ check_true "design_abstract_id is valid" [expr {$abstract_id != $kInvalidId}]
 
 check "open_design returns a friendly design id" design:TESTCELL [open_design TESTCELL]
 
+# create_terminal/create_obstruction (generated) take a friendly-id
+# token for -abstract, not the raw packed id above - update_abstract_boundary
+# still takes the packed form (out of this round's scope), so both are
+# kept around under separate names.
+set abstract_token [get_abstracts]
+check_true "abstract_token is a friendly id" [expr {$abstract_token ne {}}]
+
 if {[catch {open_design DOES_NOT_EXIST} err]} {
     check "open_design unknown name error message" "open_design: no such design \"DOES_NOT_EXIST\"" $err
 } else {
@@ -91,18 +98,18 @@ check "get_properties on an abstract token" 0 \
 
 # --- Terminal ---
 
-set in0 [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
+set in0 [create_terminal -abstract $abstract_token -name IN0 -direction INPUT]
 check_true "create_terminal returned a valid friendly id" [expr {$in0 ne {}}]
 check "create_terminal friendly id is name-based" terminal:IN0 $in0
 
-set out0 [create_terminal -abstract $abstract_id -name OUT0 -direction OUTPUT]
+set out0 [create_terminal -abstract $abstract_token -name OUT0 -direction OUTPUT]
 check_true "second create_terminal returned a valid friendly id" [expr {$out0 ne {}}]
 
 # --- Terminal-name uniqueness enforcement (UPDATES.md's friendly-id item) ---
 
 set messages_before_duplicate [message_count]
 check "create_terminal with a colliding name returns an empty id" {} \
-    [create_terminal -abstract $abstract_id -name IN0 -direction INPUT]
+    [create_terminal -abstract $abstract_token -name IN0 -direction INPUT]
 check_true "create_terminal name collision pushed an error message" \
     [expr {[message_count] > $messages_before_duplicate}]
 
@@ -143,7 +150,7 @@ if {[catch {get_properties bogus_token:1} err]} {
     # generated/le_tcl_procs_generated.tcl) and covers every TCL-readable
     # class, not just the 7 with hand-written CRUD.
     check "get_properties unrecognized token error message" \
-        "get_properties: unrecognized token \"bogus_token:1\" - expected a friendly id (technology:/layer:/site:/non_default_rule:/via:/via_rule:/shape:/library:/design:/abstract:/terminal:/terminal_port:/obstruction:/schematic:/instance:)" \
+        "get_properties: unrecognized token \"bogus_token:1\" - expected a friendly id (technology:/property_definition:/layer:/antenna_model:/array_spacing:/two_widths_spacing_entry:/prefer_enclosure_entry:/enclosure_entry:/layer_density_entry:/macro_site_placement:/site:/non_default_rule_layer:/non_default_rule_via:/non_default_rule:/minimum_cut:/min_step:/influence_spacing_entry:/spacing_rule:/via_layer:/via_rule_reference:/via_rule_layer:/via:/via_rule:/shape:/library:/design:/abstract:/macro_density_layer:/foreign:/terminal:/pin_antenna_model:/terminal_port:/obstruction:/schematic:/instance:)" \
         $err
 } else {
     puts stderr "FAIL: get_properties on an unrecognized token did not raise a Tcl error"
@@ -226,8 +233,8 @@ if {[catch {get_properties $port .bogus_hop.name}]} {
     exit 1
 }
 
-set shape [create_terminal_port_shape -port $port -layer M1]
-check_true "create_terminal_port_shape returned a valid friendly id" [expr {$shape ne {}}]
+set shape [create_shape -terminal_port $port -layer_name M1]
+check_true "create_shape (-terminal_port) returned a valid friendly id" [expr {$shape ne {}}]
 
 check "get_properties chained list-hop path after a shape exists" M1 \
     [get_properties $port .shapes.layer_name]
@@ -336,10 +343,10 @@ check "shape_rects after remove" {} [shape_rects $shape]
 
 # --- Obstruction ---
 
-set obstruction [create_obstruction -abstract $abstract_id]
+set obstruction [create_obstruction -abstract $abstract_token]
 check_true "create_obstruction returned a valid friendly id" [expr {$obstruction ne {}}]
 
-set obstruction_shape [create_obstruction_shape -obstruction $obstruction -layer M1]
+set obstruction_shape [create_shape -obstruction $obstruction -layer_name M1]
 check "add rect to obstruction shape" 0 [add_shape_rect -shape $obstruction_shape -rect {0 0 1 1}]
 check "obstruction_shapes lists the created shape" $obstruction_shape [obstruction_shapes $obstruction]
 

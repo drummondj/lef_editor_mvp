@@ -29,4 +29,8 @@ int set_current_{{klass.to_snake_case()}}_cmd(const char *id);
 int get_{{klass.tcl_plural_snake_case()}}_cmd({% for op in scope.of_params %}const char *of_{{op.parent_field.name}}, {% endfor %}{% if id_field %}const char *name_expression, {% endif %}const char *filter_expression);
 const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
 {% endfor %}
+
+{% for klass in classes %}
+const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}});
+{% endfor %}
 """

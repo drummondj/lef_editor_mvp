@@ -175,15 +175,17 @@ none of these are duplicated here.
   see `le_tcl_shim.hpp`'s own "IDs" comment) instead of raw `Le*Id` structs.
   `le_shell` (Tcl_Main-based) and any `tclsh` can both load `le_tcl.so` and
   source `le_tcl_procs.tcl`. Property *reading* (property tables,
-  friendly-id resolution, `is_child` enumeration) and `get_<type>` search
-  are generated uniformly for every TCL-readable class — see "TCL codegen"
-  below; only CRUD (`create_X`/`delete_X`/`set_X_<field>`) stays
-  hand-written, currently for `Terminal`/`TerminalPort`/`Obstruction`/
-  `Shape` (+ `Abstract`'s boundary) — the classes this MVP actually edits,
-  not read-only LEF technology reference data (`Technology`/`Layer`/
-  `Via`/...). Fully covered by `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl`
-  (run via `tclsh8.6`, not the generic `tclsh` — see the `build-test`
-  skill).
+  friendly-id resolution, `is_child` enumeration), `get_<type>` search, and
+  `create_<type>` are all generated uniformly for every TCL-readable class —
+  see "TCL codegen" below; only `delete_X`/`set_X_<field>` stay hand-written,
+  currently for `Terminal`/`TerminalPort`/`Obstruction`/`Shape` (+
+  `Abstract`'s boundary) — the classes this MVP actually edits at all beyond
+  creation, not read-only LEF technology reference data (`Technology`/
+  `Layer`/`Via`/...), which nonetheless still gets a generated `create_<type>`
+  like every other class (nothing calls it today, but it costs nothing extra
+  to generate uniformly). Fully covered by
+  `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl` (run via
+  `tclsh8.6`, not the generic `tclsh` — see the `build-test` skill).
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
   Built by its own `Makefile` via `ExternalProject_Add` in the top-level
   `CMakeLists.txt`; only `lef/` is wired into the build so far (`def/` is
@@ -211,6 +213,30 @@ formatting — see `codegen/codegen/schema.py`'s `TYPEMAP` and
   parent→children and lookup-by-field indices, and exposes
   `create_x`/`get_x`/`get_x_ids`/`for_each_x_id`/`clear_x`/`get_x_size` per class.
 
+A field's `has_pool` defaults `True` — a `Klass` is embedded (a plain value
+type inline in its owner's `XxxData`, e.g. `Point`/`Rect`/`Symmetry`) only by
+explicitly setting `has_pool=False`. Converting an embedded struct to pooled
+(add a back-reference `parent=` `Field` on it per owner relationship, mark
+the owner's own field `is_child=True`) needs no template changes — every
+pool-backed `Klass` gets the same `create_x`/`get_x`/`get_<owner>_<field>()`
+surface uniformly, whether it's one of the ~15 originally-pooled top-level
+classes (`Layer`/`Via`/`Terminal`/...) or one of the ~20 former embedded
+structs pooled in a later round specifically so they'd also get their own
+generated property table and (see below) `create_<type>` command.
+
+`Field.unique_per_parent` (paired with `index=True`) makes `create_x`
+fallible for that `Klass`: it builds a per-parent-scoped index (nested by the
+owning `Klass`'s own parent field) instead of the default flat/global one a
+plain `index=True` field gets, and returns an invalid id — without
+inserting — if a sibling under the same parent already has that value,
+instead of always succeeding. `Terminal.name` is the only field using this
+today (a Terminal's name only needs to be unique within its own Abstract,
+not globally — real LEF libraries reuse pin names like VDD/IN0 across
+different Abstracts) — see `Field.unique_per_parent`'s own docstring in
+`codegen/codegen/schema.py` for the full mechanism (nested index shape,
+`create_x`/`set_x_<field>`/`delete_x` bookkeeping, the `get_x_by_<field>`
+accessor's parent-scoped signature).
+
 To change the schema: edit `src/database/schema.py`, bump `Schema.version`
 (only needed for a real field/class shape change, not a pure codegen-side
 formatting change), then regenerate with the `regen-database` skill rather
@@ -220,34 +246,63 @@ own `tests/` directory, not `generated/` — codegen doesn't emit test files.
 ## TCL codegen (codegen, `--target tcl`)
 
 A separate generation target from the database one above (`regen-tcl`
-skill, not `regen-database`) — covers `src/tcl/`'s property-*reading* and
-`get_<type>` *search* surface: `src/api/generated_tcl/` (`ids.inc`/
-`declarations.inc`/`handle_fields.inc`/`property_accessors_internal.inc`/
-`property_accessors_public.inc`/`filter_tables.inc`/`search.inc`,
-`#include`d from `api.hpp`/`api.cpp`) and `src/tcl/generated/`
-(`le_tcl_shim_generated.hpp`/`.inc`, `le_api_generated.i`,
-`le_tcl_procs_generated.tcl`, `#include`d/`%include`d/`source`d from
+skill, not `regen-database`) — covers `src/tcl/`'s property-*reading*,
+`get_<type>` *search*, and `create_<type>` surface: `src/api/generated_tcl/`
+(`ids.inc`/`declarations.inc`/`handle_fields.inc`/
+`property_accessors_internal.inc`/`property_accessors_public.inc`/
+`filter_tables.inc`/`search.inc`, `#include`d from `api.hpp`/`api.cpp`) and
+`src/tcl/generated/` (`le_tcl_shim_generated.hpp`/`.inc`,
+`le_api_generated.i`, `le_tcl_procs_generated.tcl`,
+`#include`d/`%include`d/`source`d from
 `le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`). Every pool-backed
 `Klass` gets a generated property table, friendly-id resolution,
-`is_child`-field enumeration, and a `get_<type>` search command by
-default (`Klass.tcl_readable`/`Klass.tcl_id_field` in `codegen/codegen/
-schema.py` — see the `regen-tcl` skill for the opt-out/override mechanics
-and the full list of injection points) — uniformly across all 15 classes
-today, including the 4 with hand-written CRUD elsewhere (`Terminal`/
-`TerminalPort`/`Obstruction`/`Shape` — `codegen/codegen/tcl_generator.py`'s
-`HAND_WRITTEN_CRUD_CLASSES`, kept only as documentation of which classes
-*also* have hand-written `create_X`/`delete_X`/`set_X_<field>`, not an
-exclusion set for this target). `Klass.has_current_access = True`
-(`Technology`/`Abstract`/`Schematic`) marks a class with a generated
-"current instance" concept (`current_X`/`set_current_X` — independent of
-any other "current view" state elsewhere, e.g. `Scene::current_abstract()`,
-which drives GUI rendering) that every *other* readable class's
-`get_<type>` default scope (`-of` omitted) derives from automatically,
-purely from schema graph structure — see `codegen/codegen/tcl_scope.py`'s
-own module docstring for the algorithm, and the `regen-tcl` skill for the
-full injection-point list. CRUD generation itself (`create_X`/`delete_X`/
-`set_X_<field>`) stays a separate, not-yet-built effort — it needs real
-new per-type infrastructure this target doesn't provide yet.
+`is_child`-field enumeration, a `get_<type>` search command, and a
+`create_<type>` command by default (`Klass.tcl_readable`/`Klass.tcl_id_field`
+in `codegen/codegen/schema.py` — see the `regen-tcl` skill for the opt-out/
+override mechanics and the full list of injection points) — uniformly
+across all ~35 classes today (including `Terminal`/`TerminalPort`/
+`Obstruction`/`Shape`, whose `create_X` used to be hand-written —
+`codegen/codegen/tcl_generator.py`'s `HAND_WRITTEN_CRUD_CLASSES` now only
+documents which classes *also* have hand-written `delete_X`/`set_X_<field>`,
+not `create_X` anymore, and not an exclusion set for this target in general).
+`Klass.has_current_access = True` (`Technology`/`Abstract`/`Schematic`) marks
+a class with a generated "current instance" concept (`current_X`/
+`set_current_X` — independent of any other "current view" state elsewhere,
+e.g. `Scene::current_abstract()`, which drives GUI rendering) that every
+*other* readable class's `get_<type>` default scope (`-of` omitted) derives
+from automatically, purely from schema graph structure — see
+`codegen/codegen/tcl_scope.py`'s own module docstring for the algorithm, and
+the `regen-tcl` skill for the full injection-point list.
+
+`create_<type>` covers one flag per scalar field (`str`/`int`/`double`/
+`dbu`/`bool`/enum) — `is_child`/`is_list` fields and embedded-struct-typed
+fields stay out of scope (a future `add_X`/`set_X` round, matching how
+`Shape`'s own rect/polygon/path CRUD is already separate from
+`create_shape`). A flag is required iff `Field.create_required()` (mirrors
+`is_optional`, except `bool` is always optional — `false` is already a
+zero-cost "not specified" default, so requiring every boolean flag on every
+call would be pure noise); an *omitted* optional flag ends up genuinely
+unset (`std::nullopt`), not a zero-value default — a `str`/enum field passes
+`nullptr` through the C layer (Tcl can't produce a null `const char*`
+directly, so an empty string is treated as "omitted", the same convention
+this codebase's hand-written `-flag` parsing already used before this
+generator existed), a numeric field gets a companion `has_<field>` int32.
+`dbu` fields cross the C boundary in microns (`<field>_um`, converted via
+`database_units_microns()`/`to_dbu()`), and an enum field crosses as its
+`to_string()`/`from_string()` spelling (e.g. `"INPUT"`, parsed via the
+matching generated `<enum>_from_string()` — see `enum_hpp_j2.py` — not a raw
+numeric code). A multi-parent class (`Shape.terminal_port`/`.obstruction`,
+`ViaLayer`, `Foreign`, `LayerDensityEntry`'s `ac_layer`/`dc_layer`) takes one
+`Le<Parent>Id`/token flag per parent field, generically validated to require
+*exactly one* resolving (not zero, not both) — this is what unified the
+formerly hand-written `create_terminal_port_shape`/`create_obstruction_shape`
+split into one generated `create_shape -terminal_port|-obstruction`. All of
+this construction logic (per-field validation, the exactly-one-parent check,
+the `<Klass>Data{...}` initializer) is built as one Python string in
+`Klass.create_api_body()` (`codegen/codegen/schema.py`), not deeply nested
+Jinja — the per-field-type/optionality branching reads far more clearly as
+real Python control flow. `delete_X`/`set_X_<field>` stay a separate,
+not-yet-built effort.
 
 ## Open gaps (tracked in README's Plan checklist)
 

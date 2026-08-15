@@ -34,7 +34,27 @@ namespace {{schema.namespace}} {
 
     {%- for klass in schema.get_pool_classes() %}
         /// @brief Create a {{klass.name}} object
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.unique_per_parent %}
+        ///
+        /// Fallible: returns an invalid {{klass.name}}Id (rather than
+        /// inserting) if a sibling {{klass.name}} sharing the same
+        /// {{klass.get_parent_field().name}} already has this {{field.name}}
+        /// (unique_per_parent) - matches this codebase's existing
+        /// Id::valid() sentinel convention for "no" rather than adding a
+        /// new failure signal.
+            {%- endif %}
+        {%- endfor %}
         {{klass.name}}Id create_{{klass.to_snake_case()}}({{klass.name}}Data data) {
+        {%- for field in klass.get_ordered_fields() %}
+            {%- if field.unique_per_parent %}
+            if (data.{{klass.get_parent_field().name}}.valid()) {
+                auto& siblings_{{field.name}} = index_.{{klass.to_snake_case()}}_by_{{field.name}}[data.{{klass.get_parent_field().name}}];
+                if (siblings_{{field.name}}.find(data.{{field.name}}) != siblings_{{field.name}}.end())
+                    return {{klass.name}}Id{};
+            }
+            {%- endif %}
+        {%- endfor %}
             {{klass.name}}Id id = {{klass.to_snake_case()}}_.create(std::move(data));
 
         {%- if klass.has_indecies() %}
@@ -50,6 +70,9 @@ namespace {{schema.namespace}} {
             if (d.{{field.name}}.valid())
                 index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[d.{{field.name}}] = id;
                 {%- endif %}
+            {%- elif field.index and field.unique_per_parent %}
+            if (d.{{klass.get_parent_field().name}}.valid())
+                index_.{{klass.to_snake_case()}}_by_{{field.name}}[d.{{klass.get_parent_field().name}}][d.{{field.name}}] = id;
             {%- elif field.index %}
             index_.{{klass.to_snake_case()}}_by_{{field.name}}[d.{{field.name}}] = id;
             {%- endif %}
@@ -82,6 +105,12 @@ namespace {{schema.namespace}} {
                 {%- else %}
             index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.erase(d.{{field.name}});
                 {%- endif %}
+            {%- elif field.index and field.unique_per_parent %}
+            {
+                auto it = index_.{{klass.to_snake_case()}}_by_{{field.name}}.find(d.{{klass.get_parent_field().name}});
+                if (it != index_.{{klass.to_snake_case()}}_by_{{field.name}}.end())
+                    it->second.erase(d.{{field.name}});
+            }
             {%- elif field.index %}
             index_.{{klass.to_snake_case()}}_by_{{field.name}}.erase(d.{{field.name}});
             {%- endif %}
@@ -95,13 +124,31 @@ namespace {{schema.namespace}} {
         /// @brief Set {{klass.name}}'s {{field.name}}, keeping the relevant
         /// Root index in sync (unlike assigning through
         /// get_{{klass.to_snake_case()}}() directly, which would leave a
-        /// stale index entry behind). False (no-op) if id doesn't exist.
+        /// stale index entry behind). False (no-op) if id doesn't exist{% if field.unique_per_parent %}, or if a sibling {{klass.name}} sharing the current {{klass.get_parent_field().name}} already has this {{field.name}} (unique_per_parent){% endif %}.
+                {%- if field.parent and klass.fields | selectattr("unique_per_parent") | list %}
+        /// NOTE: this Klass has a unique_per_parent field
+        /// ({%- for f in klass.fields | selectattr("unique_per_parent") -%}{{f.name}}{% if not loop.last %}, {% endif %}{%- endfor -%}) -
+        /// reparenting via this setter does NOT move that field's
+        /// sibling-index entries to the new parent's bucket (no generated
+        /// or hand-written caller reparents a {{klass.name}} today, so
+        /// this is a documented, currently-unreachable gap rather than a fix).
+                {%- endif %}
         bool set_{{klass.to_snake_case()}}_{{field.name}}({{klass.name}}Id id, {{field.get_cpp_type()}} value) {
             auto* existing = {{klass.to_snake_case()}}_.get(id);
             if (!existing) return false;
             if (existing->{{field.name}} == value) return true;
 
-            {%- if field.parent %}
+            {%- if field.unique_per_parent %}
+            {
+                auto& siblings = index_.{{klass.to_snake_case()}}_by_{{field.name}}[existing->{{klass.get_parent_field().name}}];
+                if (siblings.find(value) != siblings.end())
+                    return false;
+                siblings.erase(existing->{{field.name}});
+                existing->{{field.name}} = value;
+                siblings[value] = id;
+            }
+            return true;
+            {%- elif field.parent %}
                 {%- if field._parent_field.is_list %}
             {
                 auto& old_siblings = index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[existing->{{field.name}}];
@@ -110,13 +157,9 @@ namespace {{schema.namespace}} {
                 {%- else %}
             index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}.erase(existing->{{field.name}});
                 {%- endif %}
-            {%- else %}
-            index_.{{klass.to_snake_case()}}_by_{{field.name}}.erase(existing->{{field.name}});
-            {%- endif %}
 
             existing->{{field.name}} = value;
 
-            {%- if field.parent %}
                 {%- if field._parent_field.is_list %}
             {
                 auto& new_siblings = index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[value];
@@ -126,10 +169,15 @@ namespace {{schema.namespace}} {
                 {%- else %}
             index_.{{field._parent_klass.to_snake_case()}}_{{field.parent}}[value] = id;
                 {%- endif %}
-            {%- else %}
-            index_.{{klass.to_snake_case()}}_by_{{field.name}}[value] = id;
-            {%- endif %}
             return true;
+            {%- else %}
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}.erase(existing->{{field.name}});
+
+            existing->{{field.name}} = value;
+
+            index_.{{klass.to_snake_case()}}_by_{{field.name}}[value] = id;
+            return true;
+            {%- endif %}
         }
             {%- endif %}
         {%- endfor %}
@@ -197,6 +245,18 @@ namespace {{schema.namespace}} {
             return entry->second;
         }
                 {%- endif %}
+            {%- elif field.index and field.unique_per_parent %}
+        /// @brief Get the {{klass.name}}Id for the specified {{field.name}},
+        /// scoped to one {{klass.get_parent_field().type}}Id sibling group
+        /// (unique_per_parent - {{field.name}} is only unique within one
+        /// {{klass.get_parent_field().type}}, not globally).
+        {{klass.name}}Id get_{{klass.to_snake_case()}}_by_{{field.name}}({{klass.get_parent_field().type}}Id {{klass.get_parent_field().name}}, const {{field.get_cpp_type()}}& {{field.name}}) const {
+            auto parent_it = index_.{{klass.to_snake_case()}}_by_{{field.name}}.find({{klass.get_parent_field().name}});
+            if (parent_it == index_.{{klass.to_snake_case()}}_by_{{field.name}}.end())
+                return {{klass.name}}Id{};
+            auto it = parent_it->second.find({{field.name}});
+            return it == parent_it->second.end() ? {{klass.name}}Id{} : it->second;
+        }
             {%- elif field.index %}
         /// @brief Get {{klass.name}}Ids for the specified {{field.name}}
         {{klass.name}}Id get_{{klass.to_snake_case()}}_by_{{field.name}}(const {{field.get_cpp_type()}}& {{field.name}}) const {

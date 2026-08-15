@@ -99,7 +99,7 @@ namespace le
         // Shared by lefrViaCbkFn (top-level VIA) and lefrNonDefaultCbkFn
         // (VIA embedded inline in a NONDEFAULTRULE) - lefiVia's per-layer
         // rect/polygon shape is identical in both contexts.
-        static std::vector<ViaLayer> via_layers_from_parser(LEFReader *reader, lefiVia *lef_via);
+        static std::vector<ViaLayerData> via_layers_from_parser(LEFReader *reader, lefiVia *lef_via);
         static void post_process(LEFReader *reader);
 
         // Private variables

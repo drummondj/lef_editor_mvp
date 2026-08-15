@@ -133,8 +133,10 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsUnits)
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsRoutingLayerProperties)
 {
-    const LayerData *original = original_root.get_layer(original_root.get_layer_by_name("M1"));
-    const LayerData *written = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    const LayerId original_id = original_root.get_layer_by_name("M1");
+    const LayerId written_id = written_root.get_layer_by_name("M1");
+    const LayerData *original = original_root.get_layer(original_id);
+    const LayerData *written = written_root.get_layer(written_id);
     ASSERT_TRUE(original != nullptr);
     ASSERT_TRUE(written != nullptr);
 
@@ -153,62 +155,84 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsRoutingLayerProperties)
     ASSERT_TRUE(written->offset.has_value());
     EXPECT_EQ(*original->offset, *written->offset);
 
-    ASSERT_EQ(original->spacing_rules.size(), 5u);
-    ASSERT_EQ(written->spacing_rules.size(), 5u);
-    for (size_t i = 0; i < original->spacing_rules.size(); i++)
-        EXPECT_EQ(original->spacing_rules[i].distance, written->spacing_rules[i].distance) << "rule " << i;
+    const std::vector<SpacingRuleId> &original_spacing_rule_ids = original_root.get_layer_spacing_rules(original_id);
+    const std::vector<SpacingRuleId> &written_spacing_rule_ids = written_root.get_layer_spacing_rules(written_id);
+    ASSERT_EQ(original_spacing_rule_ids.size(), 5u);
+    ASSERT_EQ(written_spacing_rule_ids.size(), 5u);
+    for (size_t i = 0; i < original_spacing_rule_ids.size(); i++)
+        EXPECT_EQ(original_root.get_spacing_rule(original_spacing_rule_ids[i])->distance, written_root.get_spacing_rule(written_spacing_rule_ids[i])->distance) << "rule " << i;
 
     // SPACING 0.16 SAMENET PGONLY
-    EXPECT_TRUE(original->spacing_rules[1].same_net);
-    EXPECT_TRUE(written->spacing_rules[1].same_net);
-    EXPECT_TRUE(original->spacing_rules[1].same_net_pg_only);
-    EXPECT_TRUE(written->spacing_rules[1].same_net_pg_only);
+    const SpacingRuleData &original_rule1 = *original_root.get_spacing_rule(original_spacing_rule_ids[1]);
+    const SpacingRuleData &written_rule1 = *written_root.get_spacing_rule(written_spacing_rule_ids[1]);
+    EXPECT_TRUE(original_rule1.same_net);
+    EXPECT_TRUE(written_rule1.same_net);
+    EXPECT_TRUE(original_rule1.same_net_pg_only);
+    EXPECT_TRUE(written_rule1.same_net_pg_only);
 
     // SPACING 0.17 LENGTHTHRESHOLD 0.4
-    ASSERT_TRUE(original->spacing_rules[2].length_threshold.has_value());
-    ASSERT_TRUE(written->spacing_rules[2].length_threshold.has_value());
-    EXPECT_EQ(*original->spacing_rules[2].length_threshold, *written->spacing_rules[2].length_threshold);
+    const SpacingRuleData &original_rule2 = *original_root.get_spacing_rule(original_spacing_rule_ids[2]);
+    const SpacingRuleData &written_rule2 = *written_root.get_spacing_rule(written_spacing_rule_ids[2]);
+    ASSERT_TRUE(original_rule2.length_threshold.has_value());
+    ASSERT_TRUE(written_rule2.length_threshold.has_value());
+    EXPECT_EQ(*original_rule2.length_threshold, *written_rule2.length_threshold);
 
     // SPACING 0.18 RANGE 0.1 0.3
-    ASSERT_TRUE(original->spacing_rules[3].range_min.has_value());
-    ASSERT_TRUE(written->spacing_rules[3].range_min.has_value());
-    EXPECT_EQ(*original->spacing_rules[3].range_min, *written->spacing_rules[3].range_min);
-    ASSERT_TRUE(original->spacing_rules[3].range_max.has_value());
-    ASSERT_TRUE(written->spacing_rules[3].range_max.has_value());
-    EXPECT_EQ(*original->spacing_rules[3].range_max, *written->spacing_rules[3].range_max);
+    const SpacingRuleData &original_rule3 = *original_root.get_spacing_rule(original_spacing_rule_ids[3]);
+    const SpacingRuleData &written_rule3 = *written_root.get_spacing_rule(written_spacing_rule_ids[3]);
+    ASSERT_TRUE(original_rule3.range_min.has_value());
+    ASSERT_TRUE(written_rule3.range_min.has_value());
+    EXPECT_EQ(*original_rule3.range_min, *written_rule3.range_min);
+    ASSERT_TRUE(original_rule3.range_max.has_value());
+    ASSERT_TRUE(written_rule3.range_max.has_value());
+    EXPECT_EQ(*original_rule3.range_max, *written_rule3.range_max);
 
     // SPACING 0.19 RANGE 0.1 0.3 INFLUENCE 0.05 RANGE 0.2 0.4
-    ASSERT_TRUE(original->spacing_rules[4].range_influence.has_value());
-    ASSERT_TRUE(written->spacing_rules[4].range_influence.has_value());
-    EXPECT_EQ(*original->spacing_rules[4].range_influence, *written->spacing_rules[4].range_influence);
-    ASSERT_TRUE(original->spacing_rules[4].range_influence_range_min.has_value());
-    ASSERT_TRUE(written->spacing_rules[4].range_influence_range_min.has_value());
-    EXPECT_EQ(*original->spacing_rules[4].range_influence_range_min, *written->spacing_rules[4].range_influence_range_min);
+    const SpacingRuleData &original_rule4 = *original_root.get_spacing_rule(original_spacing_rule_ids[4]);
+    const SpacingRuleData &written_rule4 = *written_root.get_spacing_rule(written_spacing_rule_ids[4]);
+    ASSERT_TRUE(original_rule4.range_influence.has_value());
+    ASSERT_TRUE(written_rule4.range_influence.has_value());
+    EXPECT_EQ(*original_rule4.range_influence, *written_rule4.range_influence);
+    ASSERT_TRUE(original_rule4.range_influence_range_min.has_value());
+    ASSERT_TRUE(written_rule4.range_influence_range_min.has_value());
+    EXPECT_EQ(*original_rule4.range_influence_range_min, *written_rule4.range_influence_range_min);
 
-    ASSERT_EQ(original->minimum_cuts.size(), 2u);
-    ASSERT_EQ(written->minimum_cuts.size(), 2u);
-    EXPECT_EQ(original->minimum_cuts[0].cuts, written->minimum_cuts[0].cuts);
-    EXPECT_EQ(original->minimum_cuts[0].width, written->minimum_cuts[0].width);
-    ASSERT_TRUE(original->minimum_cuts[1].within.has_value());
-    ASSERT_TRUE(written->minimum_cuts[1].within.has_value());
-    EXPECT_EQ(*original->minimum_cuts[1].within, *written->minimum_cuts[1].within);
-    EXPECT_EQ(original->minimum_cuts[1].connection, written->minimum_cuts[1].connection);
-    ASSERT_TRUE(original->minimum_cuts[1].length.has_value());
-    ASSERT_TRUE(written->minimum_cuts[1].length.has_value());
-    EXPECT_EQ(*original->minimum_cuts[1].length, *written->minimum_cuts[1].length);
+    const std::vector<MinimumCutId> &original_min_cut_ids = original_root.get_layer_minimum_cuts(original_id);
+    const std::vector<MinimumCutId> &written_min_cut_ids = written_root.get_layer_minimum_cuts(written_id);
+    ASSERT_EQ(original_min_cut_ids.size(), 2u);
+    ASSERT_EQ(written_min_cut_ids.size(), 2u);
+    const MinimumCutData &original_min_cut0 = *original_root.get_minimum_cut(original_min_cut_ids[0]);
+    const MinimumCutData &written_min_cut0 = *written_root.get_minimum_cut(written_min_cut_ids[0]);
+    EXPECT_EQ(original_min_cut0.cuts, written_min_cut0.cuts);
+    EXPECT_EQ(original_min_cut0.width, written_min_cut0.width);
+    const MinimumCutData &original_min_cut1 = *original_root.get_minimum_cut(original_min_cut_ids[1]);
+    const MinimumCutData &written_min_cut1 = *written_root.get_minimum_cut(written_min_cut_ids[1]);
+    ASSERT_TRUE(original_min_cut1.within.has_value());
+    ASSERT_TRUE(written_min_cut1.within.has_value());
+    EXPECT_EQ(*original_min_cut1.within, *written_min_cut1.within);
+    EXPECT_EQ(original_min_cut1.connection, written_min_cut1.connection);
+    ASSERT_TRUE(original_min_cut1.length.has_value());
+    ASSERT_TRUE(written_min_cut1.length.has_value());
+    EXPECT_EQ(*original_min_cut1.length, *written_min_cut1.length);
 
-    ASSERT_EQ(original->min_steps.size(), 3u);
-    ASSERT_EQ(written->min_steps.size(), 3u);
-    EXPECT_TRUE(original->min_steps[0].min_step_type.empty());
-    EXPECT_TRUE(written->min_steps[0].min_step_type.empty());
-    EXPECT_EQ(original->min_steps[1].min_step_type, "INSIDECORNER");
-    EXPECT_EQ(written->min_steps[1].min_step_type, "INSIDECORNER");
-    ASSERT_TRUE(original->min_steps[1].lengthsum.has_value());
-    ASSERT_TRUE(written->min_steps[1].lengthsum.has_value());
-    EXPECT_EQ(*original->min_steps[1].lengthsum, *written->min_steps[1].lengthsum);
-    ASSERT_TRUE(original->min_steps[2].max_edges.has_value());
-    ASSERT_TRUE(written->min_steps[2].max_edges.has_value());
-    EXPECT_EQ(*original->min_steps[2].max_edges, *written->min_steps[2].max_edges);
+    const std::vector<MinStepId> &original_min_step_ids = original_root.get_layer_min_steps(original_id);
+    const std::vector<MinStepId> &written_min_step_ids = written_root.get_layer_min_steps(written_id);
+    ASSERT_EQ(original_min_step_ids.size(), 3u);
+    ASSERT_EQ(written_min_step_ids.size(), 3u);
+    EXPECT_FALSE(original_root.get_min_step(original_min_step_ids[0])->min_step_type.has_value());
+    EXPECT_FALSE(written_root.get_min_step(written_min_step_ids[0])->min_step_type.has_value());
+    const MinStepData &original_min_step1 = *original_root.get_min_step(original_min_step_ids[1]);
+    const MinStepData &written_min_step1 = *written_root.get_min_step(written_min_step_ids[1]);
+    EXPECT_EQ(original_min_step1.min_step_type, "INSIDECORNER");
+    EXPECT_EQ(written_min_step1.min_step_type, "INSIDECORNER");
+    ASSERT_TRUE(original_min_step1.lengthsum.has_value());
+    ASSERT_TRUE(written_min_step1.lengthsum.has_value());
+    EXPECT_EQ(*original_min_step1.lengthsum, *written_min_step1.lengthsum);
+    const MinStepData &original_min_step2 = *original_root.get_min_step(original_min_step_ids[2]);
+    const MinStepData &written_min_step2 = *written_root.get_min_step(written_min_step_ids[2]);
+    ASSERT_TRUE(original_min_step2.max_edges.has_value());
+    ASSERT_TRUE(written_min_step2.max_edges.has_value());
+    EXPECT_EQ(*original_min_step2.max_edges, *written_min_step2.max_edges);
 
     ASSERT_TRUE(original->spacing_table_parallel_run_length.has_value());
     ASSERT_TRUE(written->spacing_table_parallel_run_length.has_value());
@@ -216,13 +240,17 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsRoutingLayerProperties)
     EXPECT_EQ(original->spacing_table_parallel_run_length->widths, written->spacing_table_parallel_run_length->widths);
     EXPECT_EQ(original->spacing_table_parallel_run_length->spacings, written->spacing_table_parallel_run_length->spacings);
 
-    ASSERT_EQ(original->spacing_table_influence.size(), 2u);
-    ASSERT_EQ(written->spacing_table_influence.size(), 2u);
-    for (size_t i = 0; i < original->spacing_table_influence.size(); i++)
+    const std::vector<InfluenceSpacingEntryId> &original_influence_ids = original_root.get_layer_spacing_table_influence(original_id);
+    const std::vector<InfluenceSpacingEntryId> &written_influence_ids = written_root.get_layer_spacing_table_influence(written_id);
+    ASSERT_EQ(original_influence_ids.size(), 2u);
+    ASSERT_EQ(written_influence_ids.size(), 2u);
+    for (size_t i = 0; i < original_influence_ids.size(); i++)
     {
-        EXPECT_EQ(original->spacing_table_influence[i].width, written->spacing_table_influence[i].width);
-        EXPECT_EQ(original->spacing_table_influence[i].distance, written->spacing_table_influence[i].distance);
-        EXPECT_EQ(original->spacing_table_influence[i].spacing, written->spacing_table_influence[i].spacing);
+        const InfluenceSpacingEntryData &o = *original_root.get_influence_spacing_entry(original_influence_ids[i]);
+        const InfluenceSpacingEntryData &w = *written_root.get_influence_spacing_entry(written_influence_ids[i]);
+        EXPECT_EQ(o.width, w.width);
+        EXPECT_EQ(o.distance, w.distance);
+        EXPECT_EQ(o.spacing, w.spacing);
     }
 
     ASSERT_TRUE(original->resistance.has_value());
@@ -265,8 +293,10 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsRoutingLayerProperties)
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsCutLayerWidthAndSpacing)
 {
-    const LayerData *original = original_root.get_layer(original_root.get_layer_by_name("V1"));
-    const LayerData *written = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    const LayerId original_id = original_root.get_layer_by_name("V1");
+    const LayerId written_id = written_root.get_layer_by_name("V1");
+    const LayerData *original = original_root.get_layer(original_id);
+    const LayerData *written = written_root.get_layer(written_id);
     ASSERT_TRUE(original != nullptr);
     ASSERT_TRUE(written != nullptr);
 
@@ -276,42 +306,48 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsCutLayerWidthAndSpacing)
     ASSERT_TRUE(written->width.has_value());
     EXPECT_EQ(*original->width, *written->width);
 
-    ASSERT_EQ(original->spacing_rules.size(), 7u);
-    ASSERT_EQ(written->spacing_rules.size(), 7u);
-    for (size_t i = 0; i < original->spacing_rules.size(); i++)
-        EXPECT_EQ(original->spacing_rules[i].distance, written->spacing_rules[i].distance) << "rule " << i;
+    const std::vector<SpacingRuleId> &original_spacing_rule_ids = original_root.get_layer_spacing_rules(original_id);
+    const std::vector<SpacingRuleId> &written_spacing_rule_ids = written_root.get_layer_spacing_rules(written_id);
+    ASSERT_EQ(original_spacing_rule_ids.size(), 7u);
+    ASSERT_EQ(written_spacing_rule_ids.size(), 7u);
+    for (size_t i = 0; i < original_spacing_rule_ids.size(); i++)
+        EXPECT_EQ(original_root.get_spacing_rule(original_spacing_rule_ids[i])->distance, written_root.get_spacing_rule(written_spacing_rule_ids[i])->distance) << "rule " << i;
 
     // SPACING 0.22 ADJACENTCUTS 3 WITHIN 0.25
-    ASSERT_TRUE(original->spacing_rules[1].adjacent_cuts.has_value());
-    ASSERT_TRUE(written->spacing_rules[1].adjacent_cuts.has_value());
-    EXPECT_EQ(*original->spacing_rules[1].adjacent_cuts, *written->spacing_rules[1].adjacent_cuts);
-    ASSERT_TRUE(original->spacing_rules[1].adjacent_within.has_value());
-    ASSERT_TRUE(written->spacing_rules[1].adjacent_within.has_value());
-    EXPECT_EQ(*original->spacing_rules[1].adjacent_within, *written->spacing_rules[1].adjacent_within);
-    EXPECT_FALSE(original->spacing_rules[1].adjacent_except_same_pg_net);
-    EXPECT_FALSE(written->spacing_rules[1].adjacent_except_same_pg_net);
+    const SpacingRuleData &original_rule1 = *original_root.get_spacing_rule(original_spacing_rule_ids[1]);
+    const SpacingRuleData &written_rule1 = *written_root.get_spacing_rule(written_spacing_rule_ids[1]);
+    ASSERT_TRUE(original_rule1.adjacent_cuts.has_value());
+    ASSERT_TRUE(written_rule1.adjacent_cuts.has_value());
+    EXPECT_EQ(*original_rule1.adjacent_cuts, *written_rule1.adjacent_cuts);
+    ASSERT_TRUE(original_rule1.adjacent_within.has_value());
+    ASSERT_TRUE(written_rule1.adjacent_within.has_value());
+    EXPECT_EQ(*original_rule1.adjacent_within, *written_rule1.adjacent_within);
+    EXPECT_FALSE(original_rule1.adjacent_except_same_pg_net);
+    EXPECT_FALSE(written_rule1.adjacent_except_same_pg_net);
 
     // SPACING 0.23 ADJACENTCUTS 2 WITHIN 0.3 EXCEPTSAMEPGNET
-    EXPECT_TRUE(original->spacing_rules[2].adjacent_except_same_pg_net);
-    EXPECT_TRUE(written->spacing_rules[2].adjacent_except_same_pg_net);
+    EXPECT_TRUE(original_root.get_spacing_rule(original_spacing_rule_ids[2])->adjacent_except_same_pg_net);
+    EXPECT_TRUE(written_root.get_spacing_rule(written_spacing_rule_ids[2])->adjacent_except_same_pg_net);
 
     // SPACING 0.6 LAYER M1
-    EXPECT_EQ(original->spacing_rules[3].second_layer_name, "M1");
-    EXPECT_EQ(written->spacing_rules[3].second_layer_name, "M1");
+    EXPECT_EQ(original_root.get_spacing_rule(original_spacing_rule_ids[3])->second_layer_name, "M1");
+    EXPECT_EQ(written_root.get_spacing_rule(written_spacing_rule_ids[3])->second_layer_name, "M1");
 
     // SPACING 1.5 PARALLELOVERLAP
-    EXPECT_TRUE(original->spacing_rules[4].parallel_overlap);
-    EXPECT_TRUE(written->spacing_rules[4].parallel_overlap);
+    EXPECT_TRUE(original_root.get_spacing_rule(original_spacing_rule_ids[4])->parallel_overlap);
+    EXPECT_TRUE(written_root.get_spacing_rule(written_spacing_rule_ids[4])->parallel_overlap);
 
     // SPACING 0.24 CENTERTOCENTER
-    EXPECT_TRUE(original->spacing_rules[5].center_to_center);
-    EXPECT_TRUE(written->spacing_rules[5].center_to_center);
+    EXPECT_TRUE(original_root.get_spacing_rule(original_spacing_rule_ids[5])->center_to_center);
+    EXPECT_TRUE(written_root.get_spacing_rule(written_spacing_rule_ids[5])->center_to_center);
 
     // SPACING 0.25 SAMENET
-    EXPECT_TRUE(original->spacing_rules[6].same_net);
-    EXPECT_TRUE(written->spacing_rules[6].same_net);
-    EXPECT_FALSE(original->spacing_rules[6].same_net_pg_only);
-    EXPECT_FALSE(written->spacing_rules[6].same_net_pg_only);
+    const SpacingRuleData &original_rule6 = *original_root.get_spacing_rule(original_spacing_rule_ids[6]);
+    const SpacingRuleData &written_rule6 = *written_root.get_spacing_rule(written_spacing_rule_ids[6]);
+    EXPECT_TRUE(original_rule6.same_net);
+    EXPECT_TRUE(written_rule6.same_net);
+    EXPECT_FALSE(original_rule6.same_net_pg_only);
+    EXPECT_FALSE(written_rule6.same_net_pg_only);
 
     ASSERT_EQ(original->spacing_table_orthogonal.size(), 2u);
     ASSERT_EQ(written->spacing_table_orthogonal.size(), 2u);
@@ -332,8 +368,10 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsCutLayerWidthAndSpacing)
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsAPlainViaWithLayerGeometryAndResistance)
 {
-    const ViaData *original = original_root.get_via(original_root.get_via_by_name("VIA1"));
-    const ViaData *written = written_root.get_via(written_root.get_via_by_name("VIA1"));
+    const ViaId original_id = original_root.get_via_by_name("VIA1");
+    const ViaId written_id = written_root.get_via_by_name("VIA1");
+    const ViaData *original = original_root.get_via(original_id);
+    const ViaData *written = written_root.get_via(written_id);
     ASSERT_TRUE(original != nullptr);
     ASSERT_TRUE(written != nullptr);
 
@@ -341,14 +379,16 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsAPlainViaWithLayerGeometryAndResista
     ASSERT_TRUE(original->resistance.has_value());
     ASSERT_TRUE(written->resistance.has_value());
     EXPECT_DOUBLE_EQ(*original->resistance, *written->resistance);
-    EXPECT_FALSE(original->via_rule.has_value());
-    EXPECT_FALSE(written->via_rule.has_value());
+    EXPECT_EQ(original_root.get_via_rule_reference(original_root.get_via_via_rule(original_id)), nullptr);
+    EXPECT_EQ(written_root.get_via_rule_reference(written_root.get_via_via_rule(written_id)), nullptr);
 
-    ASSERT_EQ(original->layers.size(), written->layers.size());
-    for (size_t i = 0; i < original->layers.size(); i++)
+    const std::vector<ViaLayerId> &original_layer_ids = original_root.get_via_layers(original_id);
+    const std::vector<ViaLayerId> &written_layer_ids = written_root.get_via_layers(written_id);
+    ASSERT_EQ(original_layer_ids.size(), written_layer_ids.size());
+    for (size_t i = 0; i < original_layer_ids.size(); i++)
     {
-        const ViaLayer &o = original->layers[i];
-        const ViaLayer &w = written->layers[i];
+        const ViaLayerData &o = *original_root.get_via_layer(original_layer_ids[i]);
+        const ViaLayerData &w = *written_root.get_via_layer(written_layer_ids[i]);
         EXPECT_EQ(o.layer_name, w.layer_name);
         ASSERT_EQ(o.rects.size(), w.rects.size());
         for (size_t j = 0; j < o.rects.size(); j++)
@@ -363,20 +403,24 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsAPlainViaWithLayerGeometryAndResista
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsAGenerateViaRuleWithEnclosureAndACutLayer)
 {
-    const ViaRuleData *original = original_root.get_via_rule(original_root.get_via_rule_by_name("VIARULE1"));
-    const ViaRuleData *written = written_root.get_via_rule(written_root.get_via_rule_by_name("VIARULE1"));
+    const ViaRuleId original_id = original_root.get_via_rule_by_name("VIARULE1");
+    const ViaRuleId written_id = written_root.get_via_rule_by_name("VIARULE1");
+    const ViaRuleData *original = original_root.get_via_rule(original_id);
+    const ViaRuleData *written = written_root.get_via_rule(written_id);
     ASSERT_TRUE(original != nullptr);
     ASSERT_TRUE(written != nullptr);
 
     EXPECT_TRUE(original->is_generate);
     EXPECT_TRUE(written->is_generate);
-    ASSERT_EQ(original->layers.size(), written->layers.size());
-    ASSERT_EQ(original->layers.size(), 3u);
+    const std::vector<ViaRuleLayerId> &original_layer_ids = original_root.get_via_rule_layers(original_id);
+    const std::vector<ViaRuleLayerId> &written_layer_ids = written_root.get_via_rule_layers(written_id);
+    ASSERT_EQ(original_layer_ids.size(), written_layer_ids.size());
+    ASSERT_EQ(original_layer_ids.size(), 3u);
 
     for (size_t i = 0; i < 2; i++)
     {
-        const ViaRuleLayer &o = original->layers[i];
-        const ViaRuleLayer &w = written->layers[i];
+        const ViaRuleLayerData &o = *original_root.get_via_rule_layer(original_layer_ids[i]);
+        const ViaRuleLayerData &w = *written_root.get_via_rule_layer(written_layer_ids[i]);
         EXPECT_EQ(o.layer_name, w.layer_name);
         ASSERT_TRUE(o.enclosure_overhang1.has_value());
         ASSERT_TRUE(w.enclosure_overhang1.has_value());
@@ -392,8 +436,8 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsAGenerateViaRuleWithEnclosureAndACut
         EXPECT_EQ(*o.width_max, *w.width_max);
     }
 
-    const ViaRuleLayer &original_cut = original->layers[2];
-    const ViaRuleLayer &written_cut = written->layers[2];
+    const ViaRuleLayerData &original_cut = *original_root.get_via_rule_layer(original_layer_ids[2]);
+    const ViaRuleLayerData &written_cut = *written_root.get_via_rule_layer(written_layer_ids[2]);
     EXPECT_EQ(original_cut.layer_name, written_cut.layer_name);
     ASSERT_TRUE(original_cut.rect.has_value());
     ASSERT_TRUE(written_cut.rect.has_value());
@@ -434,35 +478,47 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsSiteDefinitions)
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsANonDefaultRuleWithAnEmbeddedViaAndUseStatements)
 {
-    const NonDefaultRuleData *original = original_root.get_non_default_rule(original_root.get_non_default_rule_by_name("WIDE_M1"));
-    const NonDefaultRuleData *written = written_root.get_non_default_rule(written_root.get_non_default_rule_by_name("WIDE_M1"));
+    const NonDefaultRuleId original_id = original_root.get_non_default_rule_by_name("WIDE_M1");
+    const NonDefaultRuleId written_id = written_root.get_non_default_rule_by_name("WIDE_M1");
+    const NonDefaultRuleData *original = original_root.get_non_default_rule(original_id);
+    const NonDefaultRuleData *written = written_root.get_non_default_rule(written_id);
     ASSERT_TRUE(original != nullptr);
     ASSERT_TRUE(written != nullptr);
 
     EXPECT_EQ(original->hard_spacing, written->hard_spacing);
 
-    ASSERT_EQ(original->layers.size(), written->layers.size());
-    ASSERT_EQ(original->layers.size(), 1u);
-    EXPECT_EQ(original->layers[0].layer_name, written->layers[0].layer_name);
-    ASSERT_TRUE(original->layers[0].width.has_value());
-    ASSERT_TRUE(written->layers[0].width.has_value());
-    EXPECT_EQ(*original->layers[0].width, *written->layers[0].width);
-    ASSERT_TRUE(original->layers[0].spacing.has_value());
-    ASSERT_TRUE(written->layers[0].spacing.has_value());
-    EXPECT_EQ(*original->layers[0].spacing, *written->layers[0].spacing);
+    const std::vector<NonDefaultRuleLayerId> &original_nd_layer_ids = original_root.get_non_default_rule_layers(original_id);
+    const std::vector<NonDefaultRuleLayerId> &written_nd_layer_ids = written_root.get_non_default_rule_layers(written_id);
+    ASSERT_EQ(original_nd_layer_ids.size(), written_nd_layer_ids.size());
+    ASSERT_EQ(original_nd_layer_ids.size(), 1u);
+    const NonDefaultRuleLayerData &original_nd_layer = *original_root.get_non_default_rule_layer(original_nd_layer_ids[0]);
+    const NonDefaultRuleLayerData &written_nd_layer = *written_root.get_non_default_rule_layer(written_nd_layer_ids[0]);
+    EXPECT_EQ(original_nd_layer.layer_name, written_nd_layer.layer_name);
+    ASSERT_TRUE(original_nd_layer.width.has_value());
+    ASSERT_TRUE(written_nd_layer.width.has_value());
+    EXPECT_EQ(*original_nd_layer.width, *written_nd_layer.width);
+    ASSERT_TRUE(original_nd_layer.spacing.has_value());
+    ASSERT_TRUE(written_nd_layer.spacing.has_value());
+    EXPECT_EQ(*original_nd_layer.spacing, *written_nd_layer.spacing);
 
-    ASSERT_EQ(original->vias.size(), written->vias.size());
-    ASSERT_EQ(original->vias.size(), 1u);
-    EXPECT_EQ(original->vias[0].name, written->vias[0].name);
-    ASSERT_TRUE(original->vias[0].resistance.has_value());
-    ASSERT_TRUE(written->vias[0].resistance.has_value());
-    EXPECT_DOUBLE_EQ(*original->vias[0].resistance, *written->vias[0].resistance);
-    ASSERT_EQ(original->vias[0].layers.size(), written->vias[0].layers.size());
+    const std::vector<NonDefaultRuleViaId> &original_nd_via_ids = original_root.get_non_default_rule_vias(original_id);
+    const std::vector<NonDefaultRuleViaId> &written_nd_via_ids = written_root.get_non_default_rule_vias(written_id);
+    ASSERT_EQ(original_nd_via_ids.size(), written_nd_via_ids.size());
+    ASSERT_EQ(original_nd_via_ids.size(), 1u);
+    const NonDefaultRuleViaId original_via_id = original_nd_via_ids[0];
+    const NonDefaultRuleViaId written_via_id = written_nd_via_ids[0];
+    const NonDefaultRuleViaData &original_via = *original_root.get_non_default_rule_via(original_via_id);
+    const NonDefaultRuleViaData &written_via = *written_root.get_non_default_rule_via(written_via_id);
+    EXPECT_EQ(original_via.name, written_via.name);
+    ASSERT_TRUE(original_via.resistance.has_value());
+    ASSERT_TRUE(written_via.resistance.has_value());
+    EXPECT_DOUBLE_EQ(*original_via.resistance, *written_via.resistance);
+    ASSERT_EQ(original_root.get_non_default_rule_via_layers(original_via_id).size(), written_root.get_non_default_rule_via_layers(written_via_id).size());
     // UPDATES.md 12 Phase 7 - PROPERTY on a NONDEFAULTRULE-embedded VIA.
-    ASSERT_EQ(original->vias[0].properties.size(), written->vias[0].properties.size());
-    ASSERT_EQ(original->vias[0].properties.size(), 1u);
-    EXPECT_EQ(original->vias[0].properties[0].name, written->vias[0].properties[0].name);
-    EXPECT_DOUBLE_EQ(original->vias[0].properties[0].number_value, written->vias[0].properties[0].number_value);
+    ASSERT_EQ(original_via.properties.size(), written_via.properties.size());
+    ASSERT_EQ(original_via.properties.size(), 1u);
+    EXPECT_EQ(original_via.properties[0].name, written_via.properties[0].name);
+    EXPECT_DOUBLE_EQ(original_via.properties[0].number_value, written_via.properties[0].number_value);
 
     EXPECT_EQ(original->use_via_names, written->use_via_names);
 
@@ -481,11 +537,13 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsPropertyDefinitionsAndPerConstructPr
     ASSERT_TRUE(original_tech != nullptr);
     ASSERT_TRUE(written_tech != nullptr);
 
-    ASSERT_EQ(original_tech->property_definitions.size(), written_tech->property_definitions.size());
-    for (size_t i = 0; i < original_tech->property_definitions.size(); i++)
+    const std::vector<PropertyDefinitionId> &original_property_definition_ids = original_root.get_technology_property_definitions(original_tech_id);
+    const std::vector<PropertyDefinitionId> &written_property_definition_ids = written_root.get_technology_property_definitions(written_tech_id);
+    ASSERT_EQ(original_property_definition_ids.size(), written_property_definition_ids.size());
+    for (size_t i = 0; i < original_property_definition_ids.size(); i++)
     {
-        const PropertyDefinition &o = original_tech->property_definitions[i];
-        const PropertyDefinition &w = written_tech->property_definitions[i];
+        const PropertyDefinitionData &o = *original_root.get_property_definition(original_property_definition_ids[i]);
+        const PropertyDefinitionData &w = *written_root.get_property_definition(written_property_definition_ids[i]);
         EXPECT_EQ(o.owner_type, w.owner_type) << "definition " << i;
         EXPECT_EQ(o.name, w.name) << "definition " << i;
         EXPECT_EQ(o.data_type, w.data_type) << "definition " << i;
@@ -585,14 +643,18 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsAntennaModelsOnRoutingAndCutLayersA
     // M1 (ROUTING) round-trips every antenna field the fixture sets,
     // including the ROUTING-only SideAreaRatio (see
     // write_layer_antenna_models's own comment on the CUT-layer gap).
-    const LayerData *original_m1 = original_root.get_layer(original_root.get_layer_by_name("M1"));
-    const LayerData *written_m1 = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    const LayerId original_m1_id = original_root.get_layer_by_name("M1");
+    const LayerId written_m1_id = written_root.get_layer_by_name("M1");
+    const LayerData *original_m1 = original_root.get_layer(original_m1_id);
+    const LayerData *written_m1 = written_root.get_layer(written_m1_id);
     ASSERT_TRUE(original_m1 != nullptr);
     ASSERT_TRUE(written_m1 != nullptr);
-    ASSERT_EQ(original_m1->antenna_models.size(), written_m1->antenna_models.size());
-    ASSERT_EQ(original_m1->antenna_models.size(), 1u);
-    const AntennaModel &original_m1_model = original_m1->antenna_models[0];
-    const AntennaModel &written_m1_model = written_m1->antenna_models[0];
+    const std::vector<AntennaModelId> &original_m1_antenna_ids = original_root.get_layer_antenna_models(original_m1_id);
+    const std::vector<AntennaModelId> &written_m1_antenna_ids = written_root.get_layer_antenna_models(written_m1_id);
+    ASSERT_EQ(original_m1_antenna_ids.size(), written_m1_antenna_ids.size());
+    ASSERT_EQ(original_m1_antenna_ids.size(), 1u);
+    const AntennaModelData &original_m1_model = *original_root.get_antenna_model(original_m1_antenna_ids[0]);
+    const AntennaModelData &written_m1_model = *written_root.get_antenna_model(written_m1_antenna_ids[0]);
     EXPECT_EQ(original_m1_model.oxide, written_m1_model.oxide);
     ASSERT_EQ(original_m1_model.area_ratio.has_value(), written_m1_model.area_ratio.has_value());
     EXPECT_DOUBLE_EQ(*original_m1_model.area_ratio, *written_m1_model.area_ratio);
@@ -607,14 +669,20 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsAntennaModelsOnRoutingAndCutLayersA
 
     // V1 (CUT) round-trips its plain AREARATIO field (the vendored writer
     // accepts CUT layers for this one - see write_layer_antenna_models).
-    const LayerData *original_v1 = original_root.get_layer(original_root.get_layer_by_name("V1"));
-    const LayerData *written_v1 = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    const LayerId original_v1_id = original_root.get_layer_by_name("V1");
+    const LayerId written_v1_id = written_root.get_layer_by_name("V1");
+    const LayerData *original_v1 = original_root.get_layer(original_v1_id);
+    const LayerData *written_v1 = written_root.get_layer(written_v1_id);
     ASSERT_TRUE(original_v1 != nullptr);
     ASSERT_TRUE(written_v1 != nullptr);
-    ASSERT_EQ(original_v1->antenna_models.size(), written_v1->antenna_models.size());
-    ASSERT_EQ(original_v1->antenna_models.size(), 1u);
-    ASSERT_EQ(original_v1->antenna_models[0].area_ratio.has_value(), written_v1->antenna_models[0].area_ratio.has_value());
-    EXPECT_DOUBLE_EQ(*original_v1->antenna_models[0].area_ratio, *written_v1->antenna_models[0].area_ratio);
+    const std::vector<AntennaModelId> &original_v1_antenna_ids = original_root.get_layer_antenna_models(original_v1_id);
+    const std::vector<AntennaModelId> &written_v1_antenna_ids = written_root.get_layer_antenna_models(written_v1_id);
+    ASSERT_EQ(original_v1_antenna_ids.size(), written_v1_antenna_ids.size());
+    ASSERT_EQ(original_v1_antenna_ids.size(), 1u);
+    const AntennaModelData &original_v1_model = *original_root.get_antenna_model(original_v1_antenna_ids[0]);
+    const AntennaModelData &written_v1_model = *written_root.get_antenna_model(written_v1_antenna_ids[0]);
+    ASSERT_EQ(original_v1_model.area_ratio.has_value(), written_v1_model.area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*original_v1_model.area_ratio, *written_v1_model.area_ratio);
 
     const AbstractId original_abstract_id = original_root.get_design_abstract(original_root.get_design_by_name("ANTENNATEST"));
     const AbstractId written_abstract_id = written_root.get_design_abstract(written_root.get_design_by_name("ANTENNATEST"));
@@ -630,19 +698,25 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsAntennaModelsOnRoutingAndCutLayersA
     EXPECT_DOUBLE_EQ(original_pin->antenna_partial_metal_area[0].value, written_pin->antenna_partial_metal_area[0].value);
     EXPECT_EQ(original_pin->antenna_partial_metal_area[0].layer_name, written_pin->antenna_partial_metal_area[0].layer_name);
 
-    ASSERT_EQ(original_pin->antenna_models.size(), written_pin->antenna_models.size());
-    ASSERT_EQ(original_pin->antenna_models.size(), 1u);
-    EXPECT_EQ(original_pin->antenna_models[0].oxide, written_pin->antenna_models[0].oxide);
-    ASSERT_EQ(original_pin->antenna_models[0].gate_area.size(), written_pin->antenna_models[0].gate_area.size());
-    ASSERT_EQ(original_pin->antenna_models[0].gate_area.size(), 1u);
-    EXPECT_DOUBLE_EQ(original_pin->antenna_models[0].gate_area[0].value, written_pin->antenna_models[0].gate_area[0].value);
-    EXPECT_EQ(original_pin->antenna_models[0].gate_area[0].layer_name, written_pin->antenna_models[0].gate_area[0].layer_name);
+    const std::vector<PinAntennaModelId> &original_pin_antenna_ids = original_root.get_terminal_antenna_models(original_pin_id);
+    const std::vector<PinAntennaModelId> &written_pin_antenna_ids = written_root.get_terminal_antenna_models(written_pin_id);
+    ASSERT_EQ(original_pin_antenna_ids.size(), written_pin_antenna_ids.size());
+    ASSERT_EQ(original_pin_antenna_ids.size(), 1u);
+    const PinAntennaModelData &original_pin_model = *original_root.get_pin_antenna_model(original_pin_antenna_ids[0]);
+    const PinAntennaModelData &written_pin_model = *written_root.get_pin_antenna_model(written_pin_antenna_ids[0]);
+    EXPECT_EQ(original_pin_model.oxide, written_pin_model.oxide);
+    ASSERT_EQ(original_pin_model.gate_area.size(), written_pin_model.gate_area.size());
+    ASSERT_EQ(original_pin_model.gate_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(original_pin_model.gate_area[0].value, written_pin_model.gate_area[0].value);
+    EXPECT_EQ(original_pin_model.gate_area[0].layer_name, written_pin_model.gate_area[0].layer_name);
 }
 
 TEST_F(LEFAntennaRoundtripFixture, RoundTripsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6)
 {
-    const LayerData *original_m1 = original_root.get_layer(original_root.get_layer_by_name("M1"));
-    const LayerData *written_m1 = written_root.get_layer(written_root.get_layer_by_name("M1"));
+    const LayerId original_m1_id = original_root.get_layer_by_name("M1");
+    const LayerId written_m1_id = written_root.get_layer_by_name("M1");
+    const LayerData *original_m1 = original_root.get_layer(original_m1_id);
+    const LayerData *written_m1 = written_root.get_layer(written_m1_id);
     ASSERT_TRUE(original_m1 != nullptr);
     ASSERT_TRUE(written_m1 != nullptr);
 
@@ -692,11 +766,13 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsRoutingLayerMiscScalarAndTableField
     EXPECT_EQ(*original_m1->protrusion_length, *written_m1->protrusion_length);
     EXPECT_EQ(*original_m1->protrusion_width2, *written_m1->protrusion_width2);
 
-    ASSERT_EQ(original_m1->spacing_table_two_widths.size(), written_m1->spacing_table_two_widths.size());
-    for (size_t i = 0; i < original_m1->spacing_table_two_widths.size(); i++)
+    const std::vector<TwoWidthsSpacingEntryId> &original_two_widths_ids = original_root.get_layer_spacing_table_two_widths(original_m1_id);
+    const std::vector<TwoWidthsSpacingEntryId> &written_two_widths_ids = written_root.get_layer_spacing_table_two_widths(written_m1_id);
+    ASSERT_EQ(original_two_widths_ids.size(), written_two_widths_ids.size());
+    for (size_t i = 0; i < original_two_widths_ids.size(); i++)
     {
-        const TwoWidthsSpacingEntry &o = original_m1->spacing_table_two_widths[i];
-        const TwoWidthsSpacingEntry &w = written_m1->spacing_table_two_widths[i];
+        const TwoWidthsSpacingEntryData &o = *original_root.get_two_widths_spacing_entry(original_two_widths_ids[i]);
+        const TwoWidthsSpacingEntryData &w = *written_root.get_two_widths_spacing_entry(written_two_widths_ids[i]);
         EXPECT_EQ(o.width, w.width) << "row " << i;
         // Row 1's PRL is nonzero (150) and round-trips fine; row 0 has no
         // PRL at all, also unaffected - the documented PRL==0 vendored-
@@ -727,12 +803,14 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsRoutingLayerMiscScalarAndTableField
     ASSERT_EQ(original_m1->fill_active_spacing.has_value(), written_m1->fill_active_spacing.has_value());
     EXPECT_EQ(*original_m1->fill_active_spacing, *written_m1->fill_active_spacing);
 
-    ASSERT_EQ(original_m1->ac_current_density.size(), written_m1->ac_current_density.size());
-    ASSERT_EQ(original_m1->ac_current_density.size(), 2u);
+    const std::vector<LayerDensityEntryId> &original_ac_ids = original_root.get_layer_ac_current_density(original_m1_id);
+    const std::vector<LayerDensityEntryId> &written_ac_ids = written_root.get_layer_ac_current_density(written_m1_id);
+    ASSERT_EQ(original_ac_ids.size(), written_ac_ids.size());
+    ASSERT_EQ(original_ac_ids.size(), 2u);
     for (size_t i = 0; i < 2; i++)
     {
-        const LayerDensityEntry &o = original_m1->ac_current_density[i];
-        const LayerDensityEntry &w = written_m1->ac_current_density[i];
+        const LayerDensityEntryData &o = *original_root.get_layer_density_entry(original_ac_ids[i]);
+        const LayerDensityEntryData &w = *written_root.get_layer_density_entry(written_ac_ids[i]);
         EXPECT_EQ(o.type, w.type) << "entry " << i;
         EXPECT_EQ(o.one_entry.has_value(), w.one_entry.has_value()) << "entry " << i;
         if (o.one_entry)
@@ -748,16 +826,22 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsRoutingLayerMiscScalarAndTableField
             EXPECT_DOUBLE_EQ(o.table_entries[j], w.table_entries[j]) << "entry " << i << " table " << j;
     }
 
-    ASSERT_EQ(original_m1->dc_current_density.size(), written_m1->dc_current_density.size());
-    ASSERT_EQ(original_m1->dc_current_density.size(), 1u);
-    ASSERT_EQ(original_m1->dc_current_density[0].one_entry.has_value(), written_m1->dc_current_density[0].one_entry.has_value());
-    EXPECT_DOUBLE_EQ(*original_m1->dc_current_density[0].one_entry, *written_m1->dc_current_density[0].one_entry);
+    const std::vector<LayerDensityEntryId> &original_dc_ids = original_root.get_layer_dc_current_density(original_m1_id);
+    const std::vector<LayerDensityEntryId> &written_dc_ids = written_root.get_layer_dc_current_density(written_m1_id);
+    ASSERT_EQ(original_dc_ids.size(), written_dc_ids.size());
+    ASSERT_EQ(original_dc_ids.size(), 1u);
+    const LayerDensityEntryData *original_dc0 = original_root.get_layer_density_entry(original_dc_ids[0]);
+    const LayerDensityEntryData *written_dc0 = written_root.get_layer_density_entry(written_dc_ids[0]);
+    ASSERT_EQ(original_dc0->one_entry.has_value(), written_dc0->one_entry.has_value());
+    EXPECT_DOUBLE_EQ(*original_dc0->one_entry, *written_dc0->one_entry);
 }
 
 TEST_F(LEFAntennaRoundtripFixture, RoundTripsCutLayerArraySpacingEnclosureAndCurrentDensityAddedInPhase6)
 {
-    const LayerData *original_v1 = original_root.get_layer(original_root.get_layer_by_name("V1"));
-    const LayerData *written_v1 = written_root.get_layer(written_root.get_layer_by_name("V1"));
+    const LayerId original_v1_id = original_root.get_layer_by_name("V1");
+    const LayerId written_v1_id = written_root.get_layer_by_name("V1");
+    const LayerData *original_v1 = original_root.get_layer(original_v1_id);
+    const LayerData *written_v1 = written_root.get_layer(written_v1_id);
     ASSERT_TRUE(original_v1 != nullptr);
     ASSERT_TRUE(written_v1 != nullptr);
 
@@ -767,23 +851,31 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsCutLayerArraySpacingEnclosureAndCur
         EXPECT_EQ(original_v1->array_cuts[i].cuts, written_v1->array_cuts[i].cuts) << "entry " << i;
         EXPECT_EQ(original_v1->array_cuts[i].spacing, written_v1->array_cuts[i].spacing) << "entry " << i;
     }
-    ASSERT_EQ(original_v1->array_spacing.has_value(), written_v1->array_spacing.has_value());
-    EXPECT_EQ(original_v1->array_spacing->long_array, written_v1->array_spacing->long_array);
-    ASSERT_EQ(original_v1->array_spacing->via_width.has_value(), written_v1->array_spacing->via_width.has_value());
-    EXPECT_EQ(*original_v1->array_spacing->via_width, *written_v1->array_spacing->via_width);
-    EXPECT_EQ(original_v1->array_spacing->cut_spacing, written_v1->array_spacing->cut_spacing);
+    const ArraySpacingData *original_array_spacing = original_root.get_array_spacing(original_root.get_layer_array_spacing(original_v1_id));
+    const ArraySpacingData *written_array_spacing = written_root.get_array_spacing(written_root.get_layer_array_spacing(written_v1_id));
+    ASSERT_EQ(original_array_spacing != nullptr, written_array_spacing != nullptr);
+    EXPECT_EQ(original_array_spacing->long_array, written_array_spacing->long_array);
+    ASSERT_EQ(original_array_spacing->via_width.has_value(), written_array_spacing->via_width.has_value());
+    EXPECT_EQ(*original_array_spacing->via_width, *written_array_spacing->via_width);
+    EXPECT_EQ(original_array_spacing->cut_spacing, written_array_spacing->cut_spacing);
 
-    ASSERT_EQ(original_v1->prefer_enclosures.size(), written_v1->prefer_enclosures.size());
-    ASSERT_EQ(original_v1->prefer_enclosures.size(), 1u);
-    EXPECT_EQ(original_v1->prefer_enclosures[0].location, written_v1->prefer_enclosures[0].location);
-    EXPECT_EQ(original_v1->prefer_enclosures[0].overhang1, written_v1->prefer_enclosures[0].overhang1);
-    EXPECT_EQ(original_v1->prefer_enclosures[0].overhang2, written_v1->prefer_enclosures[0].overhang2);
+    const std::vector<PreferEnclosureEntryId> &original_prefer_enclosure_ids = original_root.get_layer_prefer_enclosures(original_v1_id);
+    const std::vector<PreferEnclosureEntryId> &written_prefer_enclosure_ids = written_root.get_layer_prefer_enclosures(written_v1_id);
+    ASSERT_EQ(original_prefer_enclosure_ids.size(), written_prefer_enclosure_ids.size());
+    ASSERT_EQ(original_prefer_enclosure_ids.size(), 1u);
+    const PreferEnclosureEntryData &original_prefer_enclosure0 = *original_root.get_prefer_enclosure_entry(original_prefer_enclosure_ids[0]);
+    const PreferEnclosureEntryData &written_prefer_enclosure0 = *written_root.get_prefer_enclosure_entry(written_prefer_enclosure_ids[0]);
+    EXPECT_EQ(original_prefer_enclosure0.location, written_prefer_enclosure0.location);
+    EXPECT_EQ(original_prefer_enclosure0.overhang1, written_prefer_enclosure0.overhang1);
+    EXPECT_EQ(original_prefer_enclosure0.overhang2, written_prefer_enclosure0.overhang2);
 
-    ASSERT_EQ(original_v1->enclosures.size(), written_v1->enclosures.size());
-    for (size_t i = 0; i < original_v1->enclosures.size(); i++)
+    const std::vector<EnclosureEntryId> &original_enclosure_ids = original_root.get_layer_enclosures(original_v1_id);
+    const std::vector<EnclosureEntryId> &written_enclosure_ids = written_root.get_layer_enclosures(written_v1_id);
+    ASSERT_EQ(original_enclosure_ids.size(), written_enclosure_ids.size());
+    for (size_t i = 0; i < original_enclosure_ids.size(); i++)
     {
-        const EnclosureEntry &o = original_v1->enclosures[i];
-        const EnclosureEntry &w = written_v1->enclosures[i];
+        const EnclosureEntryData &o = *original_root.get_enclosure_entry(original_enclosure_ids[i]);
+        const EnclosureEntryData &w = *written_root.get_enclosure_entry(written_enclosure_ids[i]);
         EXPECT_EQ(o.location, w.location) << "entry " << i;
         EXPECT_EQ(o.overhang1, w.overhang1) << "entry " << i;
         EXPECT_EQ(o.overhang2, w.overhang2) << "entry " << i;
@@ -801,10 +893,12 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsCutLayerArraySpacingEnclosureAndCur
     ASSERT_TRUE(original_v1->resistance.has_value());
     EXPECT_FALSE(written_v1->resistance.has_value());
 
-    ASSERT_EQ(original_v1->dc_current_density.size(), written_v1->dc_current_density.size());
-    ASSERT_EQ(original_v1->dc_current_density.size(), 1u);
-    const LayerDensityEntry &o_dc = original_v1->dc_current_density[0];
-    const LayerDensityEntry &w_dc = written_v1->dc_current_density[0];
+    const std::vector<LayerDensityEntryId> &original_v1_dc_ids = original_root.get_layer_dc_current_density(original_v1_id);
+    const std::vector<LayerDensityEntryId> &written_v1_dc_ids = written_root.get_layer_dc_current_density(written_v1_id);
+    ASSERT_EQ(original_v1_dc_ids.size(), written_v1_dc_ids.size());
+    ASSERT_EQ(original_v1_dc_ids.size(), 1u);
+    const LayerDensityEntryData &o_dc = *original_root.get_layer_density_entry(original_v1_dc_ids[0]);
+    const LayerDensityEntryData &w_dc = *written_root.get_layer_density_entry(written_v1_dc_ids[0]);
     ASSERT_EQ(o_dc.cutarea.size(), w_dc.cutarea.size());
     for (size_t i = 0; i < o_dc.cutarea.size(); i++)
         EXPECT_EQ(o_dc.cutarea[i], w_dc.cutarea[i]) << "cutarea " << i;
@@ -822,12 +916,14 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsPinScalarFieldsDirectionEnumPortCla
     ASSERT_TRUE(original_abstract != nullptr);
     ASSERT_TRUE(written_abstract != nullptr);
 
-    ASSERT_EQ(original_abstract->site_placements.size(), written_abstract->site_placements.size());
-    ASSERT_EQ(original_abstract->site_placements.size(), 2u);
+    const std::vector<MacroSitePlacementId> &original_site_placement_ids = original_root.get_abstract_site_placements(original_abstract_id);
+    const std::vector<MacroSitePlacementId> &written_site_placement_ids = written_root.get_abstract_site_placements(written_abstract_id);
+    ASSERT_EQ(original_site_placement_ids.size(), written_site_placement_ids.size());
+    ASSERT_EQ(original_site_placement_ids.size(), 2u);
     for (size_t i = 0; i < 2; i++)
     {
-        const MacroSitePlacement &o = original_abstract->site_placements[i];
-        const MacroSitePlacement &w = written_abstract->site_placements[i];
+        const MacroSitePlacementData &o = *original_root.get_macro_site_placement(original_site_placement_ids[i]);
+        const MacroSitePlacementData &w = *written_root.get_macro_site_placement(written_site_placement_ids[i]);
         EXPECT_EQ(o.site_name, w.site_name) << "entry " << i;
         EXPECT_EQ(o.orient, w.orient) << "entry " << i;
         EXPECT_EQ(o.num_x.has_value(), w.num_x.has_value()) << "entry " << i;
@@ -852,12 +948,13 @@ TEST_F(LEFAntennaRoundtripFixture, RoundTripsPinScalarFieldsDirectionEnumPortCla
     EXPECT_EQ(original_pin_a->ground_sensitivity, written_pin_a->ground_sensitivity);
     // rise_slew_limit/fall_slew_limit/max_load are read-only - no vendored
     // writer function exists (see write_terminal's own comment) -
-    // written_pin_a stays unset (0, the sentinel) even though
-    // original_pin_a has real values from the fixture.
-    ASSERT_DOUBLE_EQ(original_pin_a->rise_slew_limit, 0.01);
-    EXPECT_DOUBLE_EQ(written_pin_a->rise_slew_limit, 0.0);
-    EXPECT_DOUBLE_EQ(written_pin_a->fall_slew_limit, 0.0);
-    EXPECT_DOUBLE_EQ(written_pin_a->max_load, 0.0);
+    // written_pin_a stays unset even though original_pin_a has a real
+    // value from the fixture.
+    ASSERT_TRUE(original_pin_a->rise_slew_limit.has_value());
+    EXPECT_DOUBLE_EQ(*original_pin_a->rise_slew_limit, 0.01);
+    EXPECT_FALSE(written_pin_a->rise_slew_limit.has_value());
+    EXPECT_FALSE(written_pin_a->fall_slew_limit.has_value());
+    EXPECT_FALSE(written_pin_a->max_load.has_value());
 
     const std::vector<TerminalPortId> &original_port_ids = original_root.get_terminal_ports(original_terminal_ids[0]);
     const std::vector<TerminalPortId> &written_port_ids = written_root.get_terminal_ports(written_terminal_ids[0]);
@@ -931,8 +1028,8 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
     // leq/power/source are never populated in the first place for a
     // VERSION 5.8 file (lef.y's own grammar drops all three silently on
     // read at that version) - see write_macro's own comment.
-    EXPECT_TRUE(original->leq.empty());
-    EXPECT_TRUE(written->leq.empty());
+    EXPECT_FALSE(original->leq.has_value());
+    EXPECT_FALSE(written->leq.has_value());
 }
 
 TEST_F(LEFWriterRoundtripFixture, RoundTripsPinDirectionAndPortGeometryIncludingAMixedRectPolygonPath)
@@ -957,8 +1054,8 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsPinDirectionAndPortGeometryIncluding
     EXPECT_EQ(original_terminal->net_expr, written_terminal->net_expr);
     // leq is never populated at VERSION 5.8 (obsolete on both read and
     // write - see write_terminal's own comment).
-    EXPECT_TRUE(original_terminal->leq.empty());
-    EXPECT_TRUE(written_terminal->leq.empty());
+    EXPECT_FALSE(original_terminal->leq.has_value());
+    EXPECT_FALSE(written_terminal->leq.has_value());
 
     ASSERT_EQ(original_root.get_terminal_ports(original_terminal_id).size(), 1u);
     ASSERT_EQ(written_root.get_terminal_ports(written_terminal_id).size(), 1u);

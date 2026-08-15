@@ -78,4 +78,23 @@ int le_set_current_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}I
 int32_t le_get_{{klass.tcl_plural_snake_case()}}(LeHandle *handle{% for op in scope.of_params %}, Le{{op.parent_klass.name}}Id of_{{op.parent_field.name}}{% endfor %}{% if id_field %}, const char *name_expression{% endif %}, const char *filter_expression);
 Le{{klass.name}}Id le_search_result_{{klass.to_snake_case()}}_at(LeHandle *handle, int32_t index);
 {% endfor %}
+
+// --- create_<type> - one flag per scalar field (str/int/double/dbu/bool/
+// enum), required iff Field.create_required(); is_child/is_list/embedded-
+// struct fields are out of scope here (a future add_X/set_X round - see
+// TCL_EXPLORATION.md). A dbu field crosses this C boundary in microns
+// (`<field>_um`, converted via database_units_microns()/to_dbu(), same
+// convention le_add_shape_rect's own ll_x_um/.../ur_y_um already uses).
+// An optional numeric field (int/double/dbu) gets a companion
+// `has_<field>` int32_t so an omitted flag stores real std::nullopt, not
+// a zero value that could collide with a genuine, meaningful 0 - unlike
+// str/enum fields, which use nullptr for "omitted" directly (see
+// Field.create_needs_has_flag()'s own docstring). An enum field crosses
+// as `const char *` (its to_string()/from_string() spelling, e.g.
+// "INPUT"), not a raw numeric code. A multi-parent class (e.g. Shape's
+// terminal_port/obstruction) takes one Id parameter per parent field;
+// le_create_<type> itself rejects zero or more than one resolving. ---
+{% for klass in classes %}
+Le{{klass.name}}Id le_create_{{klass.to_snake_case()}}(LeHandle *handle{% if klass.create_api_params() %}, {{klass.create_api_params()}}{% endif %});
+{% endfor %}
 """

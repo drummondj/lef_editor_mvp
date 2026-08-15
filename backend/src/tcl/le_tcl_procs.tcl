@@ -283,59 +283,15 @@ proc report_properties {tokens} {
     }
 }
 
-# --- Terminal ---
-
-proc create_terminal {args} {
-    array set opts {-abstract {} -name {} -direction {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "create_terminal: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-abstract -name -direction} {
-        if {$opts($required) eq {}} {
-            error "create_terminal: $required is required"
-        }
-    }
-    return [create_terminal_cmd $opts(-abstract) $opts(-name) [direction_code $opts(-direction)]]
-}
+# --- Terminal (create_terminal is generated - le_tcl_procs_generated.tcl) ---
 
 proc set_terminal_direction {id direction} {
     return [set_terminal_direction_cmd $id [direction_code $direction]]
 }
 
-# --- TerminalPort ---
+# --- TerminalPort (create_terminal_port is generated) ---
 
-proc create_terminal_port {args} {
-    array set opts {-terminal {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "create_terminal_port: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    if {$opts(-terminal) eq {}} {
-        error "create_terminal_port: -terminal is required"
-    }
-    return [create_terminal_port_cmd $opts(-terminal)]
-}
-
-# --- Obstruction ---
-
-proc create_obstruction {args} {
-    array set opts {-abstract {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "create_obstruction: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    if {$opts(-abstract) eq {}} {
-        error "create_obstruction: -abstract is required"
-    }
-    return [create_obstruction_cmd $opts(-abstract)]
-}
+# --- Obstruction (create_obstruction is generated) ---
 
 # --- Abstract boundary ---
 
@@ -355,39 +311,9 @@ proc update_abstract_boundary {args} {
     return [update_abstract_boundary_cmd $opts(-abstract) $opts(-points)]
 }
 
-# --- Shape ---
-
-proc create_terminal_port_shape {args} {
-    array set opts {-port {} -layer {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "create_terminal_port_shape: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-port -layer} {
-        if {$opts($required) eq {}} {
-            error "create_terminal_port_shape: $required is required"
-        }
-    }
-    return [create_terminal_port_shape_cmd $opts(-port) $opts(-layer)]
-}
-
-proc create_obstruction_shape {args} {
-    array set opts {-obstruction {} -layer {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "create_obstruction_shape: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-obstruction -layer} {
-        if {$opts($required) eq {}} {
-            error "create_obstruction_shape: $required is required"
-        }
-    }
-    return [create_obstruction_shape_cmd $opts(-obstruction) $opts(-layer)]
-}
+# --- Shape (create_shape is generated - unifies the former
+# create_terminal_port_shape/create_obstruction_shape split into one
+# command taking -terminal_port|-obstruction, exactly one required) ---
 
 proc add_shape_rect {args} {
     array set opts {-shape {} -rect {}}

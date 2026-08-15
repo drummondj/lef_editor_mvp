@@ -16,6 +16,8 @@ namespace {{schema.namespace}} {
                 {%- else %}
         std::unordered_map<{{klass.name}}Id, {{field.type}}Id> {{klass.to_snake_case()}}_{{field.name}};
                 {%- endif %}
+            {%- elif field.index and field.unique_per_parent %}
+        std::unordered_map<{{klass.get_parent_field().type}}Id, std::unordered_map<{{field.get_cpp_type()}}, {{klass.name}}Id>> {{klass.to_snake_case()}}_by_{{field.name}};
             {%- elif field.index %}
         std::unordered_map<{{field.get_cpp_type()}}, {{klass.name}}Id> {{klass.to_snake_case()}}_by_{{field.name}};
             {%- endif %}

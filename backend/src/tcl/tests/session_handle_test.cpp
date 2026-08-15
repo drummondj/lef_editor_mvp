@@ -54,11 +54,25 @@ TEST(SessionHandle, InjectedHandleIsSharedNotFresh)
     ASSERT_EQ(Tcl_Eval(interp, "design_count"), TCL_OK) << Tcl_GetStringResult(interp);
     EXPECT_STREQ(Tcl_GetStringResult(interp), "1");
 
-    ASSERT_EQ(Tcl_Eval(interp, "design_abstract_id 0"), TCL_OK) << Tcl_GetStringResult(interp);
-    const std::string abstract_id = Tcl_GetStringResult(interp);
+    // This test only `load`s the raw SWIG module - le_tcl_procs.tcl (and
+    // its ergonomic open_design/get_abstracts procs) isn't sourced - so
+    // the abstract token has to come from the raw generated shim
+    // functions directly, scoped by an explicit design: token rather
+    // than relying on a "current view".
+    ASSERT_EQ(Tcl_Eval(interp, "get_abstracts_cmd design:TESTCELL {}"), TCL_OK) << Tcl_GetStringResult(interp);
+    ASSERT_STREQ(Tcl_GetStringResult(interp), "1");
+    ASSERT_EQ(Tcl_Eval(interp, "get_abstracts_at 0"), TCL_OK) << Tcl_GetStringResult(interp);
+    const std::string abstract_token = Tcl_GetStringResult(interp);
 
+    // create_terminal_cmd is generated (le_tcl_shim_generated.hpp) - one
+    // positional argument per Terminal create-field, in schema order
+    // (see codegen/codegen/templates/tcl/le_tcl_shim_generated_hpp_j2.py).
+    // Only abstract_id/name/direction are exercised here; every other
+    // (optional) field is passed as {} (empty), which create_terminal_cmd's
+    // own body treats as "omitted" - see Field.create_forward_expr()'s
+    // own docstring.
     const std::string create_command =
-        "create_terminal_cmd " + abstract_id + " SESSION_HANDLE_TEST 0";
+        "create_terminal_cmd " + abstract_token + " SESSION_HANDLE_TEST INPUT {} {} {} {} {} {} {} {} 0 0 0 0 0 0 0 0";
     ASSERT_EQ(Tcl_Eval(interp, create_command.c_str()), TCL_OK) << Tcl_GetStringResult(interp);
 
     // Proof 2: a Terminal created via Tcl is visible through a direct

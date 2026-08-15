@@ -96,26 +96,22 @@ const char *technology_id();
 int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
-// --- Terminal ---
-const char *create_terminal_cmd(long long abstract_id, const char *name, int direction);
+// --- Terminal (create_terminal_cmd is generated - le_api_generated.i) ---
 int set_terminal_name(const char *id, const char *name);
 int set_terminal_direction_cmd(const char *id, int direction);
 int delete_terminal(const char *id);
 
-// --- TerminalPort ---
-const char *create_terminal_port_cmd(const char *terminal_id);
+// --- TerminalPort (create_terminal_port_cmd is generated) ---
 int delete_terminal_port(const char *id);
 
-// --- Obstruction ---
-const char *create_obstruction_cmd(long long abstract_id);
+// --- Obstruction (create_obstruction_cmd is generated) ---
 int delete_obstruction(const char *id);
 
 // --- Abstract boundary ---
 int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count);
 
-// --- Shape ---
-const char *create_terminal_port_shape_cmd(const char *terminal_port_id, const char *layer_name);
-const char *create_obstruction_shape_cmd(const char *obstruction_id, const char *layer_name);
+// --- Shape (create_shape_cmd is generated - unifies the former
+// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split) ---
 const char *shape_layer_name(const char *id);
 int set_shape_layer_name(const char *id, const char *layer_name);
 int delete_shape(const char *id);

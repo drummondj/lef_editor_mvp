@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.27.0",
+    version="0.30.0",
     classes=[
         Klass(
             name="Technology",
@@ -54,6 +54,7 @@ schema = Schema(
                     description="Property type declarations (LEF PROPERTYDEFINITIONS)",
                     type="PropertyDefinition",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="database_units_microns",
@@ -105,15 +106,17 @@ schema = Schema(
                 ),
                 Field(
                     name="bus_bit_chars",
-                    description="The bus bit delimiter characters (LEF BUSBITCHARS), e.g. \"<>\" - empty string if never read (not written if empty)",
+                    description="The bus bit delimiter characters (LEF BUSBITCHARS), e.g. \"<>\" - unset if never read (not written if unset)",
                     type="str",
                     example="<>",
+                    is_optional=True,
                 ),
                 Field(
                     name="divider_char",
-                    description="The hierarchy divider character (LEF DIVIDERCHAR), e.g. \"/\" - empty string if never read (not written if empty)",
+                    description="The hierarchy divider character (LEF DIVIDERCHAR), e.g. \"/\" - unset if never read (not written if unset)",
                     type="str",
                     example="/",
+                    is_optional=True,
                 ),
                 Field(
                     name="fixed_mask",
@@ -137,9 +140,10 @@ schema = Schema(
                 ),
                 Field(
                     name="clearance_measure",
-                    description="LEF CLEARANCEMEASURE (EUCLIDEAN or MAXXY) - empty string if never read",
+                    description="LEF CLEARANCEMEASURE (EUCLIDEAN or MAXXY) - unset if never read",
                     type="str",
                     example="EUCLIDEAN",
+                    is_optional=True,
                 ),
                 Field(
                     name="manufacturing_grid",
@@ -157,15 +161,17 @@ schema = Schema(
                 ),
                 Field(
                     name="max_via_stack_bottom_layer",
-                    description="LEF MAXVIASTACK ... RANGE bottomLayer - empty string if the RANGE clause was omitted",
+                    description="LEF MAXVIASTACK ... RANGE bottomLayer - unset if the RANGE clause was omitted",
                     type="str",
                     example="M1",
+                    is_optional=True,
                 ),
                 Field(
                     name="max_via_stack_top_layer",
-                    description="LEF MAXVIASTACK ... RANGE topLayer - empty string if the RANGE clause was omitted",
+                    description="LEF MAXVIASTACK ... RANGE topLayer - unset if the RANGE clause was omitted",
                     type="str",
                     example="M7",
+                    is_optional=True,
                 ),
                 Field(
                     name="antenna_input_gate_area",
@@ -204,15 +210,15 @@ schema = Schema(
         Klass(
             name="PropertyDefinition",
             description="One LEF PROPERTYDEFINITIONS entry - declares a property name's data type (and optional value range) before any PROPERTY statement is allowed to use it",
-            has_pool=False,
             fields=[
+                Field(name="technology", description="Parent technology", type="Technology", parent="property_definitions"),
                 Field(name="owner_type", description="Which construct this property applies to - LIBRARY, LAYER, VIA, VIARULE, NONDEFAULTRULE, MACRO, or PIN (LEF's own PROPERTYDEFINITIONS syntax, from lefiProp::propType())", type="str", example="LAYER"),
                 Field(name="name", description="The property name", type="str", example="lip"),
                 Field(name="data_type", description="The vendored parser's own single-character data type code (lefiProp::dataType()) - I(nteger), R(eal), S(tring), or Q(uoted string)", type="str", example="I"),
                 Field(name="range_min", description="RANGE lower bound, in the property's own units", type="double", example=0.0, is_optional=True),
                 Field(name="range_max", description="RANGE upper bound, in the property's own units", type="double", example=10.0, is_optional=True),
                 Field(name="default_number", description="Default value, if data_type is I(nteger)/R(eal) - unset if none was declared", type="double", example=20.0, is_optional=True),
-                Field(name="default_string", description="Default value, if data_type is S(tring)/Q(uoted string) - empty if none was declared", type="str", example="Cadence96"),
+                Field(name="default_string", description="Default value, if data_type is S(tring)/Q(uoted string) - unset if none was declared", type="str", example="Cadence96", is_optional=True),
             ],
         ),
         Klass(
@@ -276,18 +282,21 @@ schema = Schema(
                     description="All SPACING statements for this layer (LEF SPACING, ROUTING and CUT variants both use this same shape - a given rule leaves whichever fields its own type doesn't apply unset)",
                     type="SpacingRule",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="minimum_cuts",
                     description="Minimum-cut rules (LEF MINIMUMCUT, CUT layers)",
                     type="MinimumCut",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="min_steps",
                     description="Minimum-step rules (LEF MINSTEP, ROUTING layers)",
                     type="MinStep",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="spacing_table_orthogonal",
@@ -300,6 +309,7 @@ schema = Schema(
                     description="Influence spacing table entries (LEF SPACINGTABLE INFLUENCE, ROUTING layers)",
                     type="InfluenceSpacingEntry",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="spacing_table_parallel_run_length",
@@ -377,6 +387,7 @@ schema = Schema(
                     description="Antenna diffusion models, one per OXIDE1-4 (LEF ANTENNAMODEL, ROUTING and CUT layers both)",
                     type="AntennaModel",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="default_mask",
@@ -445,24 +456,28 @@ schema = Schema(
                     description="LEF ARRAYSPACING (at most one per layer, CUT layers)",
                     type="ArraySpacing",
                     is_optional=True,
+                    is_child=True,
                 ),
                 Field(
                     name="spacing_table_two_widths",
                     description="LEF SPACINGTABLE TWOWIDTHS rows (5.7) - mutually exclusive with spacing_table_parallel_run_length/spacing_table_influence per SPACINGTABLE occurrence",
                     type="TwoWidthsSpacingEntry",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="prefer_enclosures",
                     description="LEF PREFERENCLOSURE entries (CUT layers)",
                     type="PreferEnclosureEntry",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="enclosures",
                     description="LEF ENCLOSURE entries (CUT layers, 5.6 - distinct from PREFERENCLOSURE)",
                     type="EnclosureEntry",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="split_wire_width",
@@ -485,12 +500,14 @@ schema = Schema(
                     description="LEF ACCURRENTDENSITY entries (PEAK/AVERAGE/RMS)",
                     type="LayerDensityEntry",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="dc_current_density",
                     description="LEF DCCURRENTDENSITY entries (always AVERAGE)",
                     type="LayerDensityEntry",
                     is_list=True,
+                    is_child=True,
                 ),
             ],
         ),
@@ -506,8 +523,8 @@ schema = Schema(
         Klass(
             name="AntennaModel",
             description="One LEF ANTENNAMODEL OXIDE1-4 block within a LAYER - each scalar-or-PWL pair is mutually exclusive (an unset scalar with an empty pwl list means neither was present)",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="antenna_models"),
                 Field(name="oxide", description="OXIDE1, OXIDE2, OXIDE3, or OXIDE4", type="str", example="OXIDE1"),
                 Field(name="area_ratio", description="LEF ANTENNAAREARATIO", type="double", example=100.0, is_optional=True),
                 Field(name="cum_area_ratio", description="LEF ANTENNACUMAREARATIO", type="double", example=100.0, is_optional=True),
@@ -557,8 +574,8 @@ schema = Schema(
         Klass(
             name="ArraySpacing",
             description="LEF ARRAYSPACING (CUT layers, at most one per layer)",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="array_spacing"),
                 Field(name="long_array", description="Whether LONGARRAY was specified", type="bool", example=False),
                 Field(name="via_width", description="Optional WIDTH, in database units", type="dbu", is_optional=True),
                 Field(name="cut_spacing", description="CUTSPACING, in database units", type="dbu", example=200),
@@ -567,8 +584,8 @@ schema = Schema(
         Klass(
             name="TwoWidthsSpacingEntry",
             description="One WIDTH row of a LEF SPACINGTABLE TWOWIDTHS block (5.7) - Layer.spacing_table_two_widths holds every row",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="spacing_table_two_widths"),
                 Field(name="width", description="In database units", type="dbu", example=1500),
                 Field(name="prl", description="Optional PRL (parallel run length), in database units", type="dbu", is_optional=True),
                 Field(name="spacings", description="One spacing value per column, in database units", type="dbu", is_list=True),
@@ -577,9 +594,9 @@ schema = Schema(
         Klass(
             name="PreferEnclosureEntry",
             description="One LEF PREFERENCLOSURE entry (CUT layers) - a layer can have several",
-            has_pool=False,
             fields=[
-                Field(name="location", description="ABOVE, BELOW, or empty string if unset", type="str", example="BELOW"),
+                Field(name="layer", description="Parent layer", type="Layer", parent="prefer_enclosures"),
+                Field(name="location", description="ABOVE, BELOW, or unset", type="str", example="BELOW", is_optional=True),
                 Field(name="overhang1", description="In database units", type="dbu", example=60),
                 Field(name="overhang2", description="In database units", type="dbu", example=10),
                 Field(name="min_width", description="Optional WIDTH, in database units", type="dbu", is_optional=True),
@@ -588,9 +605,9 @@ schema = Schema(
         Klass(
             name="EnclosureEntry",
             description="One LEF ENCLOSURE entry (CUT layers, 5.6) - a layer can have several. width/except_extra_cut/min_length are mutually exclusive per the vendored writer's own three ENCLOSURE writer variants (plain, WIDTH[+EXCEPTEXTRACUT], LENGTH)",
-            has_pool=False,
             fields=[
-                Field(name="location", description="ABOVE, BELOW, or empty string if unset", type="str", example="BELOW"),
+                Field(name="layer", description="Parent layer", type="Layer", parent="enclosures"),
+                Field(name="location", description="ABOVE, BELOW, or unset", type="str", example="BELOW", is_optional=True),
                 Field(name="overhang1", description="In database units", type="dbu", example=30),
                 Field(name="overhang2", description="In database units", type="dbu", example=10),
                 Field(name="width", description="Optional WIDTH, in database units", type="dbu", is_optional=True),
@@ -609,9 +626,10 @@ schema = Schema(
         ),
         Klass(
             name="LayerDensityEntry",
-            description="One LEF ACCURRENTDENSITY/DCCURRENTDENSITY block (PEAK, AVERAGE, or RMS - DC is always AVERAGE) - either a plain scalar (one_entry) or a table (frequency/width-or-cutarea + table_entries), never both",
-            has_pool=False,
+            description="One LEF ACCURRENTDENSITY/DCCURRENTDENSITY block (PEAK, AVERAGE, or RMS - DC is always AVERAGE) - either a plain scalar (one_entry) or a table (frequency/width-or-cutarea + table_entries), never both. Owned by exactly one of Layer's two independent is_child lists (ac_current_density/dc_current_density, mutually exclusive per instance - same multi-parent-field pattern as Shape's terminal_port/obstruction, just both roles happening to be the same owner class)",
             fields=[
+                Field(name="ac_layer", description="Owning Layer, if this entry belongs to its ac_current_density list (unset/invalid otherwise)", type="Layer", parent="ac_current_density"),
+                Field(name="dc_layer", description="Owning Layer, if this entry belongs to its dc_current_density list (unset/invalid otherwise)", type="Layer", parent="dc_current_density"),
                 Field(name="type", description="PEAK, AVERAGE, or RMS", type="str", example="AVERAGE"),
                 Field(name="one_entry", description="Plain-scalar form value, declared units - no dbu conversion", type="double", example=5.5, is_optional=True),
                 Field(name="frequency", description="AC-only FREQUENCY row, in Hz - no dbu conversion", type="double", example=1000000.0, is_list=True),
@@ -632,8 +650,8 @@ schema = Schema(
         Klass(
             name="MacroSitePlacement",
             description="One LEF MACRO SITE array placement (Abstract.site_placements) - a macro can have several",
-            has_pool=False,
             fields=[
+                Field(name="abstract", description="Parent abstract", type="Abstract", parent="site_placements"),
                 Field(name="site_name", description="The name of the site", type="str", example="CORE"),
                 Field(name="origin", description="In database units", type="Point"),
                 Field(name="orient", description="The orientation of this placement", type="Orientation"),
@@ -654,7 +672,7 @@ schema = Schema(
                     parent="sites",
                 ),
                 Field(name="name", description="The name of the site", type="str", example="CORE", index=True),
-                Field(name="site_class", description="PAD, CORE, VIRTUAL, or empty string if unset (LEF CLASS)", type="str", example="CORE"),
+                Field(name="site_class", description="PAD, CORE, VIRTUAL, or unset (LEF CLASS)", type="str", example="CORE", is_optional=True),
                 Field(name="size", description="The site size, in database units (LEF SIZE)", type="Point", is_optional=True),
                 Field(name="symmetry", description="Which flips/rotations this site allows (LEF SYMMETRY)", type="Symmetry"),
                 Field(name="row_pattern", description="An ordered list of other-site references this site is built from (LEF ROWPATTERN, 5.6)", type="RowPatternEntry", is_list=True),
@@ -664,8 +682,8 @@ schema = Schema(
         Klass(
             name="NonDefaultRuleLayer",
             description="One LAYER override within a NONDEFAULTRULE",
-            has_pool=False,
             fields=[
+                Field(name="non_default_rule", description="Parent non-default rule", type="NonDefaultRule", parent="layers"),
                 Field(name="layer_name", description="The name of the layer being overridden", type="str", example="M1"),
                 Field(name="width", description="Overridden width, in database units", type="dbu", example=2000, is_optional=True),
                 Field(name="spacing", description="Overridden minimum spacing, in database units", type="dbu", example=2000, is_optional=True),
@@ -678,14 +696,14 @@ schema = Schema(
         ),
         Klass(
             name="NonDefaultRuleVia",
-            description="A VIA definition embedded inline in a NONDEFAULTRULE - same shape as the pool-backed Via (Phase 2), but has_pool=False since it's a nested value here, not a Technology-scoped entity referenced by name elsewhere",
-            has_pool=False,
+            description="A VIA definition embedded inline in a NONDEFAULTRULE - same shape as the pool-backed Via, but a nested child of NonDefaultRule rather than a Technology-scoped entity referenced by name elsewhere",
             fields=[
+                Field(name="non_default_rule", description="Parent non-default rule", type="NonDefaultRule", parent="vias"),
                 Field(name="name", description="The name of the via", type="str", example="M1_M2_ND"),
                 Field(name="is_default", description="Whether this via is marked DEFAULT", type="bool", example=False),
                 Field(name="resistance", description="Resistance, in the LEF file's own declared units", type="double", example=0.5, is_optional=True),
-                Field(name="foreign", description="A FOREIGN cell reference", type="Foreign", is_optional=True),
-                Field(name="layers", description="Per-layer geometry", type="ViaLayer", is_list=True),
+                Field(name="foreign", description="A FOREIGN cell reference", type="Foreign", is_optional=True, is_child=True),
+                Field(name="layers", description="Per-layer geometry", type="ViaLayer", is_list=True, is_child=True),
                 Field(name="properties", description="PROPERTY attachments (LEF PROPERTY) - same pattern as the already-working top-level Via.properties", type="LefProperty", is_list=True),
             ],
         ),
@@ -710,8 +728,8 @@ schema = Schema(
                 ),
                 Field(name="name", description="The name of the rule", type="str", example="WIDE_M1", index=True),
                 Field(name="hard_spacing", description="Whether HARDSPACING was specified (5.6)", type="bool", example=False),
-                Field(name="layers", description="Per-layer width/spacing/... overrides", type="NonDefaultRuleLayer", is_list=True),
-                Field(name="vias", description="Vias defined inline within this rule", type="NonDefaultRuleVia", is_list=True),
+                Field(name="layers", description="Per-layer width/spacing/... overrides", type="NonDefaultRuleLayer", is_list=True, is_child=True),
+                Field(name="vias", description="Vias defined inline within this rule", type="NonDefaultRuleVia", is_list=True, is_child=True),
                 Field(name="use_via_names", description="Names of technology-level VIAs this rule uses (5.6 USEVIA) - empty for a rule with no explicit USEVIA statements", type="str", example="V1_0", is_list=True),
                 Field(name="use_via_rule_names", description="Names of technology-level VIARULEs this rule uses (5.6 USEVIARULE)", type="str", example="ViaRule1", is_list=True),
                 Field(name="min_cuts", description="Per-cut-layer via-count overrides (5.6 MINCUTS)", type="MinCutOverride", is_list=True),
@@ -721,12 +739,12 @@ schema = Schema(
         Klass(
             name="MinimumCut",
             description="One LEF MINIMUMCUT rule (CUT layers)",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="minimum_cuts"),
                 Field(name="cuts", description="Number of cuts required (LEF MINIMUMCUT)", type="int", example=2),
                 Field(name="width", description="Width above which the rule applies, in database units", type="dbu", example=1000),
                 Field(name="within", description="MINIMUMCUT ... WITHIN distance, in database units (5.7)", type="dbu", example=250, is_optional=True),
-                Field(name="connection", description="FROMABOVE or FROMBELOW, empty string if unset", type="str", example="FROMABOVE"),
+                Field(name="connection", description="FROMABOVE or FROMBELOW, unset otherwise", type="str", example="FROMABOVE", is_optional=True),
                 Field(name="length", description="MINIMUMCUT ... LENGTH value, in database units", type="dbu", example=1000, is_optional=True),
                 Field(name="distance", description="MINIMUMCUT ... LENGTH ... WITHIN distance, in database units", type="dbu", example=1000, is_optional=True),
             ],
@@ -734,10 +752,10 @@ schema = Schema(
         Klass(
             name="MinStep",
             description="One LEF MINSTEP rule (ROUTING layers)",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="min_steps"),
                 Field(name="distance", description="The minimum step distance, in database units (LEF MINSTEP)", type="dbu", example=50),
-                Field(name="min_step_type", description="INSIDECORNER, OUTSIDECORNER, or STEP - empty string if unset", type="str", example="INSIDECORNER"),
+                Field(name="min_step_type", description="INSIDECORNER, OUTSIDECORNER, or STEP - unset otherwise", type="str", example="INSIDECORNER", is_optional=True),
                 Field(name="lengthsum", description="MINSTEP ... LENGTHSUM value, in database units", type="dbu", example=80, is_optional=True),
                 Field(name="max_edges", description="MINSTEP ... MAXEDGES value (5.7)", type="int", example=2, is_optional=True),
             ],
@@ -754,8 +772,8 @@ schema = Schema(
         Klass(
             name="InfluenceSpacingEntry",
             description="One row of a LEF SPACINGTABLE INFLUENCE table (ROUTING layers)",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="spacing_table_influence"),
                 Field(name="width", description="The width this row applies above, in database units", type="dbu", example=100),
                 Field(name="distance", description="The influence distance, in database units", type="dbu", example=100),
                 Field(name="spacing", description="The resulting spacing, in database units", type="dbu", example=100),
@@ -774,8 +792,8 @@ schema = Schema(
         Klass(
             name="SpacingRule",
             description="One LEF SPACING statement for a layer. ROUTING and CUT layers use disjoint sets of modifiers (a ROUTING rule leaves the CUT-only fields unset, and vice versa) - see LEFReader/LEFWriter for which fields apply to which layer type.",
-            has_pool=False,
             fields=[
+                Field(name="layer", description="Parent layer", type="Layer", parent="spacing_rules"),
                 Field(name="distance", description="The spacing distance, in database units (LEF SPACING)", type="dbu", example=200),
                 # ROUTING-layer modifiers
                 Field(name="range_min", description="SPACING ... RANGE min, in database units", type="dbu", example=100, is_optional=True),
@@ -803,7 +821,7 @@ schema = Schema(
                 Field(name="end_of_notch_spacing", description="ENDOFNOTCHWIDTH ... NOTCHSPACING, in database units", type="dbu", is_optional=True),
                 Field(name="end_of_notch_length", description="ENDOFNOTCHWIDTH ... NOTCHLENGTH, in database units", type="dbu", is_optional=True),
                 # CUT-layer modifiers
-                Field(name="second_layer_name", description="SPACING ... LAYER name (CUT inter-layer spacing) - empty string if unset", type="str", example="RX"),
+                Field(name="second_layer_name", description="SPACING ... LAYER name (CUT inter-layer spacing) - unset otherwise", type="str", example="RX", is_optional=True),
                 Field(name="second_layer_stack", description="LAYER ... STACK was specified", type="bool", example=False),
                 Field(name="adjacent_cuts", description="ADJACENTCUTS count", type="int", example=3, is_optional=True),
                 Field(name="adjacent_within", description="ADJACENTCUTS ... WITHIN distance, in database units", type="dbu", example=250, is_optional=True),
@@ -813,9 +831,20 @@ schema = Schema(
         ),
         Klass(
             name="ViaLayer",
-            description="One layer's geometry within a VIA - LEF VIA geometry supports RECT/POLYGON only, no PATH/ITERATE",
-            has_pool=False,
+            description="One layer's geometry within a VIA - LEF VIA geometry supports RECT/POLYGON only, no PATH/ITERATE. Owned by exactly one of Via/NonDefaultRuleVia (mutually exclusive, same pattern as Shape's terminal_port/obstruction parents)",
             fields=[
+                Field(
+                    name="via",
+                    description="Owning Via, if this ViaLayer belongs to one (unset/invalid otherwise)",
+                    type="Via",
+                    parent="layers",
+                ),
+                Field(
+                    name="non_default_rule_via",
+                    description="Owning NonDefaultRuleVia, if this ViaLayer belongs to one (unset/invalid otherwise)",
+                    type="NonDefaultRuleVia",
+                    parent="layers",
+                ),
                 Field(
                     name="layer_name",
                     description="The name of the layer",
@@ -853,8 +882,13 @@ schema = Schema(
         Klass(
             name="ViaRuleReference",
             description="A VIA's own reference to a VIARULE with explicit cut geometry (LEF 5.6 VIARULE-inside-VIA - not the same thing as a VIARULE block itself, see ViaRule). Rarer sub-fields (ROWCOL/ORIGIN/OFFSET/PATTERN) aren't modeled yet.",
-            has_pool=False,
             fields=[
+                Field(
+                    name="via",
+                    description="Parent via",
+                    type="Via",
+                    parent="via_rule",
+                ),
                 Field(
                     name="via_rule_name",
                     description="The name of the referenced VIARULE",
@@ -904,8 +938,13 @@ schema = Schema(
         Klass(
             name="ViaRuleLayer",
             description="One layer's rule within a VIARULE - 2 (non-GENERATE) or 3 (GENERATE, the 3rd being the cut layer) per ViaRule",
-            has_pool=False,
             fields=[
+                Field(
+                    name="via_rule",
+                    description="Parent via rule",
+                    type="ViaRule",
+                    parent="layers",
+                ),
                 Field(
                     name="layer_name",
                     description="The name of the layer",
@@ -1023,18 +1062,21 @@ schema = Schema(
                     description="Foreign cell reference (LEF FOREIGN)",
                     type="Foreign",
                     is_optional=True,
+                    is_child=True,
                 ),
                 Field(
                     name="layers",
                     description="Per-layer geometry",
                     type="ViaLayer",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="via_rule",
                     description="Reference to a VIARULE with explicit cut geometry (LEF 5.6 VIARULE-inside-VIA) - mutually exclusive with resistance",
                     type="ViaRuleReference",
                     is_optional=True,
+                    is_child=True,
                 ),
                 Field(
                     name="properties",
@@ -1078,6 +1120,7 @@ schema = Schema(
                     description="2 layers (non-GENERATE) or 3 layers (GENERATE, the 3rd being the cut layer)",
                     type="ViaRuleLayer",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="via_names",
@@ -1603,15 +1646,17 @@ schema = Schema(
                 ),
                 Field(
                     name="type",
-                    description="Type or class of abstract, e.g. CORE, PAD, SPACER, ENDCAP, COVER etc",
+                    description="Type or class of abstract, e.g. CORE, PAD, SPACER, ENDCAP, COVER etc (LEF MACRO CLASS) - unset if never read",
                     type="str",
                     example="CORE",
+                    is_optional=True,
                 ),
                 Field(
                     name="foreigns",
                     description="Information used to determine the abstract location and orientation wrt to the layout",
                     type="Foreign",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="size",
@@ -1641,15 +1686,17 @@ schema = Schema(
                 ),
                 Field(
                     name="site",
-                    description="The name of the SITE",
+                    description="The name of the SITE - unset if omitted (mutually exclusive with site_placements)",
                     type="str",
                     example="MYSITE",
+                    is_optional=True,
                 ),
                 Field(
                     name="site_placements",
                     description="LEF MACRO SITE array placements (multiple per macro) - distinct from the singular site name-only affinity form (site, above) - lefiMacro's own setSiteName vs setSitePattern grammar split, mutually exclusive per macro",
                     type="MacroSitePlacement",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="terminals",
@@ -1667,15 +1714,17 @@ schema = Schema(
                 ),
                 Field(
                     name="eeq",
-                    description="Electrically-equivalent macro name (LEF EEQ) - empty string if unset",
+                    description="Electrically-equivalent macro name (LEF EEQ) - unset if omitted",
                     type="str",
                     example="BUFX2",
+                    is_optional=True,
                 ),
                 Field(
                     name="leq",
-                    description="Logically-equivalent macro name (LEF LEQ) - empty string if unset",
+                    description="Logically-equivalent macro name (LEF LEQ) - unset if omitted",
                     type="str",
                     example="BUFX2",
+                    is_optional=True,
                 ),
                 Field(
                     name="power",
@@ -1686,9 +1735,10 @@ schema = Schema(
                 ),
                 Field(
                     name="source",
-                    description="How this macro was created - USER, GENERATE, BLOCK, or empty string if unset (LEF SOURCE, obsolete since 5.6 but still parsed)",
+                    description="How this macro was created - USER, GENERATE, BLOCK, or unset (LEF SOURCE, obsolete since 5.6 but still parsed)",
                     type="str",
                     example="USER",
+                    is_optional=True,
                 ),
                 Field(
                     name="is_fixed_mask",
@@ -1701,6 +1751,7 @@ schema = Schema(
                     description="Per-layer DENSITY rects (LEF MACRO-level DENSITY)",
                     type="MacroDensityLayer",
                     is_list=True,
+                    is_child=True,
                 ),
                 Field(
                     name="properties",
@@ -1713,8 +1764,8 @@ schema = Schema(
         Klass(
             name="MacroDensityLayer",
             description="One layer's DENSITY rects within a MACRO's DENSITY statement",
-            has_pool=False,
             fields=[
+                Field(name="abstract", description="Parent abstract", type="Abstract", parent="densities"),
                 Field(name="layer_name", description="The name of the layer", type="str", example="M1"),
                 Field(name="rects", description="The rects this layer's density values apply to", type="Rect", is_list=True),
                 Field(name="values", description="The density percentage per rect (parallel to rects)", type="double", example=45.0, is_list=True),
@@ -1722,9 +1773,26 @@ schema = Schema(
         ),
         Klass(
             name="Foreign",
-            description="A design abstract view foreign definition",
-            has_pool=False,
+            description="A design abstract view foreign definition. Owned by exactly one of Via/NonDefaultRuleVia/Abstract (mutually exclusive - Abstract can hold several, the other two at most one)",
             fields=[
+                Field(
+                    name="via",
+                    description="Owning Via, if this Foreign belongs to one (unset/invalid otherwise)",
+                    type="Via",
+                    parent="foreign",
+                ),
+                Field(
+                    name="non_default_rule_via",
+                    description="Owning NonDefaultRuleVia, if this Foreign belongs to one (unset/invalid otherwise)",
+                    type="NonDefaultRuleVia",
+                    parent="foreign",
+                ),
+                Field(
+                    name="abstract",
+                    description="Owning Abstract, if this Foreign belongs to one (unset/invalid otherwise)",
+                    type="Abstract",
+                    parent="foreigns",
+                ),
                 Field(
                     name="name",
                     description="The foreign cell name (usually the same as the design name)",
@@ -1773,11 +1841,17 @@ schema = Schema(
         Klass(
             name="Terminal",
             description="Top-level pin name of an abstract",
-            # Name uniqueness is enforced per-Abstract by hand (api.cpp),
-            # not a global cmg index=True - see le_tcl_shim.hpp's own
-            # "IDs" comment - so the TCL generator can't auto-derive a
-            # name-based friendly id the way it does for index=True
-            # fields (Layer, Via, Site, ...).
+            # Name uniqueness is enforced per-Abstract by the generated
+            # unique_per_parent index (create_terminal returns an invalid
+            # id on collision) rather than a global cmg index=True - see
+            # Field.unique_per_parent's own docstring and le_tcl_shim.hpp's
+            # own "IDs" comment. tcl_id_field is still needed even though
+            # `name` is now index=True: tcl_indexed_id_field() deliberately
+            # excludes unique_per_parent fields (no *global* Root lookup
+            # exists for them), so the TCL generator still can't auto-derive
+            # a name-based friendly id the way it does for a plain index=True
+            # field (Layer, Via, Site, ...) - resolve_terminal_id stays
+            # hand-written.
             tcl_id_field="name",
             fields=[
                 Field(
@@ -1788,9 +1862,11 @@ schema = Schema(
                 ),
                 Field(
                     name="name",
-                    description="Name of the terminal",
+                    description="Name of the terminal - unique within its parent Abstract (see unique_per_parent)",
                     type="str",
                     example="INPUT",
+                    index=True,
+                    unique_per_parent=True,
                 ),
                 Field(
                     name="direction",
@@ -1806,33 +1882,38 @@ schema = Schema(
                 ),
                 Field(
                     name="shape",
-                    description="ABUTMENT, RING, FEEDTHRU, or empty string if unset (LEF PIN SHAPE)",
+                    description="ABUTMENT, RING, FEEDTHRU, or unset (LEF PIN SHAPE)",
                     type="str",
                     example="ABUTMENT",
+                    is_optional=True,
                 ),
                 Field(
                     name="use",
-                    description="SIGNAL, POWER, GROUND, CLOCK, TIEOFF, ANALOG, SCAN, or empty string if unset (LEF PIN USE)",
+                    description="SIGNAL, POWER, GROUND, CLOCK, TIEOFF, ANALOG, SCAN, or unset (LEF PIN USE)",
                     type="str",
                     example="SIGNAL",
+                    is_optional=True,
                 ),
                 Field(
                     name="must_join",
-                    description="The name of another pin this one must be joined with, or empty string if unset (LEF PIN MUSTJOIN)",
+                    description="The name of another pin this one must be joined with, or unset (LEF PIN MUSTJOIN)",
                     type="str",
                     example="A2",
+                    is_optional=True,
                 ),
                 Field(
                     name="net_expr",
-                    description="A verbatim NETEXPR string (LEF 5.6), round-tripped as-is rather than parsed - empty string if unset",
+                    description="A verbatim NETEXPR string (LEF 5.6), round-tripped as-is rather than parsed - unset if omitted",
                     type="str",
                     example="A (A1 A2)",
+                    is_optional=True,
                 ),
                 Field(
                     name="leq",
-                    description="This pin's own logically-equivalent-pin name (LEF PIN LEQ) - distinct from the macro-level Abstract.leq - empty string if unset",
+                    description="This pin's own logically-equivalent-pin name (LEF PIN LEQ) - distinct from the macro-level Abstract.leq - unset if omitted",
                     type="str",
                     example="A2",
+                    is_optional=True,
                 ),
                 Field(
                     name="properties",
@@ -1869,13 +1950,14 @@ schema = Schema(
                     description="Antenna diffusion models, one per OXIDE1-4 (LEF PIN ANTENNAMODEL, 5.5) - a distinct, narrower shape than Layer.antenna_models",
                     type="PinAntennaModel",
                     is_list=True,
+                    is_child=True,
                 ),
-                Field(name="taper_rule", description="LEF PIN TAPERRULE - empty string if unset", type="str", example="RULE1"),
-                Field(name="supply_sensitivity", description="LEF PIN SUPPLYSENSITIVITY (5.6) - net name, empty if unset", type="str", example="vddpin1"),
-                Field(name="ground_sensitivity", description="LEF PIN GROUNDSENSITIVITY (5.6) - net name, empty if unset", type="str", example="gndpin"),
-                Field(name="rise_slew_limit", description="LEF PIN RISESLEWLIMIT, declared units - read-only (no vendored writer function exists) - 0 means unset (deliberately not is_optional: Terminal is passed directly to the generic le::to_properties() by src/api/api.cpp, and cmg's generated code calls std::optional::value() unconditionally on is_optional scalars regardless of has_value() - confirmed the hard way, crashed the API's own selected-object-properties tests)", type="double", example=0.01),
-                Field(name="fall_slew_limit", description="LEF PIN FALLSLEWLIMIT, declared units - read-only, same gap and 0-means-unset reasoning as rise_slew_limit", type="double", example=0.02),
-                Field(name="max_load", description="LEF PIN MAXLOAD, declared units - read-only, same gap and 0-means-unset reasoning as rise_slew_limit", type="double", example=0.1),
+                Field(name="taper_rule", description="LEF PIN TAPERRULE - unset if omitted", type="str", example="RULE1", is_optional=True),
+                Field(name="supply_sensitivity", description="LEF PIN SUPPLYSENSITIVITY (5.6) - net name, unset if omitted", type="str", example="vddpin1", is_optional=True),
+                Field(name="ground_sensitivity", description="LEF PIN GROUNDSENSITIVITY (5.6) - net name, unset if omitted", type="str", example="gndpin", is_optional=True),
+                Field(name="rise_slew_limit", description="LEF PIN RISESLEWLIMIT, declared units - read-only (no vendored writer function exists) - unset if never read. Was a 0-means-unset plain double until cmg's wrap_with_to_property/wrap_with_to_string were fixed to call .value_or(...) instead of unconditional .value() on an unset is_optional scalar (see Shape.spacing's own note) - now safe to model as genuinely optional.", type="double", example=0.01, is_optional=True),
+                Field(name="fall_slew_limit", description="LEF PIN FALLSLEWLIMIT, declared units - read-only, same gap as rise_slew_limit - unset if never read", type="double", example=0.02, is_optional=True),
+                Field(name="max_load", description="LEF PIN MAXLOAD, declared units - read-only, same gap as rise_slew_limit - unset if never read", type="double", example=0.1, is_optional=True),
                 Field(name="max_delay", description="LEF PIN MAXDELAY, in the LEF file's own declared units - unlike POWER/LEAKAGE/CAPACITANCE/RESISTANCE/PULLDOWNRES/TIEOFFR/VHI/VLO/RISEVOLTAGETHRESHOLD/FALLVOLTAGETHRESHOLD/RISETHRESH/FALLTHRESH/RISESATCUR/FALLSATCUR/CURRENTSOURCE (all removed - lef.y's own grammar action for every one of those only calls its setter when versionNum < 5.4, and this project only reads/writes LEF >= 5.4, so they could never be populated - see LEFDEF_BUGS.md's 'Reader-side: intentional version-obsolescence'), MAXDELAY has no version gate at all in lef.y (always read, any version) - genuinely read-only only because no vendored writer function exists (same writer gap as rise_slew_limit/fall_slew_limit/max_load) - unset if never read", type="double", example=21.0, is_optional=True),
             ],
         ),
@@ -1885,14 +1967,14 @@ schema = Schema(
             has_pool=False,
             fields=[
                 Field(name="value", description="The antenna value", type="double", example=1.5),
-                Field(name="layer_name", description="The layer this value applies to - empty string if the LEF statement omitted LAYER", type="str", example="M1"),
+                Field(name="layer_name", description="The layer this value applies to - unset if the LEF statement omitted LAYER", type="str", example="M1", is_optional=True),
             ],
         ),
         Klass(
             name="PinAntennaModel",
             description="One LEF PIN ANTENNAMODEL OXIDE1-4 block - a distinct, narrower class from Layer's own AntennaModel (only 4 fields, each a list of (value, layer) entries)",
-            has_pool=False,
             fields=[
+                Field(name="terminal", description="Parent terminal", type="Terminal", parent="antenna_models"),
                 Field(name="oxide", description="OXIDE1, OXIDE2, OXIDE3, or OXIDE4", type="str", example="OXIDE1"),
                 Field(name="gate_area", description="LEF ANTENNAGATEAREA entries", type="PinAntennaValue", is_list=True),
                 Field(name="max_area_car", description="LEF ANTENNAMAXAREACAR entries", type="PinAntennaValue", is_list=True),
@@ -1917,7 +1999,7 @@ schema = Schema(
                     is_list=True,
                     is_child=True,
                 ),
-                Field(name="port_class", description="LEF PORT CLASS (NONE/CORE/BUMP) - empty string if unset", type="str", example="BUMP"),
+                Field(name="port_class", description="LEF PORT CLASS (NONE/CORE/BUMP) - unset if omitted", type="str", example="BUMP", is_optional=True),
             ],
         ),
         Klass(

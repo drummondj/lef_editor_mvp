@@ -95,7 +95,7 @@ TEST_F(LEFReaderCompleteFixture, ReadsBasicScalarLayerProperties)
 
     EXPECT_FALSE(m1->offset.has_value());
     EXPECT_FALSE(m1->area.has_value());
-    EXPECT_TRUE(m1->spacing_rules.empty());
+    EXPECT_TRUE(root.get_layer_spacing_rules(m1_id).empty());
     EXPECT_FALSE(m1->height.has_value());
     EXPECT_FALSE(m1->thickness.has_value());
 }
@@ -109,32 +109,36 @@ TEST_F(LEFReaderCompleteFixture, ReadsSpacingModifiersUnwritableByTheVendoredWri
     // replacement in this vendored writer version - see write_technology_layers's
     // own comments) - covered here via complete.5.8.lef directly rather
     // than through a round trip.
-    const LayerData *pc = root.get_layer(root.get_layer_by_name("PC"));
+    const LayerId pc_id = root.get_layer_by_name("PC");
+    const LayerData *pc = root.get_layer(pc_id);
     ASSERT_TRUE(pc != nullptr);
-    ASSERT_EQ(pc->spacing_rules.size(), 4u);
+    const std::vector<SpacingRuleId> &pc_spacing_rule_ids = root.get_layer_spacing_rules(pc_id);
+    ASSERT_EQ(pc_spacing_rule_ids.size(), 4u);
 
     // complete.5.8.lef: DATABASE MICRONS 20000.
-    const SpacingRule &eol_only = pc->spacing_rules[1];
+    const SpacingRuleData &eol_only = *root.get_spacing_rule(pc_spacing_rule_ids[1]);
     ASSERT_TRUE(eol_only.end_of_line_width.has_value());
     ASSERT_TRUE(eol_only.end_of_line_within.has_value());
     EXPECT_EQ(*eol_only.end_of_line_width, 26000); // 1.3um
     EXPECT_EQ(*eol_only.end_of_line_within, 12000); // 0.6um
     EXPECT_FALSE(eol_only.parallel_edge_space.has_value());
 
-    const SpacingRule &eol_with_two_edges = pc->spacing_rules[2];
+    const SpacingRuleData &eol_with_two_edges = *root.get_spacing_rule(pc_spacing_rule_ids[2]);
     ASSERT_TRUE(eol_with_two_edges.parallel_edge_space.has_value());
     ASSERT_TRUE(eol_with_two_edges.parallel_edge_within.has_value());
     EXPECT_EQ(*eol_with_two_edges.parallel_edge_space, 22000); // 1.1um
     EXPECT_EQ(*eol_with_two_edges.parallel_edge_within, 10000); // 0.5um
     EXPECT_TRUE(eol_with_two_edges.two_edges);
 
-    const SpacingRule &eol_without_two_edges = pc->spacing_rules[3];
+    const SpacingRuleData &eol_without_two_edges = *root.get_spacing_rule(pc_spacing_rule_ids[3]);
     EXPECT_FALSE(eol_without_two_edges.two_edges);
 
-    const LayerData *via12 = root.get_layer(root.get_layer_by_name("via12"));
+    const LayerId via12_id = root.get_layer_by_name("via12");
+    const LayerData *via12 = root.get_layer(via12_id);
     ASSERT_TRUE(via12 != nullptr);
-    ASSERT_EQ(via12->spacing_rules.size(), 1u);
-    EXPECT_TRUE(via12->spacing_rules[0].center_to_center);
+    const std::vector<SpacingRuleId> &via12_spacing_rule_ids = root.get_layer_spacing_rules(via12_id);
+    ASSERT_EQ(via12_spacing_rule_ids.size(), 1u);
+    EXPECT_TRUE(root.get_spacing_rule(via12_spacing_rule_ids[0])->center_to_center);
 }
 
 TEST_F(LEFReaderCompleteFixture, ReadsMacroLevelDensityUnwritableByTheVendoredWriter)
@@ -146,12 +150,14 @@ TEST_F(LEFReaderCompleteFixture, ReadsMacroLevelDensityUnwritableByTheVendoredWr
     // complete.5.8.lef: DATABASE MICRONS 20000.
     const DesignId design_id = root.get_design_by_name("INV");
     ASSERT_TRUE(design_id.valid());
-    const AbstractData *abstract = root.get_abstract(root.get_design_abstract(design_id));
+    const AbstractId abstract_id = root.get_design_abstract(design_id);
+    const AbstractData *abstract = root.get_abstract(abstract_id);
     ASSERT_TRUE(abstract != nullptr);
 
-    ASSERT_EQ(abstract->densities.size(), 3u);
+    const std::vector<MacroDensityLayerId> &density_ids = root.get_abstract_densities(abstract_id);
+    ASSERT_EQ(density_ids.size(), 3u);
 
-    const MacroDensityLayer &metal1 = abstract->densities[0];
+    const MacroDensityLayerData &metal1 = *root.get_macro_density_layer(density_ids[0]);
     EXPECT_EQ(metal1.layer_name, "metal1");
     ASSERT_EQ(metal1.rects.size(), 2u);
     ASSERT_EQ(metal1.values.size(), 2u);
@@ -160,7 +166,7 @@ TEST_F(LEFReaderCompleteFixture, ReadsMacroLevelDensityUnwritableByTheVendoredWr
     EXPECT_DOUBLE_EQ(metal1.values[0], 45.5);
     EXPECT_DOUBLE_EQ(metal1.values[1], 42.2);
 
-    const MacroDensityLayer &metal3 = abstract->densities[2];
+    const MacroDensityLayerData &metal3 = *root.get_macro_density_layer(density_ids[2]);
     EXPECT_EQ(metal3.layer_name, "metal3");
     ASSERT_EQ(metal3.rects.size(), 1u);
     EXPECT_EQ(metal3.rects[0].ll.x, 200000);
@@ -285,18 +291,21 @@ TEST(LEFReaderForeignIndex, EachForeignKeepsItsOwnOriginAndOrient)
 
     DesignId design_id = root.get_design_by_name("FOREIGNTEST");
     ASSERT_TRUE(design_id.valid());
-    const AbstractData *abstract = root.get_abstract(root.get_design_abstract(design_id));
+    const AbstractId abstract_id = root.get_design_abstract(design_id);
+    const AbstractData *abstract = root.get_abstract(abstract_id);
+    ASSERT_TRUE(abstract != nullptr);
 
-    ASSERT_EQ(abstract->foreigns.size(), 4u);
+    const std::vector<ForeignId> &foreign_ids = root.get_abstract_foreigns(abstract_id);
+    ASSERT_EQ(foreign_ids.size(), 4u);
 
-    const Foreign &f0 = abstract->foreigns[0]; // FOREIGN F0 ( 1 2 ) N ;
+    const ForeignData &f0 = *root.get_foreign(foreign_ids[0]); // FOREIGN F0 ( 1 2 ) N ;
     ASSERT_TRUE(f0.origin.has_value());
     EXPECT_EQ(f0.origin->x, 1000);
     EXPECT_EQ(f0.origin->y, 2000);
     ASSERT_TRUE(f0.orient.has_value());
     EXPECT_EQ(*f0.orient, Orientation::N);
 
-    const Foreign &f1 = abstract->foreigns[1]; // FOREIGN F1 ( 3 4 ) ;
+    const ForeignData &f1 = *root.get_foreign(foreign_ids[1]); // FOREIGN F1 ( 3 4 ) ;
     ASSERT_TRUE(f1.origin.has_value());
     EXPECT_EQ(f1.origin->x, 3000);
     EXPECT_EQ(f1.origin->y, 4000);
@@ -305,12 +314,12 @@ TEST(LEFReaderForeignIndex, EachForeignKeepsItsOwnOriginAndOrient)
     // ORIENT at all" must stay distinguishable.
     EXPECT_FALSE(f1.orient.has_value());
 
-    const Foreign &f2 = abstract->foreigns[2]; // FOREIGN F2 ;
+    const ForeignData &f2 = *root.get_foreign(foreign_ids[2]); // FOREIGN F2 ;
     // No point in the LEF source either - unset, not (0,0).
     EXPECT_FALSE(f2.origin.has_value());
     EXPECT_FALSE(f2.orient.has_value());
 
-    const Foreign &f3 = abstract->foreigns[3]; // FOREIGN F3 ( 5 6 ) E ;
+    const ForeignData &f3 = *root.get_foreign(foreign_ids[3]); // FOREIGN F3 ( 5 6 ) E ;
     ASSERT_TRUE(f3.origin.has_value());
     EXPECT_EQ(f3.origin->x, 5000);
     EXPECT_EQ(f3.origin->y, 6000);
@@ -593,23 +602,26 @@ TEST_F(LEFReaderViaFixture, ReadsAPlainViaWithLayerGeometryAndResistance)
     EXPECT_FALSE(via->is_default);
     ASSERT_TRUE(via->resistance.has_value());
     EXPECT_DOUBLE_EQ(*via->resistance, 1.5);
-    EXPECT_FALSE(via->foreign.has_value());
-    EXPECT_FALSE(via->via_rule.has_value());
+    EXPECT_EQ(root.get_foreign(root.get_via_foreign(via_id)), nullptr);
+    EXPECT_EQ(root.get_via_rule_reference(root.get_via_via_rule(via_id)), nullptr);
 
-    ASSERT_EQ(via->layers.size(), 2u);
-    EXPECT_EQ(via->layers[0].layer_name, "M1");
-    ASSERT_EQ(via->layers[0].rects.size(), 1u);
-    EXPECT_EQ(via->layers[0].rects[0].ll.x, -1000);
-    EXPECT_EQ(via->layers[0].rects[0].ll.y, -1000);
-    EXPECT_EQ(via->layers[0].rects[0].ur.x, 1000);
-    EXPECT_EQ(via->layers[0].rects[0].ur.y, 1000);
+    const std::vector<ViaLayerId> &via_layer_ids = root.get_via_layers(via_id);
+    ASSERT_EQ(via_layer_ids.size(), 2u);
+    const ViaLayerData &via_layer0 = *root.get_via_layer(via_layer_ids[0]);
+    EXPECT_EQ(via_layer0.layer_name, "M1");
+    ASSERT_EQ(via_layer0.rects.size(), 1u);
+    EXPECT_EQ(via_layer0.rects[0].ll.x, -1000);
+    EXPECT_EQ(via_layer0.rects[0].ll.y, -1000);
+    EXPECT_EQ(via_layer0.rects[0].ur.x, 1000);
+    EXPECT_EQ(via_layer0.rects[0].ur.y, 1000);
 
-    EXPECT_EQ(via->layers[1].layer_name, "V1");
-    ASSERT_EQ(via->layers[1].rects.size(), 1u);
-    EXPECT_EQ(via->layers[1].rects[0].ll.x, -500);
-    EXPECT_EQ(via->layers[1].rects[0].ll.y, -500);
-    EXPECT_EQ(via->layers[1].rects[0].ur.x, 500);
-    EXPECT_EQ(via->layers[1].rects[0].ur.y, 500);
+    const ViaLayerData &via_layer1 = *root.get_via_layer(via_layer_ids[1]);
+    EXPECT_EQ(via_layer1.layer_name, "V1");
+    ASSERT_EQ(via_layer1.rects.size(), 1u);
+    EXPECT_EQ(via_layer1.rects[0].ll.x, -500);
+    EXPECT_EQ(via_layer1.rects[0].ll.y, -500);
+    EXPECT_EQ(via_layer1.rects[0].ur.x, 500);
+    EXPECT_EQ(via_layer1.rects[0].ur.y, 500);
 }
 
 TEST_F(LEFReaderViaFixture, ReadsAGenerateViaRuleWithDirectionsWidthsAndACutLayer)
@@ -623,7 +635,8 @@ TEST_F(LEFReaderViaFixture, ReadsAGenerateViaRuleWithDirectionsWidthsAndACutLaye
     EXPECT_FALSE(via_rule->is_default);
     EXPECT_TRUE(via_rule->via_names.empty()); // GENERATE - no VIA name list
 
-    ASSERT_EQ(via_rule->layers.size(), 3u);
+    const std::vector<ViaRuleLayerId> &via_rule_layer_ids = root.get_via_rule_layers(via_rule_id);
+    ASSERT_EQ(via_rule_layer_ids.size(), 3u);
 
     // DIRECTION and OVERHANG/METALOVERHANG are obsolete for VIARULE
     // GENERATE at LEF >= 5.6 (the vendored parser silently ignores
@@ -633,7 +646,7 @@ TEST_F(LEFReaderViaFixture, ReadsAGenerateViaRuleWithDirectionsWidthsAndACutLaye
     // "In 5.6 & later, set it to either ENCLOSURE overhang1 or overhang2"
     // comment), so the fixture uses ENCLOSURE directly and direction is
     // never set for a GENERATE rule's layers.
-    const ViaRuleLayer &m1_horizontal = via_rule->layers[0];
+    const ViaRuleLayerData &m1_horizontal = *root.get_via_rule_layer(via_rule_layer_ids[0]);
     EXPECT_EQ(m1_horizontal.layer_name, "M1");
     EXPECT_EQ(m1_horizontal.direction, RoutingDirection::NONE);
     ASSERT_TRUE(m1_horizontal.width_min.has_value());
@@ -647,11 +660,11 @@ TEST_F(LEFReaderViaFixture, ReadsAGenerateViaRuleWithDirectionsWidthsAndACutLaye
     EXPECT_EQ(*m1_horizontal.enclosure_overhang1, 100);
     EXPECT_EQ(*m1_horizontal.enclosure_overhang2, 150);
 
-    const ViaRuleLayer &m1_vertical = via_rule->layers[1];
+    const ViaRuleLayerData &m1_vertical = *root.get_via_rule_layer(via_rule_layer_ids[1]);
     EXPECT_EQ(m1_vertical.layer_name, "M1");
     EXPECT_EQ(m1_vertical.direction, RoutingDirection::NONE);
 
-    const ViaRuleLayer &cut = via_rule->layers[2];
+    const ViaRuleLayerData &cut = *root.get_via_rule_layer(via_rule_layer_ids[2]);
     EXPECT_EQ(cut.layer_name, "V1");
     ASSERT_TRUE(cut.rect.has_value());
     EXPECT_EQ(cut.rect->ll.x, -100);
@@ -699,12 +712,13 @@ TEST_F(LEFReaderViaRuleReferenceFixture, ReadsANonGenerateViaRuleWithAViaNameLis
     ASSERT_TRUE(via_rule != nullptr);
 
     EXPECT_FALSE(via_rule->is_generate);
-    ASSERT_EQ(via_rule->layers.size(), 2u);
-    EXPECT_EQ(via_rule->layers[0].direction, RoutingDirection::H);
-    EXPECT_EQ(via_rule->layers[1].direction, RoutingDirection::V);
+    const std::vector<ViaRuleLayerId> &via_rule_layer_ids = root.get_via_rule_layers(via_rule_id);
+    ASSERT_EQ(via_rule_layer_ids.size(), 2u);
+    EXPECT_EQ(root.get_via_rule_layer(via_rule_layer_ids[0])->direction, RoutingDirection::H);
+    EXPECT_EQ(root.get_via_rule_layer(via_rule_layer_ids[1])->direction, RoutingDirection::V);
     // Neither layer sets OVERHANG/METALOVERHANG in this VIARULE.
-    EXPECT_FALSE(via_rule->layers[0].overhang.has_value());
-    EXPECT_FALSE(via_rule->layers[0].metal_overhang.has_value());
+    EXPECT_FALSE(root.get_via_rule_layer(via_rule_layer_ids[0])->overhang.has_value());
+    EXPECT_FALSE(root.get_via_rule_layer(via_rule_layer_ids[0])->metal_overhang.has_value());
 
     ASSERT_EQ(via_rule->via_names.size(), 1u);
     EXPECT_EQ(via_rule->via_names[0], "VIA1");
@@ -718,9 +732,10 @@ TEST_F(LEFReaderViaRuleReferenceFixture, ReadsAViaReferencingAViaRuleWithCutGeom
     ASSERT_TRUE(via != nullptr);
 
     EXPECT_FALSE(via->resistance.has_value()); // mutually exclusive with via_rule
-    ASSERT_TRUE(via->via_rule.has_value());
+    const ViaRuleReferenceData *vr_ptr = root.get_via_rule_reference(root.get_via_via_rule(via_id));
+    ASSERT_TRUE(vr_ptr != nullptr);
 
-    const ViaRuleReference &vr = *via->via_rule;
+    const ViaRuleReferenceData &vr = *vr_ptr;
     EXPECT_EQ(vr.via_rule_name, "VIARULE2");
     EXPECT_EQ(vr.cut_size.x, 100);
     EXPECT_EQ(vr.cut_size.y, 100);
@@ -777,8 +792,9 @@ TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnE
 
     EXPECT_TRUE(rule->hard_spacing);
 
-    ASSERT_EQ(rule->layers.size(), 1u);
-    const NonDefaultRuleLayer &layer = rule->layers[0];
+    const std::vector<NonDefaultRuleLayerId> &nd_layer_ids = root.get_non_default_rule_layers(rule_id);
+    ASSERT_EQ(nd_layer_ids.size(), 1u);
+    const NonDefaultRuleLayerData &layer = *root.get_non_default_rule_layer(nd_layer_ids[0]);
     EXPECT_EQ(layer.layer_name, "M1");
     ASSERT_TRUE(layer.width.has_value());
     EXPECT_EQ(*layer.width, 300);
@@ -792,14 +808,17 @@ TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnE
     // fixture (VERSION 5.8) deliberately doesn't set one.
     EXPECT_FALSE(layer.resistance.has_value());
 
-    ASSERT_EQ(rule->vias.size(), 1u);
-    const NonDefaultRuleVia &via = rule->vias[0];
+    const std::vector<NonDefaultRuleViaId> &nd_via_ids = root.get_non_default_rule_vias(rule_id);
+    ASSERT_EQ(nd_via_ids.size(), 1u);
+    const NonDefaultRuleViaId via_id = nd_via_ids[0];
+    const NonDefaultRuleViaData &via = *root.get_non_default_rule_via(via_id);
     EXPECT_EQ(via.name, "ND_VIA1");
     ASSERT_TRUE(via.resistance.has_value());
     EXPECT_DOUBLE_EQ(*via.resistance, 0.3);
-    ASSERT_EQ(via.layers.size(), 2u);
-    EXPECT_EQ(via.layers[0].layer_name, "M1");
-    EXPECT_EQ(via.layers[1].layer_name, "V1");
+    const std::vector<ViaLayerId> &nd_via_layer_ids = root.get_non_default_rule_via_layers(via_id);
+    ASSERT_EQ(nd_via_layer_ids.size(), 2u);
+    EXPECT_EQ(root.get_via_layer(nd_via_layer_ids[0])->layer_name, "M1");
+    EXPECT_EQ(root.get_via_layer(nd_via_layer_ids[1])->layer_name, "V1");
     // UPDATES.md 12 Phase 7 - PROPERTY on a NONDEFAULTRULE-embedded VIA
     // (same LefProperty mechanism as the already-working top-level Via).
     ASSERT_EQ(via.properties.size(), 1u);
@@ -817,11 +836,13 @@ TEST_F(LEFReaderViaFixture, ReadsANonDefaultRuleWithHardspacingLayerOverridesAnE
 
 TEST_F(LEFReaderViaFixture, ReadsPropertyDefinitionsAndPerConstructPropertyAttachments)
 {
-    const TechnologyData *technology = root.get_technology(root.get_technology_ids().front());
+    const TechnologyId technology_id = root.get_technology_ids().front();
+    const TechnologyData *technology = root.get_technology(technology_id);
     ASSERT_TRUE(technology != nullptr);
 
-    ASSERT_EQ(technology->property_definitions.size(), 6u);
-    const PropertyDefinition &lip_def = technology->property_definitions[0];
+    const std::vector<PropertyDefinitionId> &property_definition_ids = root.get_technology_property_definitions(technology_id);
+    ASSERT_EQ(property_definition_ids.size(), 6u);
+    const PropertyDefinitionData &lip_def = *root.get_property_definition(property_definition_ids[0]);
     // lefiProp::propType() (see lef.y's PROPERTYDEFINITIONS grammar) is
     // lowercase ("layer"/"via"/...), unlike the LEF keyword itself.
     EXPECT_EQ(lip_def.owner_type, "layer");
@@ -829,7 +850,7 @@ TEST_F(LEFReaderViaFixture, ReadsPropertyDefinitionsAndPerConstructPropertyAttac
     EXPECT_EQ(lip_def.data_type, "I");
     EXPECT_FALSE(lip_def.range_min.has_value());
 
-    const PropertyDefinition &vip_def = technology->property_definitions[3];
+    const PropertyDefinitionData &vip_def = *root.get_property_definition(property_definition_ids[3]);
     EXPECT_EQ(vip_def.owner_type, "via");
     EXPECT_EQ(vip_def.name, "vip");
     ASSERT_TRUE(vip_def.range_min.has_value());
@@ -907,10 +928,12 @@ TEST_F(LEFAntennaFixture, ReadsAntennaModelsOnRoutingAndCutLayersAndOnAPin)
     // Antenna ratios/areas are unitless or declared-unit values, not
     // geometric coordinates - no microns_to_dbu conversion, matching
     // resistance/capacitance's own treatment.
-    const LayerData *m1 = root.get_layer(root.get_layer_by_name("M1"));
+    const LayerId m1_id = root.get_layer_by_name("M1");
+    const LayerData *m1 = root.get_layer(m1_id);
     ASSERT_TRUE(m1 != nullptr);
-    ASSERT_EQ(m1->antenna_models.size(), 1u);
-    const AntennaModel &m1_model = m1->antenna_models[0];
+    const std::vector<AntennaModelId> &m1_antenna_model_ids = root.get_layer_antenna_models(m1_id);
+    ASSERT_EQ(m1_antenna_model_ids.size(), 1u);
+    const AntennaModelData &m1_model = *root.get_antenna_model(m1_antenna_model_ids[0]);
     EXPECT_EQ(m1_model.oxide, "OXIDE1");
     ASSERT_TRUE(m1_model.area_ratio.has_value());
     EXPECT_DOUBLE_EQ(*m1_model.area_ratio, 100.0);
@@ -923,25 +946,31 @@ TEST_F(LEFAntennaFixture, ReadsAntennaModelsOnRoutingAndCutLayersAndOnAPin)
     ASSERT_TRUE(m1_model.side_area_ratio.has_value());
     EXPECT_DOUBLE_EQ(*m1_model.side_area_ratio, 50.0);
 
-    const LayerData *v1 = root.get_layer(root.get_layer_by_name("V1"));
+    const LayerId v1_id = root.get_layer_by_name("V1");
+    const LayerData *v1 = root.get_layer(v1_id);
     ASSERT_TRUE(v1 != nullptr);
-    ASSERT_EQ(v1->antenna_models.size(), 1u);
-    EXPECT_EQ(v1->antenna_models[0].oxide, "OXIDE1");
-    ASSERT_TRUE(v1->antenna_models[0].area_ratio.has_value());
-    EXPECT_DOUBLE_EQ(*v1->antenna_models[0].area_ratio, 80.0);
+    const std::vector<AntennaModelId> &v1_antenna_model_ids = root.get_layer_antenna_models(v1_id);
+    ASSERT_EQ(v1_antenna_model_ids.size(), 1u);
+    const AntennaModelData *v1_model = root.get_antenna_model(v1_antenna_model_ids[0]);
+    EXPECT_EQ(v1_model->oxide, "OXIDE1");
+    ASSERT_TRUE(v1_model->area_ratio.has_value());
+    EXPECT_DOUBLE_EQ(*v1_model->area_ratio, 80.0);
 
     const AbstractId abstract_id = root.get_design_abstract(root.get_design_by_name("ANTENNATEST"));
-    const TerminalData *pin_a = root.get_terminal(root.get_abstract_terminals(abstract_id).front());
+    const TerminalId pin_a_id = root.get_abstract_terminals(abstract_id).front();
+    const TerminalData *pin_a = root.get_terminal(pin_a_id);
     ASSERT_TRUE(pin_a != nullptr);
     ASSERT_EQ(pin_a->antenna_partial_metal_area.size(), 1u);
     EXPECT_DOUBLE_EQ(pin_a->antenna_partial_metal_area[0].value, 1.5);
     EXPECT_EQ(pin_a->antenna_partial_metal_area[0].layer_name, "M1");
 
-    ASSERT_EQ(pin_a->antenna_models.size(), 1u);
-    EXPECT_EQ(pin_a->antenna_models[0].oxide, "OXIDE1");
-    ASSERT_EQ(pin_a->antenna_models[0].gate_area.size(), 1u);
-    EXPECT_DOUBLE_EQ(pin_a->antenna_models[0].gate_area[0].value, 2.0);
-    EXPECT_EQ(pin_a->antenna_models[0].gate_area[0].layer_name, "M1");
+    const std::vector<PinAntennaModelId> &pin_a_antenna_model_ids = root.get_terminal_antenna_models(pin_a_id);
+    ASSERT_EQ(pin_a_antenna_model_ids.size(), 1u);
+    const PinAntennaModelData *pin_a_model = root.get_pin_antenna_model(pin_a_antenna_model_ids[0]);
+    EXPECT_EQ(pin_a_model->oxide, "OXIDE1");
+    ASSERT_EQ(pin_a_model->gate_area.size(), 1u);
+    EXPECT_DOUBLE_EQ(pin_a_model->gate_area[0].value, 2.0);
+    EXPECT_EQ(pin_a_model->gate_area[0].layer_name, "M1");
 }
 
 TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6)
@@ -950,7 +979,8 @@ TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6
     // LAYER field; MINIMUMDENSITY/MAXIMUMDENSITY are percentages (no
     // conversion); AC CURRENTDENSITY's frequency/table_entries are
     // declared-unit values (no conversion) but width IS geometric.
-    const LayerData *m1 = root.get_layer(root.get_layer_by_name("M1"));
+    const LayerId m1_id = root.get_layer_by_name("M1");
+    const LayerData *m1 = root.get_layer(m1_id);
     ASSERT_TRUE(m1 != nullptr);
 
     EXPECT_EQ(m1->direction, RoutingDirection::DIAG45);
@@ -999,15 +1029,18 @@ TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6
     ASSERT_TRUE(m1->protrusion_width2.has_value());
     EXPECT_EQ(*m1->protrusion_width2, 1200);
 
-    ASSERT_EQ(m1->spacing_table_two_widths.size(), 2u);
-    EXPECT_EQ(m1->spacing_table_two_widths[0].width, 100);
-    EXPECT_FALSE(m1->spacing_table_two_widths[0].prl.has_value());
-    ASSERT_EQ(m1->spacing_table_two_widths[0].spacings.size(), 2u);
-    EXPECT_EQ(m1->spacing_table_two_widths[0].spacings[0], 200);
-    EXPECT_EQ(m1->spacing_table_two_widths[0].spacings[1], 300);
-    EXPECT_EQ(m1->spacing_table_two_widths[1].width, 200);
-    ASSERT_TRUE(m1->spacing_table_two_widths[1].prl.has_value());
-    EXPECT_EQ(*m1->spacing_table_two_widths[1].prl, 150);
+    const std::vector<TwoWidthsSpacingEntryId> &two_widths_ids = root.get_layer_spacing_table_two_widths(m1_id);
+    ASSERT_EQ(two_widths_ids.size(), 2u);
+    const TwoWidthsSpacingEntryData &two_widths0 = *root.get_two_widths_spacing_entry(two_widths_ids[0]);
+    EXPECT_EQ(two_widths0.width, 100);
+    EXPECT_FALSE(two_widths0.prl.has_value());
+    ASSERT_EQ(two_widths0.spacings.size(), 2u);
+    EXPECT_EQ(two_widths0.spacings[0], 200);
+    EXPECT_EQ(two_widths0.spacings[1], 300);
+    const TwoWidthsSpacingEntryData &two_widths1 = *root.get_two_widths_spacing_entry(two_widths_ids[1]);
+    EXPECT_EQ(two_widths1.width, 200);
+    ASSERT_TRUE(two_widths1.prl.has_value());
+    EXPECT_EQ(*two_widths1.prl, 150);
 
     ASSERT_TRUE(m1->split_wire_width.has_value());
     EXPECT_EQ(*m1->split_wire_width, 500);
@@ -1023,8 +1056,9 @@ TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6
     ASSERT_TRUE(m1->fill_active_spacing.has_value());
     EXPECT_EQ(*m1->fill_active_spacing, 400);
 
-    ASSERT_EQ(m1->ac_current_density.size(), 2u);
-    const LayerDensityEntry &ac_peak = m1->ac_current_density[0];
+    const std::vector<LayerDensityEntryId> &ac_ids = root.get_layer_ac_current_density(m1_id);
+    ASSERT_EQ(ac_ids.size(), 2u);
+    const LayerDensityEntryData &ac_peak = *root.get_layer_density_entry(ac_ids[0]);
     EXPECT_EQ(ac_peak.type, "PEAK");
     EXPECT_FALSE(ac_peak.one_entry.has_value());
     ASSERT_EQ(ac_peak.frequency.size(), 2u);
@@ -1035,19 +1069,22 @@ TEST_F(LEFAntennaFixture, ReadsRoutingLayerMiscScalarAndTableFieldsAddedInPhase6
     EXPECT_EQ(ac_peak.width[1], 200);
     ASSERT_EQ(ac_peak.table_entries.size(), 2u);
     EXPECT_DOUBLE_EQ(ac_peak.table_entries[0], 0.0000005);
-    const LayerDensityEntry &ac_average = m1->ac_current_density[1];
+    const LayerDensityEntryData &ac_average = *root.get_layer_density_entry(ac_ids[1]);
     EXPECT_EQ(ac_average.type, "AVERAGE");
     ASSERT_TRUE(ac_average.one_entry.has_value());
     EXPECT_DOUBLE_EQ(*ac_average.one_entry, 5.5);
 
-    ASSERT_EQ(m1->dc_current_density.size(), 1u);
-    ASSERT_TRUE(m1->dc_current_density[0].one_entry.has_value());
-    EXPECT_DOUBLE_EQ(*m1->dc_current_density[0].one_entry, 4.9);
+    const std::vector<LayerDensityEntryId> &dc_ids = root.get_layer_dc_current_density(m1_id);
+    ASSERT_EQ(dc_ids.size(), 1u);
+    const LayerDensityEntryData *dc0 = root.get_layer_density_entry(dc_ids[0]);
+    ASSERT_TRUE(dc0->one_entry.has_value());
+    EXPECT_DOUBLE_EQ(*dc0->one_entry, 4.9);
 }
 
 TEST_F(LEFAntennaFixture, ReadsCutLayerArraySpacingEnclosureAndCurrentDensityAddedInPhase6)
 {
-    const LayerData *v1 = root.get_layer(root.get_layer_by_name("V1"));
+    const LayerId v1_id = root.get_layer_by_name("V1");
+    const LayerData *v1 = root.get_layer(v1_id);
     ASSERT_TRUE(v1 != nullptr);
 
     ASSERT_EQ(v1->array_cuts.size(), 2u);
@@ -1055,25 +1092,31 @@ TEST_F(LEFAntennaFixture, ReadsCutLayerArraySpacingEnclosureAndCurrentDensityAdd
     EXPECT_EQ(v1->array_cuts[0].spacing, 1000);
     EXPECT_EQ(v1->array_cuts[1].cuts, 4);
     EXPECT_EQ(v1->array_cuts[1].spacing, 1500);
-    ASSERT_TRUE(v1->array_spacing.has_value());
-    EXPECT_TRUE(v1->array_spacing->long_array);
-    ASSERT_TRUE(v1->array_spacing->via_width.has_value());
-    EXPECT_EQ(*v1->array_spacing->via_width, 500);
-    EXPECT_EQ(v1->array_spacing->cut_spacing, 200);
+    const ArraySpacingData *array_spacing = root.get_array_spacing(root.get_layer_array_spacing(v1_id));
+    ASSERT_TRUE(array_spacing != nullptr);
+    EXPECT_TRUE(array_spacing->long_array);
+    ASSERT_TRUE(array_spacing->via_width.has_value());
+    EXPECT_EQ(*array_spacing->via_width, 500);
+    EXPECT_EQ(array_spacing->cut_spacing, 200);
 
-    ASSERT_EQ(v1->prefer_enclosures.size(), 1u);
-    EXPECT_EQ(v1->prefer_enclosures[0].location, "BELOW");
-    EXPECT_EQ(v1->prefer_enclosures[0].overhang1, 60);
-    EXPECT_EQ(v1->prefer_enclosures[0].overhang2, 10);
+    const std::vector<PreferEnclosureEntryId> &prefer_enclosure_ids = root.get_layer_prefer_enclosures(v1_id);
+    ASSERT_EQ(prefer_enclosure_ids.size(), 1u);
+    const PreferEnclosureEntryData &prefer_enclosure0 = *root.get_prefer_enclosure_entry(prefer_enclosure_ids[0]);
+    EXPECT_EQ(prefer_enclosure0.location, "BELOW");
+    EXPECT_EQ(prefer_enclosure0.overhang1, 60);
+    EXPECT_EQ(prefer_enclosure0.overhang2, 10);
 
-    ASSERT_EQ(v1->enclosures.size(), 2u);
-    EXPECT_EQ(v1->enclosures[0].location, "ABOVE");
-    EXPECT_EQ(v1->enclosures[0].overhang1, 50);
-    EXPECT_EQ(v1->enclosures[0].overhang2, 10);
-    EXPECT_FALSE(v1->enclosures[0].width.has_value());
-    EXPECT_TRUE(v1->enclosures[1].location.empty());
-    ASSERT_TRUE(v1->enclosures[1].width.has_value());
-    EXPECT_EQ(*v1->enclosures[1].width, 1000);
+    const std::vector<EnclosureEntryId> &enclosure_ids = root.get_layer_enclosures(v1_id);
+    ASSERT_EQ(enclosure_ids.size(), 2u);
+    const EnclosureEntryData &enclosure0 = *root.get_enclosure_entry(enclosure_ids[0]);
+    EXPECT_EQ(enclosure0.location, "ABOVE");
+    EXPECT_EQ(enclosure0.overhang1, 50);
+    EXPECT_EQ(enclosure0.overhang2, 10);
+    EXPECT_FALSE(enclosure0.width.has_value());
+    const EnclosureEntryData &enclosure1 = *root.get_enclosure_entry(enclosure_ids[1]);
+    EXPECT_FALSE(enclosure1.location.has_value());
+    ASSERT_TRUE(enclosure1.width.has_value());
+    EXPECT_EQ(*enclosure1.width, 1000);
 
     // CUT-layer RESISTANCE (resistancePerCut()) - readable but, per the
     // vendored writer's own RESISTANCEPERCUT-keyword bug (see
@@ -1081,8 +1124,9 @@ TEST_F(LEFAntennaFixture, ReadsCutLayerArraySpacingEnclosureAndCurrentDensityAdd
     ASSERT_TRUE(v1->resistance.has_value());
     EXPECT_DOUBLE_EQ(*v1->resistance, 10.0);
 
-    ASSERT_EQ(v1->dc_current_density.size(), 1u);
-    const LayerDensityEntry &dc = v1->dc_current_density[0];
+    const std::vector<LayerDensityEntryId> &v1_dc_ids = root.get_layer_dc_current_density(v1_id);
+    ASSERT_EQ(v1_dc_ids.size(), 1u);
+    const LayerDensityEntryData &dc = *root.get_layer_density_entry(v1_dc_ids[0]);
     EXPECT_FALSE(dc.one_entry.has_value());
     ASSERT_EQ(dc.cutarea.size(), 2u);
     EXPECT_EQ(dc.cutarea[0], 2000000);
@@ -1099,15 +1143,18 @@ TEST_F(LEFAntennaFixture, ReadsPinScalarFieldsDirectionEnumPortClassViaAndSiteAr
 
     // MACRO SITE array placements (distinct from the singular `site` name
     // form, which ANTENNATEST doesn't use).
-    ASSERT_EQ(abstract->site_placements.size(), 2u);
-    EXPECT_EQ(abstract->site_placements[0].site_name, "CORE");
-    EXPECT_EQ(abstract->site_placements[0].orient, Orientation::N);
-    ASSERT_TRUE(abstract->site_placements[0].num_x.has_value());
-    EXPECT_EQ(*abstract->site_placements[0].num_x, 2);
-    EXPECT_EQ(*abstract->site_placements[0].num_y, 1);
-    EXPECT_EQ(*abstract->site_placements[0].step_x, 10000);
-    EXPECT_EQ(abstract->site_placements[1].orient, Orientation::FN);
-    EXPECT_FALSE(abstract->site_placements[1].num_x.has_value());
+    const std::vector<MacroSitePlacementId> &site_placement_ids = root.get_abstract_site_placements(abstract_id);
+    ASSERT_EQ(site_placement_ids.size(), 2u);
+    const MacroSitePlacementData &site_placement0 = *root.get_macro_site_placement(site_placement_ids[0]);
+    EXPECT_EQ(site_placement0.site_name, "CORE");
+    EXPECT_EQ(site_placement0.orient, Orientation::N);
+    ASSERT_TRUE(site_placement0.num_x.has_value());
+    EXPECT_EQ(*site_placement0.num_x, 2);
+    EXPECT_EQ(*site_placement0.num_y, 1);
+    EXPECT_EQ(*site_placement0.step_x, 10000);
+    const MacroSitePlacementData &site_placement1 = *root.get_macro_site_placement(site_placement_ids[1]);
+    EXPECT_EQ(site_placement1.orient, Orientation::FN);
+    EXPECT_FALSE(site_placement1.num_x.has_value());
 
     const std::vector<TerminalId> &terminal_ids = root.get_abstract_terminals(abstract_id);
     const TerminalData *pin_a = root.get_terminal(terminal_ids[0]);
@@ -1118,9 +1165,12 @@ TEST_F(LEFAntennaFixture, ReadsPinScalarFieldsDirectionEnumPortClassViaAndSiteAr
     EXPECT_EQ(pin_a->ground_sensitivity, "gndpin");
     // rise_slew_limit/fall_slew_limit/max_load are declared-unit values -
     // no dbu conversion, matching resistance/capacitance's own treatment.
-    EXPECT_DOUBLE_EQ(pin_a->rise_slew_limit, 0.01);
-    EXPECT_DOUBLE_EQ(pin_a->fall_slew_limit, 0.02);
-    EXPECT_DOUBLE_EQ(pin_a->max_load, 0.1);
+    ASSERT_TRUE(pin_a->rise_slew_limit.has_value());
+    EXPECT_DOUBLE_EQ(*pin_a->rise_slew_limit, 0.01);
+    ASSERT_TRUE(pin_a->fall_slew_limit.has_value());
+    EXPECT_DOUBLE_EQ(*pin_a->fall_slew_limit, 0.02);
+    ASSERT_TRUE(pin_a->max_load.has_value());
+    EXPECT_DOUBLE_EQ(*pin_a->max_load, 0.1);
 
     const std::vector<TerminalPortId> &pin_a_port_ids = root.get_terminal_ports(terminal_ids[0]);
     ASSERT_EQ(pin_a_port_ids.size(), 1u);

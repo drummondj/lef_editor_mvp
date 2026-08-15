@@ -336,33 +336,50 @@ namespace le
                 .spacing = reader->microns_to_dbu(lef_layer->arraySpacing(i)),
             });
         }
+        // The following fields moved to pooled classes (Phase 2 - see
+        // schema.py) - LayerData no longer has data members for them, so
+        // each is staged into a local "pending_*" collection here and
+        // attached via root_->create_X() once layer_id exists (below),
+        // rather than assigned directly onto `layer`.
+        std::optional<ArraySpacingData> pending_array_spacing;
+        std::vector<PreferEnclosureEntryData> pending_prefer_enclosures;
+        std::vector<EnclosureEntryData> pending_enclosures;
+        std::vector<LayerDensityEntryData> pending_ac_current_density;
+        std::vector<LayerDensityEntryData> pending_dc_current_density;
+        std::vector<SpacingRuleData> pending_spacing_rules;
+        std::vector<MinimumCutData> pending_minimum_cuts;
+        std::vector<MinStepData> pending_min_steps;
+        std::vector<InfluenceSpacingEntryData> pending_spacing_table_influence;
+        std::vector<TwoWidthsSpacingEntryData> pending_spacing_table_two_widths;
+        std::vector<AntennaModelData> pending_antenna_models;
+
         if (lef_layer->hasArraySpacing())
         {
-            ArraySpacing array_spacing{
+            ArraySpacingData array_spacing{
                 .long_array = static_cast<bool>(lef_layer->hasLongArray()),
                 .cut_spacing = reader->microns_to_dbu(lef_layer->cutSpacing()),
             };
             if (lef_layer->hasViaWidth())
                 array_spacing.via_width = reader->microns_to_dbu(lef_layer->viaWidth());
-            layer.array_spacing = std::move(array_spacing);
+            pending_array_spacing = std::move(array_spacing);
         }
-        layer.prefer_enclosures.reserve(static_cast<size_t>(lef_layer->numPreferEnclosure()));
+        pending_prefer_enclosures.reserve(static_cast<size_t>(lef_layer->numPreferEnclosure()));
         for (int i = 0; i < lef_layer->numPreferEnclosure(); i++)
         {
-            PreferEnclosureEntry entry{
-                .location = lef_layer->hasPreferEnclosureRule(i) ? lef_layer->preferEnclosureRule(i) : "",
+            PreferEnclosureEntryData entry{
+                .location = lef_layer->hasPreferEnclosureRule(i) ? std::make_optional<std::string>(lef_layer->preferEnclosureRule(i)) : std::nullopt,
                 .overhang1 = reader->microns_to_dbu(lef_layer->preferEnclosureOverhang1(i)),
                 .overhang2 = reader->microns_to_dbu(lef_layer->preferEnclosureOverhang2(i)),
             };
             if (lef_layer->hasPreferEnclosureWidth(i))
                 entry.min_width = reader->microns_to_dbu(lef_layer->preferEnclosureMinWidth(i));
-            layer.prefer_enclosures.push_back(std::move(entry));
+            pending_prefer_enclosures.push_back(std::move(entry));
         }
-        layer.enclosures.reserve(static_cast<size_t>(lef_layer->numEnclosure()));
+        pending_enclosures.reserve(static_cast<size_t>(lef_layer->numEnclosure()));
         for (int i = 0; i < lef_layer->numEnclosure(); i++)
         {
-            EnclosureEntry entry{
-                .location = lef_layer->hasEnclosureRule(i) ? lef_layer->enclosureRule(i) : "",
+            EnclosureEntryData entry{
+                .location = lef_layer->hasEnclosureRule(i) ? std::make_optional<std::string>(lef_layer->enclosureRule(i)) : std::nullopt,
                 .overhang1 = reader->microns_to_dbu(lef_layer->enclosureOverhang1(i)),
                 .overhang2 = reader->microns_to_dbu(lef_layer->enclosureOverhang2(i)),
             };
@@ -377,7 +394,7 @@ namespace le
             }
             else if (lef_layer->hasEnclosureMinLength(i))
                 entry.min_length = reader->microns_to_dbu(lef_layer->enclosureMinLength(i));
-            layer.enclosures.push_back(std::move(entry));
+            pending_enclosures.push_back(std::move(entry));
         }
         if (lef_layer->hasSplitWireWidth())
             layer.split_wire_width = reader->microns_to_dbu(lef_layer->splitWireWidth());
@@ -405,9 +422,9 @@ namespace le
         // is called once per grammar rule, no 2D structure in the API) -
         // stored as-is, matching the vendored reader's own lack of any
         // cross-count validation between it and frequency/width/cutarea.
-        auto read_current_density = [reader](lefiLayerDensity *density) -> LayerDensityEntry
+        auto read_current_density = [reader](lefiLayerDensity *density) -> LayerDensityEntryData
         {
-            LayerDensityEntry entry{.type = density->type()};
+            LayerDensityEntryData entry{.type = density->type()};
             if (density->hasOneEntry())
             {
                 entry.one_entry = density->oneEntry();
@@ -427,16 +444,16 @@ namespace le
                 entry.table_entries.push_back(density->tableEntry(t));
             return entry;
         };
-        layer.ac_current_density.reserve(static_cast<size_t>(lef_layer->numAccurrentDensity()));
+        pending_ac_current_density.reserve(static_cast<size_t>(lef_layer->numAccurrentDensity()));
         for (int i = 0; i < lef_layer->numAccurrentDensity(); i++)
-            layer.ac_current_density.push_back(read_current_density(lef_layer->accurrent(i)));
-        layer.dc_current_density.reserve(static_cast<size_t>(lef_layer->numDccurrentDensity()));
+            pending_ac_current_density.push_back(read_current_density(lef_layer->accurrent(i)));
+        pending_dc_current_density.reserve(static_cast<size_t>(lef_layer->numDccurrentDensity()));
         for (int i = 0; i < lef_layer->numDccurrentDensity(); i++)
-            layer.dc_current_density.push_back(read_current_density(lef_layer->dccurrent(i)));
-        layer.spacing_rules.reserve(static_cast<size_t>(lef_layer->numSpacing()));
+            pending_dc_current_density.push_back(read_current_density(lef_layer->dccurrent(i)));
+        pending_spacing_rules.reserve(static_cast<size_t>(lef_layer->numSpacing()));
         for (int i = 0; i < lef_layer->numSpacing(); i++)
         {
-            SpacingRule rule{.distance = reader->microns_to_dbu(lef_layer->spacing(i))};
+            SpacingRuleData rule{.distance = reader->microns_to_dbu(lef_layer->spacing(i))};
 
             if (lef_layer->hasSpacingRange(i))
             {
@@ -510,13 +527,13 @@ namespace le
                 rule.end_of_notch_length = reader->microns_to_dbu(lef_layer->spacingEndOfNotchLength(i));
             }
 
-            layer.spacing_rules.push_back(std::move(rule));
+            pending_spacing_rules.push_back(std::move(rule));
         }
 
-        layer.minimum_cuts.reserve(static_cast<size_t>(lef_layer->numMinimumcut()));
+        pending_minimum_cuts.reserve(static_cast<size_t>(lef_layer->numMinimumcut()));
         for (int i = 0; i < lef_layer->numMinimumcut(); i++)
         {
-            MinimumCut cut{
+            MinimumCutData cut{
                 .cuts = lef_layer->minimumcut(i),
                 .width = reader->microns_to_dbu(lef_layer->minimumcutWidth(i)),
             };
@@ -529,20 +546,20 @@ namespace le
                 cut.length = reader->microns_to_dbu(lef_layer->minimumcutLength(i));
                 cut.distance = reader->microns_to_dbu(lef_layer->minimumcutDistance(i));
             }
-            layer.minimum_cuts.push_back(cut);
+            pending_minimum_cuts.push_back(cut);
         }
 
-        layer.min_steps.reserve(static_cast<size_t>(lef_layer->numMinstep()));
+        pending_min_steps.reserve(static_cast<size_t>(lef_layer->numMinstep()));
         for (int i = 0; i < lef_layer->numMinstep(); i++)
         {
-            MinStep step{.distance = reader->microns_to_dbu(lef_layer->minstep(i))};
+            MinStepData step{.distance = reader->microns_to_dbu(lef_layer->minstep(i))};
             if (lef_layer->hasMinstepType(i))
                 step.min_step_type = lef_layer->minstepType(i);
             if (lef_layer->hasMinstepLengthsum(i))
                 step.lengthsum = reader->microns_to_dbu(lef_layer->minstepLengthsum(i));
             if (lef_layer->hasMinstepMaxedges(i))
                 step.max_edges = lef_layer->minstepMaxedges(i);
-            layer.min_steps.push_back(step);
+            pending_min_steps.push_back(step);
         }
 
         for (int i = 0; i < lef_layer->numSpacingTable(); i++)
@@ -570,7 +587,7 @@ namespace le
                 lefiInfluence *influence = table->influence();
                 for (int e = 0; e < influence->numInfluenceEntry(); e++)
                 {
-                    layer.spacing_table_influence.push_back(InfluenceSpacingEntry{
+                    pending_spacing_table_influence.push_back(InfluenceSpacingEntryData{
                         .width = reader->microns_to_dbu(influence->width(e)),
                         .distance = reader->microns_to_dbu(influence->distance(e)),
                         .spacing = reader->microns_to_dbu(influence->spacing(e)),
@@ -585,13 +602,13 @@ namespace le
                 // isInfluence() per the grammar).
                 for (int w = 0; w < two_widths->numWidth(); w++)
                 {
-                    TwoWidthsSpacingEntry entry{.width = reader->microns_to_dbu(two_widths->width(w))};
+                    TwoWidthsSpacingEntryData entry{.width = reader->microns_to_dbu(two_widths->width(w))};
                     if (two_widths->hasWidthPRL(w))
                         entry.prl = reader->microns_to_dbu(two_widths->widthPRL(w));
                     entry.spacings.reserve(static_cast<size_t>(two_widths->numWidthSpacing(w)));
                     for (int s = 0; s < two_widths->numWidthSpacing(w); s++)
                         entry.spacings.push_back(reader->microns_to_dbu(two_widths->widthSpacing(w, s)));
-                    layer.spacing_table_two_widths.push_back(std::move(entry));
+                    pending_spacing_table_two_widths.push_back(std::move(entry));
                 }
             }
         }
@@ -651,11 +668,11 @@ namespace le
             });
         }
 
-        layer.antenna_models.reserve(static_cast<size_t>(lef_layer->numAntennaModel()));
+        pending_antenna_models.reserve(static_cast<size_t>(lef_layer->numAntennaModel()));
         for (int i = 0; i < lef_layer->numAntennaModel(); i++)
         {
             lefiAntennaModel *lef_model = lef_layer->antennaModel(i);
-            AntennaModel model{.oxide = lef_model->antennaOxide()};
+            AntennaModelData model{.oxide = lef_model->antennaOxide()};
 
             if (lef_model->hasAntennaAreaRatio())
                 model.area_ratio = lef_model->antennaAreaRatio();
@@ -720,10 +737,65 @@ namespace le
             else if (lef_model->hasAntennaCumDiffSideAreaRatio())
                 model.cum_diff_side_area_ratio = lef_model->antennaCumDiffSideAreaRatio();
 
-            layer.antenna_models.push_back(std::move(model));
+            pending_antenna_models.push_back(std::move(model));
         }
 
-        reader->root_->create_layer(std::move(layer));
+        const LayerId layer_id = reader->root_->create_layer(std::move(layer));
+        if (pending_array_spacing)
+        {
+            pending_array_spacing->layer = layer_id;
+            reader->root_->create_array_spacing(std::move(*pending_array_spacing));
+        }
+        for (auto &entry : pending_prefer_enclosures)
+        {
+            entry.layer = layer_id;
+            reader->root_->create_prefer_enclosure_entry(std::move(entry));
+        }
+        for (auto &entry : pending_enclosures)
+        {
+            entry.layer = layer_id;
+            reader->root_->create_enclosure_entry(std::move(entry));
+        }
+        for (auto &entry : pending_ac_current_density)
+        {
+            entry.ac_layer = layer_id;
+            reader->root_->create_layer_density_entry(std::move(entry));
+        }
+        for (auto &entry : pending_dc_current_density)
+        {
+            entry.dc_layer = layer_id;
+            reader->root_->create_layer_density_entry(std::move(entry));
+        }
+        for (auto &rule : pending_spacing_rules)
+        {
+            rule.layer = layer_id;
+            reader->root_->create_spacing_rule(std::move(rule));
+        }
+        for (auto &cut : pending_minimum_cuts)
+        {
+            cut.layer = layer_id;
+            reader->root_->create_minimum_cut(std::move(cut));
+        }
+        for (auto &step : pending_min_steps)
+        {
+            step.layer = layer_id;
+            reader->root_->create_min_step(std::move(step));
+        }
+        for (auto &entry : pending_spacing_table_influence)
+        {
+            entry.layer = layer_id;
+            reader->root_->create_influence_spacing_entry(std::move(entry));
+        }
+        for (auto &entry : pending_spacing_table_two_widths)
+        {
+            entry.layer = layer_id;
+            reader->root_->create_two_widths_spacing_entry(std::move(entry));
+        }
+        for (auto &model : pending_antenna_models)
+        {
+            model.layer = layer_id;
+            reader->root_->create_antenna_model(std::move(model));
+        }
 
         return 0;
     }
@@ -855,13 +927,13 @@ namespace le
         return 0;
     }
 
-    std::vector<ViaLayer> LEFReader::via_layers_from_parser(LEFReader *reader, lefiVia *lef_via)
+    std::vector<ViaLayerData> LEFReader::via_layers_from_parser(LEFReader *reader, lefiVia *lef_via)
     {
-        std::vector<ViaLayer> layers;
+        std::vector<ViaLayerData> layers;
         layers.reserve(static_cast<size_t>(lef_via->numLayers()));
         for (int i = 0; i < lef_via->numLayers(); i++)
         {
-            auto layer = ViaLayer{.layer_name = lef_via->layerName(i)};
+            auto layer = ViaLayerData{.layer_name = lef_via->layerName(i)};
 
             layer.rects.reserve(static_cast<size_t>(lef_via->numRects(i)));
             layer.rect_masks.reserve(static_cast<size_t>(lef_via->numRects(i)));
@@ -905,9 +977,13 @@ namespace le
         if (lef_via->hasResistance())
             via.resistance = lef_via->resistance();
 
+        // foreign/layers/via_rule moved to pooled classes (Phase 2) -
+        // staged here, attached via root_->create_X() once via_id exists
+        // (below), same pattern as lefrLayerCbkFn's own pending_* locals.
+        std::optional<ForeignData> pending_foreign;
         if (lef_via->hasForeign())
         {
-            auto foreign = Foreign{.name = lef_via->foreign()};
+            ForeignData foreign{.name = lef_via->foreign()};
 
             if (lef_via->hasForeignPnt())
                 foreign.origin = Point{
@@ -918,19 +994,20 @@ namespace le
             if (lef_via->hasForeignOrient())
                 foreign.orient = orientation_from_parser(lef_via->foreignOrient());
 
-            via.foreign = foreign;
+            pending_foreign = std::move(foreign);
         }
 
-        via.layers = via_layers_from_parser(reader, lef_via);
+        std::vector<ViaLayerData> pending_layers = via_layers_from_parser(reader, lef_via);
 
         // 5.6 VIARULE-inside-VIA - a materially different, smaller thing
         // than a VIARULE block itself (see ViaRuleReference's own doc
         // comment) - mutually exclusive with resistance above (a real via
         // has one or the other, matching lefwViaViarule/lefwViaResistance's
         // own "either...or" contract on the writer side).
+        std::optional<ViaRuleReferenceData> pending_via_rule;
         if (lef_via->hasViaRule())
         {
-            via.via_rule = ViaRuleReference{
+            pending_via_rule = ViaRuleReferenceData{
                 .via_rule_name = lef_via->viaRuleName(),
                 .cut_size = Point{
                     .x = reader->microns_to_dbu(lef_via->xCutSize()),
@@ -968,7 +1045,22 @@ namespace le
             });
         }
 
-        reader->root_->create_via(std::move(via));
+        const ViaId via_id = reader->root_->create_via(std::move(via));
+        if (pending_foreign)
+        {
+            pending_foreign->via = via_id;
+            reader->root_->create_foreign(std::move(*pending_foreign));
+        }
+        for (auto &layer : pending_layers)
+        {
+            layer.via = via_id;
+            reader->root_->create_via_layer(std::move(layer));
+        }
+        if (pending_via_rule)
+        {
+            pending_via_rule->via = via_id;
+            reader->root_->create_via_rule_reference(std::move(*pending_via_rule));
+        }
 
         return 0;
     }
@@ -991,14 +1083,18 @@ namespace le
             .is_default = static_cast<bool>(lef_via_rule->hasDefault()),
         };
 
-        // 2 layers (non-GENERATE) or 3 (GENERATE, the 3rd being the cut
-        // layer) - see lefiViaRule.hpp's own numLayers()/layer() comment.
-        via_rule.layers.reserve(static_cast<size_t>(lef_via_rule->numLayers()));
+        // layers moved to a pooled class (Phase 2) - staged here, attached
+        // via root_->create_via_rule_layer() once via_rule_id exists
+        // (below). 2 layers (non-GENERATE) or 3 (GENERATE, the 3rd being
+        // the cut layer) - see lefiViaRule.hpp's own numLayers()/layer()
+        // comment.
+        std::vector<ViaRuleLayerData> pending_layers;
+        pending_layers.reserve(static_cast<size_t>(lef_via_rule->numLayers()));
         for (int i = 0; i < lef_via_rule->numLayers(); i++)
         {
             const lefiViaRuleLayer *lef_layer = lef_via_rule->layer(i);
 
-            auto layer = ViaRuleLayer{.layer_name = lef_layer->name()};
+            auto layer = ViaRuleLayerData{.layer_name = lef_layer->name()};
 
             if (lef_layer->hasDirection())
                 layer.direction = lef_layer->isVertical() ? RoutingDirection::V : RoutingDirection::H;
@@ -1029,7 +1125,7 @@ namespace le
             if (lef_layer->hasResistance())
                 layer.resistance = lef_layer->resistance();
 
-            via_rule.layers.push_back(std::move(layer));
+            pending_layers.push_back(std::move(layer));
         }
 
         // VIA name list is only meaningful for a non-GENERATE VIARULE (a
@@ -1055,7 +1151,12 @@ namespace le
             });
         }
 
-        reader->root_->create_via_rule(std::move(via_rule));
+        const ViaRuleId via_rule_id = reader->root_->create_via_rule(std::move(via_rule));
+        for (auto &layer : pending_layers)
+        {
+            layer.via_rule = via_rule_id;
+            reader->root_->create_via_rule_layer(std::move(layer));
+        }
 
         return 0;
     }
@@ -1146,10 +1247,23 @@ namespace le
             .hard_spacing = static_cast<bool>(lef_non_default->hasHardspacing()),
         };
 
-        rule.layers.reserve(static_cast<size_t>(lef_non_default->numLayers()));
+        // layers/vias moved to pooled classes (Phase 2) - staged here,
+        // attached via root_->create_X() once rule_id exists (below).
+        // Each pending via also carries its own nested foreign/layers
+        // (also pooled, parented to the via itself, not the rule) -
+        // those need the via's own id, so they wait for a second,
+        // inner attach step once each NonDefaultRuleVia is created.
+        struct PendingVia
+        {
+            NonDefaultRuleViaData data;
+            std::optional<ForeignData> foreign;
+            std::vector<ViaLayerData> layers;
+        };
+        std::vector<NonDefaultRuleLayerData> pending_layers;
+        pending_layers.reserve(static_cast<size_t>(lef_non_default->numLayers()));
         for (int i = 0; i < lef_non_default->numLayers(); i++)
         {
-            auto layer = NonDefaultRuleLayer{.layer_name = lef_non_default->layerName(i)};
+            auto layer = NonDefaultRuleLayerData{.layer_name = lef_non_default->layerName(i)};
 
             if (lef_non_default->hasLayerWidth(i))
                 layer.width = reader->microns_to_dbu(lef_non_default->layerWidth(i));
@@ -1166,23 +1280,25 @@ namespace le
             if (lef_non_default->hasLayerDiagWidth(i))
                 layer.diag_width = reader->microns_to_dbu(lef_non_default->layerDiagWidth(i));
 
-            rule.layers.push_back(std::move(layer));
+            pending_layers.push_back(std::move(layer));
         }
 
-        rule.vias.reserve(static_cast<size_t>(lef_non_default->numVias()));
+        std::vector<PendingVia> pending_vias;
+        pending_vias.reserve(static_cast<size_t>(lef_non_default->numVias()));
         for (int i = 0; i < lef_non_default->numVias(); i++)
         {
             lefiVia *lef_via = lef_non_default->viaRule(i);
 
-            NonDefaultRuleVia via{
+            PendingVia pending;
+            pending.data = NonDefaultRuleViaData{
                 .name = lef_via->name(),
                 .is_default = static_cast<bool>(lef_via->hasDefault()),
             };
             if (lef_via->hasResistance())
-                via.resistance = lef_via->resistance();
+                pending.data.resistance = lef_via->resistance();
             if (lef_via->hasForeign())
             {
-                auto foreign = Foreign{.name = lef_via->foreign()};
+                ForeignData foreign{.name = lef_via->foreign()};
                 if (lef_via->hasForeignPnt())
                     foreign.origin = Point{
                         .x = reader->microns_to_dbu(lef_via->foreignX()),
@@ -1190,14 +1306,14 @@ namespace le
                     };
                 if (lef_via->hasForeignOrient())
                     foreign.orient = orientation_from_parser(lef_via->foreignOrient());
-                via.foreign = foreign;
+                pending.foreign = std::move(foreign);
             }
-            via.layers = via_layers_from_parser(reader, lef_via);
+            pending.layers = via_layers_from_parser(reader, lef_via);
 
-            via.properties.reserve(static_cast<size_t>(lef_via->numProperties()));
+            pending.data.properties.reserve(static_cast<size_t>(lef_via->numProperties()));
             for (int j = 0; j < lef_via->numProperties(); j++)
             {
-                via.properties.push_back(LefProperty{
+                pending.data.properties.push_back(LefProperty{
                     .name = lef_via->propName(j),
                     .is_number = static_cast<bool>(lef_via->propIsNumber(j)),
                     .string_value = lef_via->propIsString(j) ? lef_via->propValue(j) : "",
@@ -1205,7 +1321,7 @@ namespace le
                 });
             }
 
-            rule.vias.push_back(std::move(via));
+            pending_vias.push_back(std::move(pending));
         }
 
         // spacing_rule (the embedded "SPACING ... SAMENET layer1 layer2
@@ -1245,7 +1361,27 @@ namespace le
             });
         }
 
-        reader->root_->create_non_default_rule(std::move(rule));
+        const NonDefaultRuleId rule_id = reader->root_->create_non_default_rule(std::move(rule));
+        for (auto &layer : pending_layers)
+        {
+            layer.non_default_rule = rule_id;
+            reader->root_->create_non_default_rule_layer(std::move(layer));
+        }
+        for (auto &pending : pending_vias)
+        {
+            pending.data.non_default_rule = rule_id;
+            const NonDefaultRuleViaId via_id = reader->root_->create_non_default_rule_via(std::move(pending.data));
+            if (pending.foreign)
+            {
+                pending.foreign->non_default_rule_via = via_id;
+                reader->root_->create_foreign(std::move(*pending.foreign));
+            }
+            for (auto &layer : pending.layers)
+            {
+                layer.non_default_rule_via = via_id;
+                reader->root_->create_via_layer(std::move(layer));
+            }
+        }
 
         return 0;
     }
@@ -1294,11 +1430,12 @@ namespace le
         if (lef_macro->hasClass())
             reader->abstract_data_.type = lef_macro->macroClass();
 
-        reader->abstract_data_.foreigns.reserve(lef_macro->numForeigns());
-
+        // foreigns moved to a pooled class (Phase 2) - reader->abstract_id_
+        // already exists at this point (created in lefrMacroBeginCbkFn),
+        // so each Foreign is created directly here rather than staged.
         for (int i = 0; i < lef_macro->numForeigns(); i++)
         {
-            auto foreign = Foreign{.name = lef_macro->foreignName(i)};
+            ForeignData foreign{.abstract = reader->abstract_id_, .name = lef_macro->foreignName(i)};
 
             // Not lef_macro->hasForeignOrigin(i): the vendored parser's
             // hasForeignOrigin_ is actually populated from the orient code
@@ -1313,7 +1450,7 @@ namespace le
             if (lef_macro->hasForeignOrient(i))
                 foreign.orient = orientation_from_parser(lef_macro->foreignOrient(i));
 
-            reader->abstract_data_.foreigns.push_back(foreign);
+            reader->root_->create_foreign(std::move(foreign));
         }
 
         if (lef_macro->hasSize())
@@ -1342,11 +1479,13 @@ namespace le
         // Distinct, mutually-exclusive grammar alternative from the
         // singular hasSiteName()/siteName() above - a macro uses one form
         // or the other (lefiMacro's own setSiteName vs setSitePattern).
-        reader->abstract_data_.site_placements.reserve(static_cast<size_t>(lef_macro->numSitePattern()));
+        // Also moved to a pooled class (Phase 2) - created directly here,
+        // same reasoning as foreigns above.
         for (int i = 0; i < lef_macro->numSitePattern(); i++)
         {
             lefiSitePattern *pattern = lef_macro->sitePattern(i);
-            MacroSitePlacement placement{
+            MacroSitePlacementData placement{
+                .abstract = reader->abstract_id_,
                 .site_name = pattern->name(),
                 .origin = Point{.x = reader->microns_to_dbu(pattern->x()), .y = reader->microns_to_dbu(pattern->y())},
                 .orient = orientation_from_parser(pattern->orient()),
@@ -1358,7 +1497,7 @@ namespace le
                 placement.step_x = reader->microns_to_dbu(pattern->xStep());
                 placement.step_y = reader->microns_to_dbu(pattern->yStep());
             }
-            reader->abstract_data_.site_placements.push_back(std::move(placement));
+            reader->root_->create_macro_site_placement(std::move(placement));
         }
 
         if (lef_macro->hasEEQ())
@@ -1401,7 +1540,7 @@ namespace le
         }
         auto stored = reader->root_->get_abstract(reader->abstract_id_);
         spdlog::debug("stored boundary size = {}", stored ? stored->boundary.size() : -1);
-        spdlog::debug("stored site = {}", stored ? stored->site : "NONE");
+        spdlog::debug("stored site = {}", stored ? stored->site.value_or("NONE") : "NONE");
 
         return 0;
     }
@@ -1508,11 +1647,15 @@ namespace le
 
         // 5.5 oxide-scoped antenna models - a distinct, narrower
         // lefiPinAntennaModel class from lefiLayer's own lefiAntennaModel.
-        terminal.antenna_models.reserve(static_cast<size_t>(lef_pin->numAntennaModel()));
+        // Moved to a pooled class (Phase 2) - staged here, attached via
+        // root_->create_pin_antenna_model() once terminal_id exists
+        // (below), same pattern as lefrLayerCbkFn's own pending_* locals.
+        std::vector<PinAntennaModelData> pending_antenna_models;
+        pending_antenna_models.reserve(static_cast<size_t>(lef_pin->numAntennaModel()));
         for (int i = 0; i < lef_pin->numAntennaModel(); i++)
         {
             lefiPinAntennaModel *lef_pin_model = lef_pin->antennaModel(i);
-            PinAntennaModel pin_model{.oxide = lef_pin_model->antennaOxide()};
+            PinAntennaModelData pin_model{.oxide = lef_pin_model->antennaOxide()};
 
             pin_model.gate_area.reserve(static_cast<size_t>(lef_pin_model->numAntennaGateArea()));
             for (int j = 0; j < lef_pin_model->numAntennaGateArea(); j++)
@@ -1530,10 +1673,15 @@ namespace le
             for (int j = 0; j < lef_pin_model->numAntennaMaxCutCar(); j++)
                 pin_model.max_cut_car.push_back(PinAntennaValue{.value = lef_pin_model->antennaMaxCutCar(j), .layer_name = safe_layer_name(lef_pin_model->antennaMaxCutCarLayer(j))});
 
-            terminal.antenna_models.push_back(std::move(pin_model));
+            pending_antenna_models.push_back(std::move(pin_model));
         }
 
         auto terminal_id = reader->root_->create_terminal(terminal);
+        for (auto &model : pending_antenna_models)
+        {
+            model.terminal = terminal_id;
+            reader->root_->create_pin_antenna_model(std::move(model));
+        }
 
         for (int i = 0; i < lef_pin->numPorts(); i++)
         {
@@ -1585,15 +1733,14 @@ namespace le
         auto reader = static_cast<LEFReader *>(user_data);
 
         // Fires between MacroBeginCbk and MacroCbk (same lifecycle as
-        // Pin/Obstruction), but unlike those two (real pool-backed child
-        // Klasses, persisted immediately via create_x) densities is a
-        // plain field on AbstractData - accumulated on abstract_data_ here
-        // and committed by lefrMacroCbkFn's own final
-        // `*stored = reader->abstract_data_` at the end of the MACRO.
-        reader->abstract_data_.densities.reserve(static_cast<size_t>(lef_density->numLayer()));
+        // Pin/Obstruction) - densities moved to a pooled class (Phase 2),
+        // so like Pin/Obstruction it's now created directly here via
+        // create_macro_density_layer() (reader->abstract_id_ already
+        // exists, created in lefrMacroBeginCbkFn) rather than accumulated
+        // on abstract_data_ for lefrMacroCbkFn's final sync to commit.
         for (int i = 0; i < lef_density->numLayer(); i++)
         {
-            auto layer = MacroDensityLayer{.layer_name = lef_density->layerName(i)};
+            MacroDensityLayerData layer{.abstract = reader->abstract_id_, .layer_name = lef_density->layerName(i)};
 
             layer.rects.reserve(static_cast<size_t>(lef_density->numRects(i)));
             layer.values.reserve(static_cast<size_t>(lef_density->numRects(i)));
@@ -1604,7 +1751,7 @@ namespace le
                 layer.values.push_back(lef_density->densityValue(i, j));
             }
 
-            reader->abstract_data_.densities.push_back(std::move(layer));
+            reader->root_->create_macro_density_layer(std::move(layer));
         }
 
         return 0;
@@ -1614,7 +1761,8 @@ namespace le
     {
         auto reader = static_cast<LEFReader *>(user_data);
 
-        PropertyDefinition def{
+        PropertyDefinitionData def{
+            .technology = reader->technology_id_,
             .owner_type = lef_prop->propType(),
             .name = lef_prop->propName(),
             .data_type = std::string(1, lef_prop->dataType()),
@@ -1629,7 +1777,7 @@ namespace le
         if (lef_prop->hasString())
             def.default_string = lef_prop->string();
 
-        reader->technology_->property_definitions.push_back(std::move(def));
+        reader->root_->create_property_definition(std::move(def));
 
         return 0;
     }

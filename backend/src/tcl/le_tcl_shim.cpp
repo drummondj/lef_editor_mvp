@@ -271,15 +271,7 @@ void set_session_handle(long long handle_address)
     injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
 }
 
-// --- Terminal ---
-
-const char *create_terminal_cmd(long long abstract_id, const char *name, int direction)
-{
-    LeTerminalId id = le_create_terminal(session(), unpack<LeAbstractId>(abstract_id), name, direction);
-    if (id.index == UINT32_MAX)
-        return return_string("");
-    return return_string(format_terminal_id(name));
-}
+// --- Terminal (create_terminal_cmd is generated) ---
 
 int set_terminal_name(const char *id, const char *name)
 {
@@ -296,30 +288,14 @@ int delete_terminal(const char *id)
     return le_delete_terminal(session(), resolve_terminal_id(id));
 }
 
-// --- TerminalPort ---
-
-const char *create_terminal_port_cmd(const char *terminal_id)
-{
-    LeTerminalPortId id = le_create_terminal_port(session(), resolve_terminal_id(terminal_id));
-    if (id.index == UINT32_MAX)
-        return return_string("");
-    return return_string(format_terminal_port_id(id));
-}
+// --- TerminalPort (create_terminal_port_cmd is generated) ---
 
 int delete_terminal_port(const char *id)
 {
     return le_delete_terminal_port(session(), resolve_terminal_port_id(id));
 }
 
-// --- Obstruction ---
-
-const char *create_obstruction_cmd(long long abstract_id)
-{
-    LeObstructionId id = le_create_obstruction(session(), unpack<LeAbstractId>(abstract_id));
-    if (id.index == UINT32_MAX)
-        return return_string("");
-    return return_string(format_obstruction_id(id));
-}
+// --- Obstruction (create_obstruction_cmd is generated) ---
 
 int delete_obstruction(const char *id)
 {
@@ -333,23 +309,10 @@ int update_abstract_boundary_cmd(long long abstract_id, const double *points_um,
     return le_update_abstract_boundary(session(), unpack<LeAbstractId>(abstract_id), points_um, point_coord_count);
 }
 
-// --- Shape ---
-
-const char *create_terminal_port_shape_cmd(const char *terminal_port_id, const char *layer_name)
-{
-    LeShapeId id = le_create_terminal_port_shape(session(), resolve_terminal_port_id(terminal_port_id), layer_name);
-    if (id.index == UINT32_MAX)
-        return return_string("");
-    return return_string(format_shape_id(id));
-}
-
-const char *create_obstruction_shape_cmd(const char *obstruction_id, const char *layer_name)
-{
-    LeShapeId id = le_create_obstruction_shape(session(), resolve_obstruction_id(obstruction_id), layer_name);
-    if (id.index == UINT32_MAX)
-        return return_string("");
-    return return_string(format_shape_id(id));
-}
+// --- Shape (create_shape_cmd is generated - unifies the former
+// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split into
+// one function taking both parent tokens, exactly one of which must
+// resolve) ---
 
 const char *shape_layer_name(const char *id)
 {

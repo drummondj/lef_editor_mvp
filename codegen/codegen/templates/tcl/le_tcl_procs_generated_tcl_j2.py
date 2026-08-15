@@ -82,4 +82,41 @@ proc get_{{plural}} {args} {
     return [lsort -unique $result]
 }
 {% endfor %}
+
+# --- create_<type> - `create_<type> [-flag value...]`, one flag per
+# scalar field plus one per parent (a friendly-id token, e.g. `-abstract
+# abstract:0` - see api_declarations_inc_j2's own comment for the field-
+# scope/optionality conventions this follows uniformly). A multi-parent
+# class (e.g. Shape's -terminal_port/-obstruction) requires exactly one
+# of its parent flags, checked here before calling down - same "exactly
+# one" rule create_<type>_cmd's own C++ body re-checks (defense in depth,
+# not redundant: a caller could reach the *_cmd form directly). ---
+{% for klass in classes %}
+{%- set snake = klass.to_snake_case() %}
+{%- set parent_fields = klass.get_parent_fields() %}
+proc create_{{snake}} {args} {
+    array set opts {{'{'}}{{klass.create_tcl_flag_defaults()}}{{'}'}}
+    foreach {flag value} $args {
+        if {![info exists opts($flag)]} {
+            error "create_{{snake}}: unknown flag $flag"
+        }
+        set opts($flag) $value
+    }
+    {%- if parent_fields|length > 1 %}
+    set provided_parents 0
+    {%- for pf in parent_fields %}
+    if {$opts(-{{pf.name}}) ne {}} { incr provided_parents }
+    {%- endfor %}
+    if {$provided_parents != 1} {
+        error "create_{{snake}}: exactly one of {% for pf in parent_fields %}-{{pf.name}}{% if not loop.last %}/{% endif %}{% endfor %} is required"
+    }
+    {%- endif %}
+    foreach required {{'{'}}{{klass.create_tcl_required_flags()}}{{'}'}} {
+        if {$opts($required) eq {}} {
+            error "create_{{snake}}: $required is required"
+        }
+    }
+    return [create_{{snake}}_cmd {{klass.create_tcl_call_args()}}]
+}
+{% endfor %}
 """
