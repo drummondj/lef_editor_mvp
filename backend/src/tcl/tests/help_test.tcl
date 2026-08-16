@@ -111,6 +111,31 @@ check "complete_command dot-path completion outside get_properties/report_proper
 check "complete_command dot-path completion with no resolvable seed token" \
     {} [complete_command {get_properties .lay}]
 
+# --- complete_command: dot-path completion inside a get_<type> command's
+# own -filter value (this section's own request) - seeded from
+# ::get_command_class (the command's own class), not a friendly-id
+# token, since a -filter expression never has one. Every test line here
+# is built via `set line "..."` (double-quoted, not {}-quoted) since the
+# partial input being completed is deliberately an *unbalanced* brace
+# (e.g. "-filter {.dir", the opening brace with no close yet) - writing
+# that literally as a {}-quoted Tcl argument wouldn't parse. A returned
+# candidate that itself starts with that same unbalanced "{" is, for the
+# same reason, not test-inspectable via `in`/`llength`/`lindex` (Tcl
+# list operations - it isn't a well-formed list element on its own), so
+# these compare complete_command's own result directly as a plain string
+# via `check`, not list membership.
+
+check "complete_command completes a property path right after -filter's own opening brace" \
+    "{.direction" [complete_command "get_terminals -filter {.dir"]
+check "complete_command completes a chained-hop path inside -filter" \
+    "{.terminal.name" [complete_command "get_terminal_ports -filter {.terminal.na"]
+check "complete_command completes a later segment of one -filter expression" \
+    ".direction" [complete_command "get_terminals -filter {.direction == INPUT || .dir"]
+check "complete_command -filter dot-path completion is scoped to -filter's own value" \
+    {} [complete_command "get_terminals -name IN0 .dir"]
+check "complete_command -filter dot-path completion never fires for a command with no -filter flag" \
+    {} [complete_command "create_terminal -filter {.dir"]
+
 # --- generate_command_docs ---
 
 set docs [generate_command_docs]

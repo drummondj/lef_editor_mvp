@@ -50,6 +50,19 @@ array set ::property_hops {
 {%- endfor %}
 }
 
+# Maps a get_<type> command's own name to its class's ::property_scalars/
+# ::property_hops key - complete_command's (le_tcl_procs.tcl) own seed
+# for a dot-path typed inside that command's -filter value, e.g.
+# `get_terminals -filter {.` completes against Terminal's own properties
+# with no friendly-id token needed anywhere on the line (unlike
+# get_properties/report_properties, whose dot-paths take a token
+# argument directly and seed from *that* instead).
+array set ::get_command_class {
+{%- for klass in classes %}
+    get_{{klass.tcl_plural_snake_case()}} {{klass.to_snake_case()}}
+{%- endfor %}
+}
+
 # --- Current-instance access ---
 {% for klass in current_access_classes %}
 # Sets the current {{klass.name}} (see current_{{klass.to_snake_case()}} to read it back) - every

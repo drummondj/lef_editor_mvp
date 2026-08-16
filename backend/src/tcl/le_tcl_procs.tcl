@@ -134,6 +134,19 @@ proc man {name} {
 # candidate") stays uniform across every completion kind. Pure
 # static-metadata lookup (::command_help/::property_scalars/
 # ::property_hops) - never runs the command/query being completed.
+#
+# Always returns via `join` (a plain space-separated string), never a
+# raw Tcl list value directly - a property-path candidate can itself
+# start with an unbalanced "{" (see the -filter branch below), and a
+# real Tcl list's own canonical string form backslash-escapes an
+# unbalanced brace inside an element to stay re-parseable (harmless
+# to Tcl itself, but this crosses into the GUI console as plain text via
+# Tcl_Eval's own string result - see flutter_plugin's LeTclConsole/
+# LeTclBridge - where a naive caller splitting on whitespace would then
+# see a literal, wrong leading backslash). `join`'s output has no such
+# escaping (it's a flat concatenation, not a list's own string
+# representation), so the plain-text contract stays exactly what every
+# caller (this file's own tests, the GUI) actually relies on.
 proc complete_command {line} {
     set tokens [regexp -all -inline {\S+} $line]
     set ends_with_space [expr {
@@ -144,7 +157,7 @@ proc complete_command {line} {
         # Completing the command name itself - nothing typed yet, or
         # exactly one still-partial token with no trailing space.
         set partial [expr {[llength $tokens] == 0 ? "" : [lindex $tokens end]}]
-        return [lsort [lsearch -all -inline -glob [dict keys $::command_help] "${partial}*"]]
+        return [join [lsort [lsearch -all -inline -glob [dict keys $::command_help] "${partial}*"]]]
     }
 
     set command_name [lindex $tokens 0]
@@ -162,39 +175,90 @@ proc complete_command {line} {
         foreach opt [dict get $::command_help $command_name options] {
             lappend flags [lindex $opt 0]
         }
-        return [lsort [lsearch -all -inline -glob $flags "${partial}*"]]
+        return [join [lsort [lsearch -all -inline -glob $flags "${partial}*"]]]
     }
 
-    if {[string index $partial 0] eq "." && $command_name in {get_properties report_properties}} {
-        return [complete_property_path $complete_tokens $partial]
+    # A dot-path can be completed in two different argument shapes:
+    # get_properties/report_properties take one bare (each one always
+    # its own whitespace-delimited token), while a get_<type> command's
+    # own -filter expression embeds one or more inside a single braced
+    # list argument, e.g. -filter {.direction == INPUT}. That opening
+    # brace glues onto whatever follows it with no space (this
+    # tokenizer only splits on whitespace), so the very first segment
+    # arrives here as one token starting with a brace, not a dot -
+    # strip any leading braces before checking for the dot both shapes
+    # share, and remember them to re-prepend to every candidate, so a
+    # candidate is still a full replacement for the actual token being
+    # typed, braces included.
+    set brace_prefix ""
+    set dot_partial $partial
+    while {[string index $dot_partial 0] eq "\{"} {
+        append brace_prefix "\{"
+        set dot_partial [string range $dot_partial 1 end]
+    }
+
+    if {[string index $dot_partial 0] eq "."} {
+        set class_key {}
+        if {$command_name in {get_properties report_properties}} {
+            set class_key [_property_path_seed_class $complete_tokens]
+        } elseif {[info exists ::get_command_class($command_name)]
+                && [_partial_is_inside_filter_value $complete_tokens]} {
+            set class_key $::get_command_class($command_name)
+        }
+        if {$class_key ne {}} {
+            set candidates {}
+            foreach candidate [_property_path_candidates $class_key $dot_partial] {
+                lappend candidates "${brace_prefix}${candidate}"
+            }
+            return [join $candidates]
+        }
     }
 
     return {}
 }
 
-# Dot-hop property-path completion helper behind complete_command above.
-# `complete_tokens` is every already-typed token on the line (including
-# the command name); `partial` is the .-prefixed path fragment currently
-# being completed (e.g. ".terminal_port.na"). Seeds the walk from the
-# most recent earlier token matching a friendly-id token (kind:value),
-# then follows each already-typed hop segment through ::property_hops
-# one at a time - an unresolvable segment yields no candidates (an
-# invalid path so far), matching resolve_property_path's own error
-# behavior. Every returned candidate is the *full* path (resolved prefix
-# + matched leaf/hop name), not just the trailing segment, so
-# complete_command's "replace the last token" contract stays uniform.
-proc complete_property_path {complete_tokens partial} {
-    set class_key {}
+# Whether the partial token currently being completed is inside a
+# `-filter <expr>` value, for complete_command's own get_<type> branch
+# above - true iff the most recent already-typed `-`-prefixed token
+# (scanning backward) is literally "-filter", not some other flag (whose
+# own value we're still inside) or a filter-expression token that merely
+# starts with "-" (e.g. a negative number literal - a rare, accepted
+# miss: this degrades to "no completion offered", never a wrong one).
+proc _partial_is_inside_filter_value {complete_tokens} {
     foreach token [lreverse $complete_tokens] {
-        if {[regexp {^([a-z_]+):} $token whole_match prefix] && [info exists ::property_scalars($prefix)]} {
-            set class_key $prefix
-            break
+        if {[string index $token 0] eq "-"} {
+            return [expr {$token eq "-filter"}]
         }
     }
-    if {$class_key eq {}} {
-        return {}
-    }
+    return 0
+}
 
+# The dot-path completion seed for get_properties/report_properties -
+# the most recent earlier token (scanning backward) matching a
+# friendly-id token (kind:value), or "" if none does. get_<type>'s own
+# -filter branch above needs no scan at all: ::get_command_class already
+# names its class directly.
+proc _property_path_seed_class {complete_tokens} {
+    foreach token [lreverse $complete_tokens] {
+        if {[regexp {^([a-z_]+):} $token whole_match prefix] && [info exists ::property_scalars($prefix)]} {
+            return $prefix
+        }
+    }
+    return {}
+}
+
+# Dot-hop property-path completion, given the class already known to
+# start from (get_properties/report_properties's own friendly-id-token
+# seed via _property_path_seed_class, or a get_<type> command's own
+# class via ::get_command_class) and the .-prefixed path fragment
+# currently being completed (e.g. ".terminal_port.na"). Follows each
+# already-typed hop segment through ::property_hops one at a time - an
+# unresolvable segment yields no candidates (an invalid path so far),
+# matching resolve_property_path's own error behavior. Every returned
+# candidate is the *full* path (resolved prefix + matched leaf/hop
+# name), not just the trailing segment, so complete_command's "replace
+# the last token" contract stays uniform.
+proc _property_path_candidates {class_key partial} {
     # partial always starts with "." - drop it, then split on "." to get
     # every already-complete hop segment plus the final (possibly empty)
     # segment still being typed.
