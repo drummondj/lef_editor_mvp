@@ -209,16 +209,6 @@ class _PropertyViewerState extends State<PropertyViewer> {
   }
 }
 
-String _kindLabel(LeObjectKind kind) => switch (kind) {
-  LeObjectKind.LE_OBJECT_KIND_LIBRARY => "Library",
-  LeObjectKind.LE_OBJECT_KIND_DESIGN => "Design",
-  LeObjectKind.LE_OBJECT_KIND_ABSTRACT => "Abstract",
-  LeObjectKind.LE_OBJECT_KIND_TERMINAL => "Terminal",
-  LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT => "TerminalPort",
-  LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION => "Obstruction",
-  LeObjectKind.LE_OBJECT_KIND_SHAPE => "Shape",
-};
-
 /// [ref]'s own TCL object token, in exactly the format the TCL API's
 /// friendly ids use (backend/src/tcl/generated/le_tcl_shim_generated.inc):
 /// `"<kind>:<name>"` for the three name-keyed classes (Library/Design/
