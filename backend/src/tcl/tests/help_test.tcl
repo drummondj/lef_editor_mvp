@@ -76,6 +76,20 @@ check_contains "create_terminal -help mentions -direction" $create_help "-direct
 set update_help [update_terminal bogus_id -help]
 check_contains "update_terminal <id> -help never touches <id>" $update_help "update_terminal"
 
+# Regression: update_<type> takes a *mandatory* leading positional (id),
+# so calling it as bare `update_<type> -help` with no id at all binds
+# "-help" to id, leaving args empty - a real bug where this fell through
+# to "at least one -flag is required" instead of returning the usage.
+set update_help_no_id [update_terminal -help]
+check_contains "update_terminal -help (no id at all) still returns its own usage" \
+    $update_help_no_id "update_terminal"
+
+# Same bug, same fix, in the hand-written open_design (its own leading
+# positional is `name`, not `id`).
+set open_design_help [open_design -help]
+check_contains "open_design -help (no name at all) still returns its own usage" \
+    $open_design_help "open_design"
+
 # --- registration covers every generated command ---
 
 check_true "get_terminals is registered with real options" \

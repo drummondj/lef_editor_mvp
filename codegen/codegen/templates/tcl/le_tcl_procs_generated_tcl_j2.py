@@ -206,11 +206,16 @@ register_command_help create_{{snake}} "{{klass.create_tcl_usage()}}" "{{klass.t
 # (possibly-changed, e.g. after a rename) friendly id token. `-help`
 # (UPDATES.md item 20) is checked before the "at least one flag"
 # requirement below, so `update_<type> <id> -help` works even with no
-# other flags given. ---
+# other flags given - and also checked against `id` itself, not just
+# `args`: `update_<type>` takes a *mandatory* leading positional (`id`),
+# so calling it as bare `update_<type> -help` (no real id supplied at
+# all) binds "-help" to `id`, leaving `args` empty - a real bug found
+# this way (only checking `args` silently fell through to the
+# "at least one -flag is required" error instead). ---
 {% for klass in classes %}
 {%- set snake = klass.to_snake_case() %}
 proc update_{{snake}} {id args} {
-    if {[lsearch -exact $args "-help"] >= 0} {
+    if {$id eq "-help" || [lsearch -exact $args "-help"] >= 0} {
         return "{{klass.update_tcl_usage()}}"
     }
     if {[llength $args] == 0} {

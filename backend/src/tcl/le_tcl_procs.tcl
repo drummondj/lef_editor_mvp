@@ -110,12 +110,26 @@ proc man {name} {
     if {[llength $options] > 0} {
         lappend lines ""
         lappend lines "Options:"
+        # Each option's own "<flag> <type> (required/optional)" label
+        # varies in length, so build them all first and pad every one to
+        # the longest before appending its description - otherwise the
+        # description column starts at a different place on every line.
+        set labels {}
         foreach opt $options {
             lassign $opt flag meta
             set type [dict get $meta type]
             set required [expr {[dict get $meta required] ? "required" : "optional"}]
-            set desc [dict get $meta description]
-            lappend lines "  $flag <$type> ($required) - $desc"
+            lappend labels "$flag <$type> ($required)"
+        }
+        set max_len 0
+        foreach label $labels {
+            if {[string length $label] > $max_len} {
+                set max_len [string length $label]
+            }
+        }
+        foreach opt $options label $labels {
+            set desc [dict get [lindex $opt 1] description]
+            lappend lines [format "  %-*s  %s" $max_len $label $desc]
         }
     }
     return [join $lines "\n"]
@@ -386,7 +400,12 @@ register_command_help set_viewport_size \
 # project yet (see le_tcl_shim.hpp's design_abstract_id comment for the
 # same caveat).
 proc open_design {name args} {
-    if {[lsearch -exact $args "-help"] >= 0} {
+    # $name is checked too, not just $args: open_design takes a
+    # *mandatory* leading positional (name), so calling it as bare
+    # `open_design -help` (no real design name supplied at all) binds
+    # "-help" to $name, leaving $args empty - the same class of bug
+    # found (and fixed the same way) in every generated update_<type>.
+    if {$name eq "-help" || [lsearch -exact $args "-help"] >= 0} {
         return "open_design <name> \[-view abstract\] \[-help\] - Selects <name>'s Design as this session's current view"
     }
     array set opts {-view abstract}
