@@ -209,6 +209,20 @@ class _TerminalState extends State<Terminal> {
         _completionSuggestions = candidates;
       });
     }
+    // The input row (and the hint that now renders right below it for
+    // the multi-candidate case) can already be scrolled out of view by
+    // that point if the scrollback above it is tall enough - e.g. right
+    // after any long-output command - with nothing else to bring it back
+    // on screen, this looked exactly like "Tab does nothing" even though
+    // completion ran and updated state correctly (a real bug: this call
+    // was dropped when the multi-candidate case stopped appending to
+    // _lines - see _completionSuggestions - since _lines.addAll used to
+    // be paired with it here).
+    _scrollToEnd();
+    // Tab can fire while focus is on the scrollback (see build()'s own
+    // comment) - bring it back to the input either way, so the user can
+    // keep typing immediately without an extra click.
+    _inputFocusNode.requestFocus();
   }
 
   // Lays `items` out in justified columns, like a shell's own
@@ -276,24 +290,50 @@ class _TerminalState extends State<Terminal> {
     _inputController.clear();
     _inputController.text = _commandHistory[index];
     _currentHistoryIndex = index;
+    // Same reasoning as _completeCommand's own trailing requestFocus -
+    // arrow-key history recall can also fire while focus is on the
+    // scrollback.
+    _inputFocusNode.requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        child: Column(
-          crossAxisAlignment: .stretch,
-          children: [
-            if (_lines.isNotEmpty)
-              KeyboardListener(
-                focusNode: FocusNode(),
-                // onKeyEvent: (value) {
-                //   _inputFocusNode.requestFocus();
-                // },
-                child: SelectableText.rich(
+    // CallbackShortcuts wraps the *whole* pane, scrollback included, not
+    // just the input field - it used to wrap only the TextField, which
+    // meant Tab/Enter/history stopped working the moment focus moved
+    // anywhere else in this widget, most commonly after clicking into
+    // the scrollback to select/copy some of it (report_properties's own
+    // output is exactly the kind of thing worth copying - a real bug
+    // report traced to this: "after I run report_properties, command
+    // completion stops working" was really "after I click the output to
+    // select it"). Shortcuts/Actions resolve from wherever focus
+    // currently sits up through its ancestors, so binding here instead
+    // catches every one of these keys regardless of which descendant -
+    // the input or the scrollback's own SelectableText - actually holds
+    // focus; each handler still explicitly returns focus to the input
+    // afterward so typing resumes immediately either way.
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.arrowUp): () => _history(-1),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+            _history(1),
+        const SingleActivator(LogicalKeyboardKey.enter): () => _submit(),
+        const SingleActivator(LogicalKeyboardKey.tab): () =>
+            _completeCommand(),
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          setState(() => _completionSuggestions = null);
+          _inputFocusNode.requestFocus();
+        },
+      },
+      child: Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          child: Column(
+            crossAxisAlignment: .stretch,
+            children: [
+              if (_lines.isNotEmpty)
+                SelectableText.rich(
                   scrollPhysics: NeverScrollableScrollPhysics(),
                   TextSpan(
                     style: DefaultTextStyle.of(context).style,
@@ -302,26 +342,12 @@ class _TerminalState extends State<Terminal> {
                         .toList(),
                   ),
                 ),
-              ),
-            Row(
-              mainAxisSize: .min,
-              crossAxisAlignment: .start,
-              children: [
-                Text("$prompt % "),
-                Expanded(
-                  child: CallbackShortcuts(
-                    bindings: <ShortcutActivator, VoidCallback>{
-                      const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-                          _history(-1),
-                      const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-                          _history(1),
-                      const SingleActivator(LogicalKeyboardKey.enter): () =>
-                          _submit(),
-                      const SingleActivator(LogicalKeyboardKey.tab): () =>
-                          _completeCommand(),
-                      const SingleActivator(LogicalKeyboardKey.escape): () =>
-                          setState(() => _completionSuggestions = null),
-                    },
+              Row(
+                mainAxisSize: .min,
+                crossAxisAlignment: .start,
+                children: [
+                  Text("$prompt % "),
+                  Expanded(
                     child: TextField(
                       controller: _inputController,
                       focusNode: _inputFocusNode,
@@ -340,20 +366,20 @@ class _TerminalState extends State<Terminal> {
                       textAlignVertical: .top,
                     ),
                   ),
-                ),
-              ],
-            ),
-            if (_completionSuggestions != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 16, top: 2),
-                child: Text(
-                  _formatColumns(_completionSuggestions!).join('\n'),
-                  style: DefaultTextStyle.of(
-                    context,
-                  ).style.copyWith(color: Colors.white54),
-                ),
+                ],
               ),
-          ],
+              if (_completionSuggestions != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 2),
+                  child: Text(
+                    _formatColumns(_completionSuggestions!).join('\n'),
+                    style: DefaultTextStyle.of(
+                      context,
+                    ).style.copyWith(color: Colors.white54),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
