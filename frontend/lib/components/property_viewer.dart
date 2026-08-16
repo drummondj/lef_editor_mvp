@@ -17,16 +17,17 @@ class _PropertyViewerState extends State<PropertyViewer> {
   String _filter = '';
   bool _showHiddenProperties = false;
 
-  // Database-hierarchy navigation (UPDATES.md 7.2's Property Viewer
-  // redesign) - purely local widget state, entirely independent of
-  // LeProvider/canvas selection. `_breadcrumb.last` is the ref currently
-  // displayed; clicking a parent/child link only ever pushes/truncates
-  // this list via setState (see _navigateTo/_navigateToBreadcrumbIndex) -
-  // it never calls into anything that could mutate canvas selection.
-  // Reset to `[selectedObjects[_currentIndex]]` only when the outer pager
+  // Database-hierarchy navigation - purely local widget state, entirely
+  // independent of LeProvider/canvas selection. `_hierarchy` is the
+  // selected object's own ancestor chain, root (Library) first, leaf
+  // last - the tree box renders exactly this list, indented by position.
+  // `_currentRef` is whichever entry the user last clicked (defaults to
+  // the leaf); it's what ObjectDetail's DataTable shows properties for.
+  // Reset to the selected object's own chain only when the outer pager
   // index or the underlying selection itself changes (detected in
-  // _syncBreadcrumb, called once per build) - never on a link click.
-  List<LeObjectRef> _breadcrumb = const [];
+  // _syncHierarchy, called once per build) - never on a tree click.
+  List<LeObjectRef> _hierarchy = const [];
+  LeObjectRef? _currentRef;
   List<LeObjectRef> _lastSelectedObjects = const [];
   int _lastCurrentIndex = -1;
 
@@ -47,36 +48,53 @@ class _PropertyViewerState extends State<PropertyViewer> {
     super.dispose();
   }
 
-  void _syncBreadcrumb(List<LeObjectRef> selectedObjects) {
+  void _syncHierarchy(LeProvider provider, List<LeObjectRef> selectedObjects) {
     if (_currentIndex >= selectedObjects.length) {
       _currentIndex = 0;
     }
-    final selectionChanged = !listEquals(
-      selectedObjects,
-      _lastSelectedObjects,
-    );
+    final selectionChanged = !listEquals(selectedObjects, _lastSelectedObjects);
     final indexChanged = _currentIndex != _lastCurrentIndex;
-    _lastSelectedObjects = selectedObjects;
+    // A defensive copy, not just `_lastSelectedObjects = selectedObjects` -
+    // LeProvider.selectedObjects returns its own backing list by
+    // reference (never rebuilt, just cleared+refilled in place on every
+    // refreshSelection()), so storing that same reference here would make
+    // `_lastSelectedObjects` silently track every future selection change
+    // too, and listEquals above would then always see two aliases of the
+    // identical, already-current list - selectionChanged would never be
+    // true again after the first selection.
+    _lastSelectedObjects = List<LeObjectRef>.of(selectedObjects);
     _lastCurrentIndex = _currentIndex;
 
     if (selectedObjects.isEmpty) {
-      _breadcrumb = const [];
+      _hierarchy = const [];
+      _currentRef = null;
       return;
     }
-    if (selectionChanged || indexChanged || _breadcrumb.isEmpty) {
-      _breadcrumb = [selectedObjects[_currentIndex]];
+    if (selectionChanged || indexChanged || _hierarchy.isEmpty) {
+      _jumpTo(provider, selectedObjects[_currentIndex]);
     }
   }
 
-  void _navigateTo(LeObjectRef ref) {
-    setState(() {
-      _breadcrumb = [..._breadcrumb, ref];
-    });
+  /// Rebuilds `_hierarchy` as `ref`'s own ancestor chain (root first) and
+  /// makes `ref` the currently-displayed node. Called both during build
+  /// (from _syncHierarchy, mutating fields directly - the old
+  /// breadcrumb's _syncBreadcrumb did the same) and from a "Children" row
+  /// tap in ObjectDetail's DataTable (wrapped in setState by the caller,
+  /// since that happens outside build).
+  void _jumpTo(LeProvider provider, LeObjectRef ref) {
+    final List<LeObjectRef> chain = [ref];
+    LeObjectRef parent = provider.objectParent(ref);
+    while (parent.isValid) {
+      chain.add(parent);
+      parent = provider.objectParent(parent);
+    }
+    _hierarchy = chain.reversed.toList(growable: false);
+    _currentRef = ref;
   }
 
-  void _navigateToBreadcrumbIndex(int index) {
+  void _selectNode(LeObjectRef ref) {
     setState(() {
-      _breadcrumb = _breadcrumb.sublist(0, index + 1);
+      _currentRef = ref;
     });
   }
 
@@ -85,7 +103,7 @@ class _PropertyViewerState extends State<PropertyViewer> {
     return Consumer<LeProvider>(
       builder: (context, provider, child) {
         final selectedObjects = provider.selectedObjects;
-        _syncBreadcrumb(selectedObjects);
+        _syncHierarchy(provider, selectedObjects);
 
         return Padding(
           padding: const EdgeInsets.all(8.0),
@@ -140,6 +158,12 @@ class _PropertyViewerState extends State<PropertyViewer> {
                           ),
                         ],
                       ),
+                      _HierarchyTree(
+                        provider: provider,
+                        hierarchy: _hierarchy,
+                        currentRef: _currentRef,
+                        onTapNode: _selectNode,
+                      ),
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4.0),
                         child: SearchBar(
@@ -168,15 +192,13 @@ class _PropertyViewerState extends State<PropertyViewer> {
                           ],
                         ),
                       ),
-                      _ObjectBreadcrumb(
-                        breadcrumb: _breadcrumb,
-                        onTapIndex: _navigateToBreadcrumbIndex,
-                      ),
                       ObjectDetail(
-                        ref: _breadcrumb.last,
+                        ref: _currentRef!,
                         filter: _filter,
                         showHiddenProperties: _showHiddenProperties,
-                        onNavigate: _navigateTo,
+                        onNavigateToChild: (ref) => setState(() {
+                          _jumpTo(provider, ref);
+                        }),
                       ),
                     ],
             ),
@@ -185,19 +207,6 @@ class _PropertyViewerState extends State<PropertyViewer> {
       },
     );
   }
-}
-
-/// A short, human-readable chip label for [ref] - its own "name" property
-/// if it has one (Library/Design/Terminal), else `Kind #index`.
-String _labelFor(LeProvider provider, LeObjectRef ref) {
-  if (!ref.isValid) return "?";
-  final properties = provider.objectProperties(ref);
-  for (final property in properties) {
-    if (property.name == "name") {
-      return property.value.toString();
-    }
-  }
-  return "${_kindLabel(ref.kind)} #${ref.index}";
 }
 
 String _kindLabel(LeObjectKind kind) => switch (kind) {
@@ -210,82 +219,168 @@ String _kindLabel(LeObjectKind kind) => switch (kind) {
   LeObjectKind.LE_OBJECT_KIND_SHAPE => "Shape",
 };
 
-/// Breadcrumb chip row (UPDATES.md 7.2) - one chip per entry in
-/// [breadcrumb], the last one visually current; tapping an earlier chip
-/// truncates back to it (see _PropertyViewerState._navigateToBreadcrumbIndex).
-/// Purely a rendering/tap-forwarding widget - owns no navigation state
-/// itself.
-class _ObjectBreadcrumb extends StatelessWidget {
-  final List<LeObjectRef> breadcrumb;
-  final ValueChanged<int> onTapIndex;
+/// [ref]'s own TCL object token, in exactly the format the TCL API's
+/// friendly ids use (backend/src/tcl/generated/le_tcl_shim_generated.inc):
+/// `"<kind>:<name>"` for the three name-keyed classes (Library/Design/
+/// Terminal), `"<kind>:<packed>"` for the four numeric ones, where
+/// `packed = (generation << 32) | index` - the same `pack<IdT>()` the
+/// shim uses to turn an {index, generation} handle into the integer a
+/// friendly id like `"shape:3"` embeds (see le_tcl_shim.cpp's
+/// format_numeric_friendly_id/pack). [LeObjectRef] already carries the
+/// same index/generation shape, so this never needs a round trip through
+/// TCL itself.
+String _tokenFor(LeProvider provider, LeObjectRef ref) {
+  if (!ref.isValid) return "?";
+  final int packed = (ref.generation << 32) | ref.index;
+  return switch (ref.kind) {
+    LeObjectKind.LE_OBJECT_KIND_LIBRARY => "library:${_nameOf(provider, ref)}",
+    LeObjectKind.LE_OBJECT_KIND_DESIGN => "design:${_nameOf(provider, ref)}",
+    LeObjectKind.LE_OBJECT_KIND_TERMINAL =>
+      "terminal:${_nameOf(provider, ref)}",
+    LeObjectKind.LE_OBJECT_KIND_ABSTRACT => "abstract:$packed",
+    LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT => "terminal_port:$packed",
+    LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION => "obstruction:$packed",
+    LeObjectKind.LE_OBJECT_KIND_SHAPE => "shape:$packed",
+  };
+}
 
-  const _ObjectBreadcrumb({required this.breadcrumb, required this.onTapIndex});
+String _nameOf(LeProvider provider, LeObjectRef ref) {
+  for (final property in provider.objectProperties(ref)) {
+    if (property.name == "name") {
+      return property.value.toString();
+    }
+  }
+  return "";
+}
+
+/// The box above the DataTable (replaces the old horizontal breadcrumb):
+/// [hierarchy] rendered as an indented tree, root (Library) at the top,
+/// the selected object at the bottom - tapping any row calls [onTapNode]
+/// to change which object's properties ObjectDetail shows, without
+/// altering the hierarchy itself. Always fully expanded - it's a single
+/// ancestor chain, never a branching tree, so there's nothing to
+/// collapse.
+class _HierarchyTree extends StatelessWidget {
+  const _HierarchyTree({
+    required this.provider,
+    required this.hierarchy,
+    required this.currentRef,
+    required this.onTapNode,
+  });
+
+  final LeProvider provider;
+  final List<LeObjectRef> hierarchy;
+  final LeObjectRef? currentRef;
+  final ValueChanged<LeObjectRef> onTapNode;
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<LeProvider>();
-    final lastIndex = breadcrumb.length - 1;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 4.0),
+      decoration: BoxDecoration(
+        border: Border.all(color: colorScheme.surfaceBright),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Column(
+        mainAxisSize: .min,
+        crossAxisAlignment: .start,
         children: [
-          for (final (index, ref) in breadcrumb.indexed) ...[
-            if (index > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: Icon(Icons.chevron_right, size: 14),
-              ),
-            index == lastIndex
-                ? Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      _labelFor(provider, ref),
-                      style: Theme.of(context).textTheme.bodyMedium
-                          ?.copyWith(fontWeight: FontWeight.bold),
-                    ),
-                  )
-                : InkWell(
-                    onTap: () => onTapIndex(index),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 2,
-                      ),
-                      child: Text(
-                        _labelFor(provider, ref),
-                        style: Theme.of(context).textTheme.bodyMedium
-                            ?.copyWith(
-                              color: Theme.of(context).colorScheme.primary,
-                              decoration: TextDecoration.underline,
-                            ),
-                      ),
-                    ),
-                  ),
-          ],
+          for (final (depth, ref) in hierarchy.indexed)
+            _HierarchyTreeRow(
+              label: _tokenFor(provider, ref),
+              depth: depth,
+              isCurrent: ref == currentRef,
+              onTap: () => onTapNode(ref),
+            ),
         ],
       ),
     );
   }
 }
 
-/// The currently-navigated-to object's own property table (UPDATES.md
-/// 7.2) plus its parent/child links - the same object hierarchy the
-/// database (and TCL's get_properties) exposes. Clicking a link calls
-/// [onNavigate] (forwarded up to _PropertyViewerState._navigateTo) -
-/// purely local navigation, never a provider mutation.
+class _HierarchyTreeRow extends StatelessWidget {
+  const _HierarchyTreeRow({
+    required this.label,
+    required this.depth,
+    required this.isCurrent,
+    required this.onTap,
+  });
+
+  final String label;
+  final int depth;
+  final bool isCurrent;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        color: isCurrent ? colorScheme.primaryContainer : null,
+        padding: EdgeInsets.only(
+          left: 8.0 + depth * 16.0,
+          right: 8,
+          top: 4,
+          bottom: 4,
+        ),
+        child: Row(
+          children: [
+            if (depth > 0) ...[
+              Icon(
+                Icons.subdirectory_arrow_right,
+                size: 14,
+                color: colorScheme.outline,
+              ),
+              const SizedBox(width: 4),
+            ],
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                  color: isCurrent ? colorScheme.onPrimaryContainer : null,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// [ref]'s own property table - every property of whichever node is
+/// currently selected in the hierarchy tree above, rendered in full in
+/// the DataTable. Its children (if any - e.g. an Obstruction's Shapes)
+/// get one extra row appended at the bottom, same table, with each child
+/// rendered as its own tappable token; tapping one calls
+/// [onNavigateToChild] (forwarded up to _PropertyViewerState._jumpTo) to
+/// re-anchor the hierarchy tree on it - purely local navigation, never a
+/// provider mutation.
 class ObjectDetail extends StatelessWidget {
+  // Some parents (an Obstruction/TerminalPort with many Shapes) can have
+  // hundreds of children - listing them all as tappable tokens would blow
+  // out the row's height and make the DataTable unusable, so only the
+  // first _maxChildLinks are rendered, with a "+N more" count instead of
+  // the rest.
+  static const int _maxChildLinks = 10;
+
   final LeObjectRef ref;
   final String filter;
   final bool showHiddenProperties;
-  final ValueChanged<LeObjectRef> onNavigate;
+  final ValueChanged<LeObjectRef> onNavigateToChild;
 
   const ObjectDetail({
     super.key,
     required this.ref,
     required this.filter,
     required this.showHiddenProperties,
-    required this.onNavigate,
+    required this.onNavigateToChild,
   });
 
   String _formatValue(LeSelectedProperty property) => switch (property.type) {
@@ -300,9 +395,7 @@ class ObjectDetail extends StatelessWidget {
     final provider = context.watch<LeProvider>();
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final String normalizedFilter = filter.trim().toLowerCase();
-    final List<LeSelectedProperty> properties = provider.objectProperties(
-      ref,
-    );
+    final List<LeSelectedProperty> properties = provider.objectProperties(ref);
     final Iterable<LeSelectedProperty> filteredProperties = properties
         .where(
           (property) =>
@@ -313,23 +406,28 @@ class ObjectDetail extends StatelessWidget {
               normalizedFilter.isEmpty ||
               property.name.toLowerCase().contains(normalizedFilter),
         );
-
-    final LeObjectRef parent = provider.objectParent(ref);
-    final List<LeObjectRef> children = provider.objectChildren(ref);
+    // objectChildren can mix kinds in one list (an Abstract's own
+    // Terminals and Obstructions together) - group by kind so each gets
+    // its own correctly-labeled row, rather than assuming every entry
+    // shares children.first's kind.
+    final Map<LeObjectKind, List<LeObjectRef>> childrenByKind = {};
+    for (final child in provider.objectChildren(ref)) {
+      childrenByKind.putIfAbsent(child.kind, () => []).add(child);
+    }
 
     return Column(
       mainAxisSize: .min,
       crossAxisAlignment: .center,
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4.0),
-          child: Center(
-            child: Text(
-              _kindLabel(ref.kind),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-        ),
+        // Padding(
+        //   padding: const EdgeInsets.symmetric(vertical: 4.0),
+        //   child: Center(
+        //     child: Text(
+        //       _kindLabel(ref.kind),
+        //       style: Theme.of(context).textTheme.titleMedium,
+        //     ),
+        //   ),
+        // ),
         // DataTable's dividerThickness only ever sets the row divider's
         // *width* - Flutter treats BorderSide(width: 0.0) as a special
         // "hairline" border that still renders as one physical pixel, not
@@ -341,6 +439,11 @@ class ObjectDetail extends StatelessWidget {
           child: DataTable(
             dividerThickness: 0.0,
             headingRowHeight: 0.0,
+            // The Children row's cell wraps a variable number of tappable
+            // tokens (see below), which can need more than one line - the
+            // default fixed row height would clip it.
+            dataRowMinHeight: 0.0,
+            dataRowMaxHeight: double.infinity,
             decoration: BoxDecoration(border: Border.all(width: 0)),
             columns: [
               DataColumn(label: Text("Property")),
@@ -364,79 +467,57 @@ class ObjectDetail extends StatelessWidget {
                     DataCell(SelectableText(_formatValue(property))),
                   ],
                 ),
+              for (final (groupIndex, group) in childrenByKind.entries.indexed)
+                DataRow(
+                  color: WidgetStateProperty.all(
+                    (filteredProperties.length + groupIndex).isEven
+                        ? colorScheme.surface
+                        : colorScheme.surfaceDim,
+                  ),
+                  cells: [
+                    DataCell(Text(_childLabel(group.key))),
+                    DataCell(
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          for (final child in group.value.take(_maxChildLinks))
+                            InkWell(
+                              onTap: () => onNavigateToChild(child),
+                              child: Text(
+                                _tokenFor(provider, child),
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: colorScheme.primary,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                              ),
+                            ),
+                          if (group.value.length > _maxChildLinks)
+                            Text(
+                              "truncated, +${group.value.length - _maxChildLinks} more",
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: colorScheme.outline),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
-        if (parent.isValid)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4.0),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: InkWell(
-                onTap: () => onNavigate(parent),
-                child: Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: "Parent: ",
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      TextSpan(
-                        text: _labelFor(provider, parent),
-                        style: Theme.of(context).textTheme.bodySmall
-                            ?.copyWith(
-                              color: colorScheme.primary,
-                              decoration: TextDecoration.underline,
-                            ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        if (children.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4.0),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    "${_childLabel(children.first.kind)} (${children.length}): ",
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  for (final child in children)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InkWell(
-                        onTap: () => onNavigate(child),
-                        child: Text(
-                          _labelFor(provider, child),
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(
-                                color: colorScheme.primary,
-                                decoration: TextDecoration.underline,
-                              ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
       ],
     );
   }
 
   String _childLabel(LeObjectKind kind) => switch (kind) {
-    LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT => "Ports",
-    LeObjectKind.LE_OBJECT_KIND_SHAPE => "Shapes",
-    LeObjectKind.LE_OBJECT_KIND_LIBRARY => "Libraries",
-    LeObjectKind.LE_OBJECT_KIND_DESIGN => "Designs",
-    LeObjectKind.LE_OBJECT_KIND_ABSTRACT => "Abstracts",
-    LeObjectKind.LE_OBJECT_KIND_TERMINAL => "Terminals",
-    LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION => "Obstructions",
+    LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT => "ports",
+    LeObjectKind.LE_OBJECT_KIND_SHAPE => "shapes",
+    LeObjectKind.LE_OBJECT_KIND_LIBRARY => "libraries",
+    LeObjectKind.LE_OBJECT_KIND_DESIGN => "designs",
+    LeObjectKind.LE_OBJECT_KIND_ABSTRACT => "abstracts",
+    LeObjectKind.LE_OBJECT_KIND_TERMINAL => "terminals",
+    LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION => "obstructions",
   };
 }

@@ -907,14 +907,69 @@ class LeEditor {
     );
   }
 
-  /// The children of [ref] most relevant to Property Viewer navigation:
-  /// a Terminal's own TerminalPorts, or a TerminalPort/Obstruction's own
-  /// Shapes. Empty for kinds with no child list wired up here yet
-  /// (Library/Design/Abstract) or none at all (Shape, the hierarchy's
-  /// leaf). Read-only: never mutates the current canvas selection.
+  /// The children of [ref] in the same database hierarchy [objectParent]
+  /// walks upward (Library -> Design -> Abstract -> Terminal/Obstruction
+  /// -> TerminalPort/Shape) - a Library's own Designs, a Design's own
+  /// Abstracts, an Abstract's own Terminals *and* Obstructions (mixed
+  /// kinds in one list - a caller grouping by kind, e.g. the Property
+  /// Viewer's one-row-per-kind children display, should partition on
+  /// each entry's own [LeObjectRef.kind] rather than assuming a single
+  /// kind throughout), a Terminal's own TerminalPorts, or a
+  /// TerminalPort/Obstruction's own Shapes. Empty for Shape, the
+  /// hierarchy's leaf. Read-only: never mutates the current canvas
+  /// selection.
   List<LeObjectRef> objectChildren(LeObjectRef ref) {
     _checkNotDisposed();
     switch (ref.kind) {
+      case LeObjectKind.LE_OBJECT_KIND_LIBRARY:
+        final libraryId = ffi.Struct.create<LeLibraryId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final count = _bindings.le_get_designs(
+          _handle,
+          libraryId,
+          ffi.nullptr,
+          ffi.nullptr,
+        );
+        return [
+          for (var i = 0; i < count; i++)
+            _designRef(_bindings.le_search_result_design_at(_handle, i)),
+        ];
+      case LeObjectKind.LE_OBJECT_KIND_DESIGN:
+        final designId = ffi.Struct.create<LeDesignId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final count = _bindings.le_get_abstracts(_handle, designId, ffi.nullptr);
+        return [
+          for (var i = 0; i < count; i++)
+            _abstractRef(_bindings.le_search_result_abstract_at(_handle, i)),
+        ];
+      case LeObjectKind.LE_OBJECT_KIND_ABSTRACT:
+        final abstractId = ffi.Struct.create<LeAbstractId>()
+          ..index = ref.index
+          ..generation = ref.generation;
+        final terminalCount = _bindings.le_get_terminals(
+          _handle,
+          abstractId,
+          ffi.nullptr,
+          ffi.nullptr,
+        );
+        final terminals = [
+          for (var i = 0; i < terminalCount; i++)
+            _terminalRef(_bindings.le_search_result_terminal_at(_handle, i)),
+        ];
+        final obstructionCount = _bindings.le_get_obstructions(
+          _handle,
+          abstractId,
+          ffi.nullptr,
+        );
+        final obstructions = [
+          for (var i = 0; i < obstructionCount; i++)
+            _obstructionRef(
+              _bindings.le_search_result_obstruction_at(_handle, i),
+            ),
+        ];
+        return [...terminals, ...obstructions];
       case LeObjectKind.LE_OBJECT_KIND_TERMINAL:
         final terminalId = ffi.Struct.create<LeTerminalId>()
           ..index = ref.index
@@ -956,13 +1011,34 @@ class LeEditor {
           for (var i = 0; i < count; i++)
             _shapeRef(_bindings.le_search_result_shape_at(_handle, i)),
         ];
-      case LeObjectKind.LE_OBJECT_KIND_LIBRARY:
-      case LeObjectKind.LE_OBJECT_KIND_DESIGN:
-      case LeObjectKind.LE_OBJECT_KIND_ABSTRACT:
       case LeObjectKind.LE_OBJECT_KIND_SHAPE:
         return const [];
     }
   }
+
+  LeObjectRef _designRef(LeDesignId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_DESIGN,
+    index: id.index,
+    generation: id.generation,
+  );
+
+  LeObjectRef _abstractRef(LeAbstractId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_ABSTRACT,
+    index: id.index,
+    generation: id.generation,
+  );
+
+  LeObjectRef _terminalRef(LeTerminalId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_TERMINAL,
+    index: id.index,
+    generation: id.generation,
+  );
+
+  LeObjectRef _obstructionRef(LeObstructionId id) => LeObjectRef(
+    kind: LeObjectKind.LE_OBJECT_KIND_OBSTRUCTION,
+    index: id.index,
+    generation: id.generation,
+  );
 
   LeObjectRef _terminalPortRef(LeTerminalPortId id) => LeObjectRef(
     kind: LeObjectKind.LE_OBJECT_KIND_TERMINAL_PORT,
