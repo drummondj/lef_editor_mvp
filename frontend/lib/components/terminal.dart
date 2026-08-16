@@ -135,6 +135,77 @@ class _TerminalState extends State<Terminal> {
     });
   }
 
+  // Tab-completion (UPDATES.md item 20 point 3's GUI side) - asks the
+  // backend's own complete_command (le_tcl_procs.tcl) for candidates
+  // completing whichever whitespace-delimited token is currently being
+  // typed (a command name, a -flag, or a .-prefixed property path - see
+  // that proc's own doc comment), then either splices the sole candidate
+  // in directly or, for more than one, lists them in the scrollback
+  // without touching the input - the same "single match completes,
+  // several just get listed" convention an interactive shell uses.
+  // Silent (does nothing) on zero candidates, an empty input, or a
+  // command still running - matches _submit()'s own guard.
+  Future<void> _completeCommand() async {
+    if (_running) return;
+    final text = _inputController.text;
+    if (text.trim().isEmpty) return;
+
+    // complete_command takes the whole line as one Tcl string argument -
+    // built here as a "..."-quoted literal (not {...}), since the
+    // partial line being typed can itself contain an unbalanced brace
+    // (e.g. "-rects {{0 0 1" mid-flag) that would break {...} grouping;
+    // "..." only needs its own four special characters escaped, the
+    // same set backend/codegen's tcl_dquote_escape() escapes server-side
+    // for the same reason.
+    final escaped = text
+        .replaceAll('\\', '\\\\')
+        .replaceAll('"', '\\"')
+        .replaceAll('\$', '\\\$')
+        .replaceAll('[', '\\[')
+        .replaceAll(']', '\\]');
+
+    String result;
+    try {
+      result = await _provider.runTclCommand('complete_command "$escaped"');
+    } catch (_) {
+      return;
+    }
+    final candidates = result.trim().isEmpty
+        ? const <String>[]
+        : result.trim().split(RegExp(r'\s+'));
+    if (candidates.isEmpty) return;
+
+    if (candidates.length == 1) {
+      final completed = _replaceLastToken(text, candidates.first);
+      setState(() {
+        _inputController.text = completed;
+        _inputController.selection = TextSelection.collapsed(
+          offset: completed.length,
+        );
+      });
+    } else {
+      setState(() {
+        _lines.add(candidates.join('  '));
+      });
+      _scrollToEnd();
+    }
+  }
+
+  // Splices `candidate` in place of whichever trailing, whitespace-
+  // delimited token of `text` is currently being typed - mirrors
+  // complete_command's own "every candidate is a full replacement for
+  // the last token" contract (le_tcl_procs.tcl) exactly, so this never
+  // needs to know whether that token was a command name, a flag, or a
+  // .-prefixed property path. Appends outright when `text` is empty or
+  // already ends in whitespace (nothing partial to replace).
+  String _replaceLastToken(String text, String candidate) {
+    final match = RegExp(r'\S+$').firstMatch(text);
+    if (match == null) {
+      return '$text$candidate';
+    }
+    return text.substring(0, match.start) + candidate;
+  }
+
   void _history(int by) {
     if (_commandHistory.isEmpty) {
       return;
@@ -194,6 +265,8 @@ class _TerminalState extends State<Terminal> {
                           _history(1),
                       const SingleActivator(LogicalKeyboardKey.enter): () =>
                           _submit(),
+                      const SingleActivator(LogicalKeyboardKey.tab): () =>
+                          _completeCommand(),
                     },
                     child: TextField(
                       controller: _inputController,
