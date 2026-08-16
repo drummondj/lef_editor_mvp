@@ -48,36 +48,62 @@ proc register_command_help {name usage description options} {
     dict set ::command_help $name [dict create usage $usage description $description options $options]
 }
 
-# `help ?pattern?` - one usage line per registered command whose name
-# matches `pattern` (Tcl `string match` glob syntax, default `*` - every
-# command), e.g. `help get_*` lists every search command's own usage
-# line. Returns the joined text (not puts - see le_tcl_procs.tcl's own
-# get_properties for why: usable both interactively and captured into a
-# variable).
+# `help ?pattern?` - one line per registered command whose name matches
+# `pattern` (Tcl `string match` glob syntax, default `*` - every
+# command), e.g. `help get_*` lists every search command. Just the bare
+# command name (no argument/flag syntax - see `man <name>` for that) and
+# its own description, names padded to the longest match so every
+# description column lines up. Returns the joined text (not puts - see
+# le_tcl_procs.tcl's own get_properties for why: usable both
+# interactively and captured into a variable).
 proc help {{pattern *}} {
     set names [lsort [dict keys $::command_help]]
     set matches [lsearch -all -inline -glob $names $pattern]
     if {[llength $matches] == 0} {
         return "help: no commands match \"$pattern\""
     }
+    set max_len 0
+    foreach name $matches {
+        if {[string length $name] > $max_len} {
+            set max_len [string length $name]
+        }
+    }
     set lines {}
     foreach name $matches {
-        lappend lines [dict get $::command_help $name usage]
+        set description [dict get $::command_help $name description]
+        lappend lines [format "%-*s  %s" $max_len $name $description]
     }
     return [join $lines "\n"]
 }
 
-# `man <name>` - the full registered page for one command: usage line,
-# blank line, description, then (if any options are registered) an
-# Options: table - one line per flag/positional with its type,
-# required/optional-ness, and description.
+# The `<command> <args...>` portion of a registered usage string, with
+# its own trailing ` - <description>` dropped - every usage string ends
+# with that suffix (see register_command_help's own callers), so man/
+# generate_command_docs below can show the syntax and the (fuller, not
+# truncated to one line) description as two distinct sections without
+# printing the same description text twice. Splits on the *first* " - "
+# - safe because no flag/type fragment a usage string's own syntax
+# portion ever contains that exact substring, only the description
+# suffix does.
+proc _usage_syntax {usage} {
+    set idx [string first " - " $usage]
+    if {$idx < 0} {
+        return $usage
+    }
+    return [string range $usage 0 [expr {$idx - 1}]]
+}
+
+# `man <name>` - the full registered page for one command: its own
+# `<command> <args...>` syntax line, blank line, description, then (if
+# any options are registered) an Options: table - one line per flag/
+# positional with its type, required/optional-ness, and description.
 proc man {name} {
     if {![dict exists $::command_help $name]} {
         error "man: no such command \"$name\" - see \[help\] for the full list"
     }
     set info [dict get $::command_help $name]
     set lines {}
-    lappend lines [dict get $info usage]
+    lappend lines [_usage_syntax [dict get $info usage]]
     lappend lines ""
     lappend lines [dict get $info description]
     set options [dict get $info options]
@@ -227,7 +253,7 @@ proc generate_command_docs {{path {}}} {
         set info [dict get $::command_help $name]
         lappend lines "## $name"
         lappend lines ""
-        lappend lines "`[dict get $info usage]`"
+        lappend lines "`[_usage_syntax [dict get $info usage]]`"
         lappend lines ""
         lappend lines [dict get $info description]
         set options [dict get $info options]

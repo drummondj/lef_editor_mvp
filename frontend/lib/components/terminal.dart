@@ -17,7 +17,7 @@ const String prompt = "le_shell";
 // thousands of shapes) shouldn't be able to dump megabytes of text into
 // the terminal's scrollback - truncate what's *displayed*, not the value
 // itself, so a script relying on the full result is unaffected.
-const int kMaxResultDisplayLength = 1000;
+const int kMaxResultDisplayLength = 10000;
 
 String _truncateForDisplay(String text) {
   if (text.length <= kMaxResultDisplayLength) return text;
@@ -185,10 +185,42 @@ class _TerminalState extends State<Terminal> {
       });
     } else {
       setState(() {
-        _lines.add(candidates.join('  '));
+        _lines.addAll(_formatColumns(candidates));
       });
       _scrollToEnd();
     }
+  }
+
+  // Lays `items` out in justified columns, like a shell's own
+  // multi-match completion listing - each column padded to the widest
+  // item plus a 2-space gutter, wrapped once a row would exceed a
+  // conventional 80-column terminal width. There's no real per-pixel
+  // measurement of this console's own pane here (it's one resizable
+  // pane of a docking layout, not the whole window), so 80 is an
+  // assumption, not a measurement - the same fallback width a shell's
+  // own completion menu uses when it can't detect the real terminal
+  // size either. Relies on the app's own monospace theme font
+  // (JetBrains Mono, see main.dart) for the padding to actually line up
+  // visually.
+  List<String> _formatColumns(List<String> items) {
+    final maxLen = items.map((item) => item.length).reduce(
+      (a, b) => a > b ? a : b,
+    );
+    final colWidth = maxLen + 2;
+    const terminalWidth = 80;
+    final columns = (terminalWidth / colWidth).floor().clamp(1, items.length);
+
+    final rows = <String>[];
+    for (var i = 0; i < items.length; i += columns) {
+      final rowItems = items.skip(i).take(columns).toList();
+      final row = StringBuffer();
+      for (var j = 0; j < rowItems.length; j++) {
+        final isLastInRow = j == rowItems.length - 1;
+        row.write(isLastInRow ? rowItems[j] : rowItems[j].padRight(colWidth));
+      }
+      rows.add(row.toString());
+    }
+    return rows;
   }
 
   // Splices `candidate` in place of whichever trailing, whitespace-
