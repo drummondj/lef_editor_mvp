@@ -334,6 +334,21 @@ if(SWIG_FOUND AND TCL_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/src/api/tests/fixtures/testcell.lef
     )
 
+    # Regression check for the integrated help system (UPDATES.md item 20 -
+    # src/tcl/tests/help_test.tcl): the ::command_help registry, help/man/
+    # complete_command/generate_command_docs, and the generated -help
+    # support for get_<type>/create_<type>/update_<type>. No LEF fixture -
+    # everything it exercises is either pure static schema metadata
+    # (complete_command's dot-path completion) or works before any LEF is
+    # ever read (registration itself).
+    add_test(
+        NAME le_tcl_help
+        COMMAND ${TCL_TCLSH}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/tests/help_test.tcl
+            $<TARGET_FILE:le_tcl>
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_procs.tcl
+    )
+
     # Phase 5 regression check (src/tcl/tests/crud_test.tcl) - exercises
     # the full Terminal/TerminalPort/Obstruction/Shape CRUD+search
     # surface and the coordinate-list typemap, against the same

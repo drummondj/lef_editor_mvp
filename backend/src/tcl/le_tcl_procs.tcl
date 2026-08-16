@@ -21,7 +21,243 @@
 
 set kInvalidId 4294967295
 
+# --- Help system (UPDATES.md item 20) ---
+#
+# ::command_help maps a command name to a {usage <str> description <str>
+# options <list>} dict - register_command_help below is the single write
+# path, called once per command right after its own `proc` definition.
+# Every generated command (get_<type>/create_<type>/update_<type>)
+# registers itself from generated/le_tcl_procs_generated.tcl, sourced
+# further down this file; every hand-written command below registers
+# itself directly, right after its own definition. help/man/
+# complete_command/generate_command_docs all read purely from this
+# registry - none of them re-derive metadata by invoking a command with
+# -help.
+#
+# An `options` entry is `{-flag {type T required R description {D}}}` (or
+# `{<positional> {...}}` for a plain positional parameter, which
+# documents the same way but is never treated as a `-`-flag by
+# complete_command's own flag-completion branch, since it doesn't start
+# with `-`). `required`/`type` are always present; `type` is a
+# human-readable label only (e.g. "str"/"int"/"token"/"Point..."), not
+# machine-validated here - real validation still happens inside each
+# command's own body, same as before this system existed.
+set ::command_help [dict create]
+
+proc register_command_help {name usage description options} {
+    dict set ::command_help $name [dict create usage $usage description $description options $options]
+}
+
+# `help ?pattern?` - one usage line per registered command whose name
+# matches `pattern` (Tcl `string match` glob syntax, default `*` - every
+# command), e.g. `help get_*` lists every search command's own usage
+# line. Returns the joined text (not puts - see le_tcl_procs.tcl's own
+# get_properties for why: usable both interactively and captured into a
+# variable).
+proc help {{pattern *}} {
+    set names [lsort [dict keys $::command_help]]
+    set matches [lsearch -all -inline -glob $names $pattern]
+    if {[llength $matches] == 0} {
+        return "help: no commands match \"$pattern\""
+    }
+    set lines {}
+    foreach name $matches {
+        lappend lines [dict get $::command_help $name usage]
+    }
+    return [join $lines "\n"]
+}
+
+# `man <name>` - the full registered page for one command: usage line,
+# blank line, description, then (if any options are registered) an
+# Options: table - one line per flag/positional with its type,
+# required/optional-ness, and description.
+proc man {name} {
+    if {![dict exists $::command_help $name]} {
+        error "man: no such command \"$name\" - see \[help\] for the full list"
+    }
+    set info [dict get $::command_help $name]
+    set lines {}
+    lappend lines [dict get $info usage]
+    lappend lines ""
+    lappend lines [dict get $info description]
+    set options [dict get $info options]
+    if {[llength $options] > 0} {
+        lappend lines ""
+        lappend lines "Options:"
+        foreach opt $options {
+            lassign $opt flag meta
+            set type [dict get $meta type]
+            set required [expr {[dict get $meta required] ? "required" : "optional"}]
+            set desc [dict get $meta description]
+            lappend lines "  $flag <$type> ($required) - $desc"
+        }
+    }
+    return [join $lines "\n"]
+}
+
+# `complete_command <line>` - candidate replacements for the
+# whitespace-delimited token currently being typed at the end of `line`
+# (a command name, a -flag, or a .-prefixed property path), as a sorted
+# Tcl list (empty if nothing matches or the token being completed isn't
+# one of those three kinds - e.g. a plain positional value like a
+# friendly-id token isn't attempted, since suggesting real object tokens
+# would mean actually running a query while the user is still typing,
+# not a safe/generic thing to do speculatively). Every candidate is a
+# *full* replacement for that last token, not just a suffix, so the
+# caller's own splice logic ("replace the last token with the chosen
+# candidate") stays uniform across every completion kind. Pure
+# static-metadata lookup (::command_help/::property_scalars/
+# ::property_hops) - never runs the command/query being completed.
+proc complete_command {line} {
+    set tokens [regexp -all -inline {\S+} $line]
+    set ends_with_space [expr {
+        [string length $line] > 0 && [string is space [string index $line end]]
+    }]
+
+    if {[llength $tokens] == 0 || (!$ends_with_space && [llength $tokens] == 1)} {
+        # Completing the command name itself - nothing typed yet, or
+        # exactly one still-partial token with no trailing space.
+        set partial [expr {[llength $tokens] == 0 ? "" : [lindex $tokens end]}]
+        return [lsort [lsearch -all -inline -glob [dict keys $::command_help] "${partial}*"]]
+    }
+
+    set command_name [lindex $tokens 0]
+    set partial [expr {$ends_with_space ? "" : [lindex $tokens end]}]
+    # Every already-complete token on the line, i.e. every token except
+    # the partial one currently being typed - all of $tokens when
+    # $ends_with_space (nothing partial yet), otherwise all but the last.
+    set complete_tokens [expr {$ends_with_space ? $tokens : [lrange $tokens 0 end-1]}]
+
+    if {[string index $partial 0] eq "-"} {
+        if {![dict exists $::command_help $command_name]} {
+            return {}
+        }
+        set flags {}
+        foreach opt [dict get $::command_help $command_name options] {
+            lappend flags [lindex $opt 0]
+        }
+        return [lsort [lsearch -all -inline -glob $flags "${partial}*"]]
+    }
+
+    if {[string index $partial 0] eq "." && $command_name in {get_properties report_properties}} {
+        return [complete_property_path $complete_tokens $partial]
+    }
+
+    return {}
+}
+
+# Dot-hop property-path completion helper behind complete_command above.
+# `complete_tokens` is every already-typed token on the line (including
+# the command name); `partial` is the .-prefixed path fragment currently
+# being completed (e.g. ".terminal_port.na"). Seeds the walk from the
+# most recent earlier token matching a friendly-id token (kind:value),
+# then follows each already-typed hop segment through ::property_hops
+# one at a time - an unresolvable segment yields no candidates (an
+# invalid path so far), matching resolve_property_path's own error
+# behavior. Every returned candidate is the *full* path (resolved prefix
+# + matched leaf/hop name), not just the trailing segment, so
+# complete_command's "replace the last token" contract stays uniform.
+proc complete_property_path {complete_tokens partial} {
+    set class_key {}
+    foreach token [lreverse $complete_tokens] {
+        if {[regexp {^([a-z_]+):} $token whole_match prefix] && [info exists ::property_scalars($prefix)]} {
+            set class_key $prefix
+            break
+        }
+    }
+    if {$class_key eq {}} {
+        return {}
+    }
+
+    # partial always starts with "." - drop it, then split on "." to get
+    # every already-complete hop segment plus the final (possibly empty)
+    # segment still being typed.
+    set segments [split [string range $partial 1 end] "."]
+    set final_segment [lindex $segments end]
+    set hop_segments [lrange $segments 0 end-1]
+
+    set resolved_prefix "."
+    foreach hop $hop_segments {
+        set next_key {}
+        if {[info exists ::property_hops($class_key)]} {
+            foreach pair $::property_hops($class_key) {
+                lassign $pair hop_name target_key
+                if {$hop_name eq $hop} {
+                    set next_key $target_key
+                    break
+                }
+            }
+        }
+        if {$next_key eq {}} {
+            return {}
+        }
+        set class_key $next_key
+        append resolved_prefix "${hop}."
+    }
+
+    set candidates {}
+    if {[info exists ::property_scalars($class_key)]} {
+        foreach name [lsearch -all -inline -glob $::property_scalars($class_key) "${final_segment}*"] {
+            lappend candidates "${resolved_prefix}${name}"
+        }
+    }
+    if {[info exists ::property_hops($class_key)]} {
+        foreach pair $::property_hops($class_key) {
+            set hop_name [lindex $pair 0]
+            if {[string match "${final_segment}*" $hop_name]} {
+                lappend candidates "${resolved_prefix}${hop_name}"
+            }
+        }
+    }
+    return [lsort $candidates]
+}
+
+# `generate_command_docs ?path?` - one Markdown string covering every
+# registered command (usage/description/options table), in name order;
+# if `path` is non-empty, also writes it there. Always returns the full
+# text either way. See backend's generate-tcl-docs skill for the
+# recipe that regenerates backend/TCL_COMMANDS.md from this.
+proc generate_command_docs {{path {}}} {
+    set lines {}
+    lappend lines "# TCL Command Reference"
+    lappend lines ""
+    lappend lines "Generated by generate_command_docs (le_tcl_procs.tcl) - do not edit by hand."
+    lappend lines ""
+    foreach name [lsort [dict keys $::command_help]] {
+        set info [dict get $::command_help $name]
+        lappend lines "## $name"
+        lappend lines ""
+        lappend lines "`[dict get $info usage]`"
+        lappend lines ""
+        lappend lines [dict get $info description]
+        set options [dict get $info options]
+        if {[llength $options] > 0} {
+            lappend lines ""
+            lappend lines "| Flag | Type | Required | Description |"
+            lappend lines "| --- | --- | --- | --- |"
+            foreach opt $options {
+                lassign $opt flag meta
+                set type [dict get $meta type]
+                set required [expr {[dict get $meta required] ? "yes" : "no"}]
+                set desc [dict get $meta description]
+                lappend lines "| \`$flag\` | \`$type\` | $required | $desc |"
+            }
+        }
+        lappend lines ""
+    }
+    set text [join $lines "\n"]
+    if {$path ne {}} {
+        set fh [open $path w]
+        puts $fh $text
+        close $fh
+    }
+    return $text
+}
+
 proc set_viewport_size {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "set_viewport_size -width <int> -height <int> \[-help\] - Sets the render viewport's pixel size"
+    }
     array set opts {-width {} -height {}}
     foreach {flag value} $args {
         if {![info exists opts($flag)]} {
@@ -34,6 +270,14 @@ proc set_viewport_size {args} {
     }
     return [set_viewport_size_cmd $opts(-width) $opts(-height)]
 }
+register_command_help set_viewport_size \
+    "set_viewport_size -width <int> -height <int> \[-help\] - Sets the render viewport's pixel size" \
+    "Sets the render viewport's pixel size (used by le_render_pixel_buffer)." \
+    {
+        {-width {type int required 1 description {Viewport width, in pixels}}}
+        {-height {type int required 1 description {Viewport height, in pixels}}}
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
 
 # --- Current view (UPDATES.md item 17) ---
 
@@ -52,6 +296,9 @@ proc set_viewport_size {args} {
 # project yet (see le_tcl_shim.hpp's design_abstract_id comment for the
 # same caveat).
 proc open_design {name args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "open_design <name> \[-view abstract\] \[-help\] - Selects <name>'s Design as this session's current view"
+    }
     array set opts {-view abstract}
     foreach {flag value} $args {
         if {![info exists opts($flag)]} {
@@ -79,6 +326,14 @@ proc open_design {name args} {
     }
     return $design_token
 }
+register_command_help open_design \
+    "open_design <name> \[-view abstract\] \[-help\] - Selects <name>'s Design as this session's current view" \
+    "Selects a Design by name as this session's current view - every subsequent get_<type> call's default (-of omitted) scope derives from it." \
+    {
+        {<name> {type str required 1 description {Name of the Design to open}}}
+        {-view {type str required 0 description {Only "abstract" is currently meaningful}}}
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
 
 # --- get_<type> (UPDATES.md item 19.1) ---
 #
@@ -169,10 +424,11 @@ proc default_to_unset {values} {
 # property_accessors_for_token (dispatches a friendly-id token to its
 # {count name value path} shim-function quadruplet by prefix, across
 # every TCL-readable class - not just library:/design:/abstract:/
-# terminal:/terminal_port:/obstruction:/shape:) is generated - see
-# generated/le_tcl_procs_generated.tcl and backend/CLAUDE.md's TCL
-# section. Never edit that file directly, regenerate via the regen-tcl
-# skill instead.
+# terminal:/terminal_port:/obstruction:/shape:) and the ::property_scalars/
+# ::property_hops dot-path completion tables (UPDATES.md item 20) are
+# generated - see generated/le_tcl_procs_generated.tcl and backend/
+# CLAUDE.md's TCL section. Never edit that file directly, regenerate via
+# the regen-tcl skill instead.
 source [file join [file dirname [info script]] generated le_tcl_procs_generated.tcl]
 
 # All properties for one token, as a dict - the shared building block
@@ -243,6 +499,13 @@ proc get_properties {tokens {property_names {}}} {
     }
     return $results
 }
+register_command_help get_properties \
+    "get_properties <tokens> ?property_names? - Reads one or more dotted property paths from one or more friendly-id tokens" \
+    "Reads every property, or a specific set of dotted property paths (.name, or a chained hop like .terminal.name), from one or more friendly-id tokens. No -help flag - see man get_properties for the full return-shape contract (single token/name collapse to a scalar, otherwise a list)." \
+    {
+        {<tokens> {type token... required 1 description {One friendly-id token, or a list of them (e.g. the result of [get_terminals])}}}
+        {<property_names> {type str... required 0 description {One dotted property path, or a list of them - omitted returns every property}}}
+    }
 
 # Pretty-prints every property of every token to stdout, one block per
 # token, names padded (within that token's own block) to align values.
@@ -262,6 +525,12 @@ proc report_properties {tokens} {
         puts ""
     }
 }
+register_command_help report_properties \
+    "report_properties <tokens> - Pretty-prints every property of every token to stdout" \
+    "Pretty-prints every property of every given friendly-id token to stdout, one aligned block per token. No -help flag or return value - see get_properties for a script-friendly (non-printing) equivalent." \
+    {
+        {<tokens> {type token... required 1 description {One friendly-id token, or a list of them}}}
+    }
 
 # --- Terminal (create_terminal/update_terminal are generated -
 # le_tcl_procs_generated.tcl) ---
@@ -287,6 +556,12 @@ proc shape_rects {id} {
     }
     return $result
 }
+register_command_help shape_rects \
+    "shape_rects <id> - Every rect on Shape <id>, as a list of {ll_x ll_y ur_x ur_y} (microns)" \
+    "Every rect on the given Shape, as a list of {ll_x ll_y ur_x ur_y} coordinate lists in microns." \
+    {
+        {<id> {type token required 1 description {A shape: friendly-id token}}}
+    }
 
 proc shape_polygons {id} {
     set result {}
@@ -301,6 +576,12 @@ proc shape_polygons {id} {
     }
     return $result
 }
+register_command_help shape_polygons \
+    "shape_polygons <id> - Every polygon on Shape <id>, as a list of point lists (microns)" \
+    "Every polygon on the given Shape, as a list of point lists (each a flat {x y x y ...} list, microns)." \
+    {
+        {<id> {type token required 1 description {A shape: friendly-id token}}}
+    }
 
 # --- GUI (Phase 6 - see TCL_EXPLORATION.md) ---
 
@@ -314,8 +595,17 @@ proc shape_polygons {id} {
 # silently no-op-ing so a caller typing `show_gui` learns why nothing
 # happened, not just that nothing did.
 proc show_gui {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "show_gui \[-help\] - Deliberate stub; this Tcl shell doesn't embed the Flutter GUI in-process"
+    }
     puts "show_gui: not implemented - this Tcl shell doesn't embed the Flutter GUI in-process yet. See TCL_EXPLORATION.md's Phase 6 section for why and what real support would take."
 }
+register_command_help show_gui \
+    "show_gui \[-help\] - Deliberate stub; this Tcl shell doesn't embed the Flutter GUI in-process" \
+    "Deliberate stub, not a missing feature: this project's only GUI is the separate Flutter app, which this Tcl process can't start rendering in-process without embedding a full FlutterEngine - see TCL_EXPLORATION.md's Phase 6 section." \
+    {
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
 
 proc shape_paths {id} {
     set result {}
@@ -330,3 +620,9 @@ proc shape_paths {id} {
     }
     return $result
 }
+register_command_help shape_paths \
+    "shape_paths <id> - Every path on Shape <id>, as a list of {width_um <um> points <list>} dicts" \
+    "Every path on the given Shape, as a list of {width_um <double> points <flat x/y list, microns>} dicts." \
+    {
+        {<id> {type token required 1 description {A shape: friendly-id token}}}
+    }

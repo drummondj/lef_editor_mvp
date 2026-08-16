@@ -110,6 +110,49 @@ def to_snake_case(name: str) -> str:
     return name
 
 
+def tcl_brace_escape(text: str) -> str:
+    """
+    Escapes free text for safe embedding inside a generated Tcl
+    {...}-quoted literal (used by the help-system registration calls in
+    le_tcl_procs_generated_tcl_j2.py - usage/description/option text
+    pulled from schema.py's own Klass.description/Field.description).
+    Backslash-escapes a literal backslash/`{`/`}` so an unbalanced brace
+    in free-text description text can never break the generated file's
+    own brace nesting. Tcl's {...} quoting leaves the escaping backslash
+    itself in the resulting string value for `\\{`/`\\}` (unlike "..."
+    quoting, which would strip it) - a minor cosmetic wart for the rare
+    description that actually contains a literal brace, not a parse
+    hazard, which is the property that actually matters here. No schema.py
+    description contains a literal brace today (checked directly), so
+    this is defensive, not a fix for a live problem.
+    """
+    return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+
+
+def tcl_dquote_escape(text: str) -> str:
+    """
+    Escapes free text for safe embedding inside a generated Tcl
+    "..."-quoted string - get_<type>'s own `-help` return line and every
+    family's `register_command_help` usage/description argument
+    (le_tcl_procs_generated_tcl_j2.py). Unlike {...} quoting (see
+    tcl_brace_escape), Tcl's "..." quoting actively performs backslash/
+    variable/command substitution, so a literal backslash, `"`, `$`, or
+    `[`/`]` in free text has to be escaped up front or Tcl parses part of
+    the description as code - not hypothetical: EnclosureEntry's own
+    description contains "WIDTH[+EXCEPTEXTRACUT]", which without this
+    was read as a command substitution (invoking a nonexistent
+    "+EXCEPTEXTRACUT" command) the moment le_tcl_procs.tcl was sourced,
+    found via a real ctest failure.
+    """
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )
+
+
 def to_camel_case(name: str | None, upper_first=False) -> str | None:
     """
     Convert a snake_case string to camelCase.
@@ -982,6 +1025,153 @@ class Klass:
             parts.extend(f.cmd_tcl_call_args("update"))
         return " ".join(parts)
 
+    # --- Help system (UPDATES.md item 20) - create_<type>/update_<type>
+    # only. get_<type>'s own usage/options depend on external SearchScope
+    # data (tcl_scope.py's -of param computation, not knowable from a
+    # Klass alone), so that string is still built inline in
+    # le_tcl_procs_generated_tcl_j2.py's own get_<type> block, same as
+    # today - these four methods cover the two families that are fully
+    # self-contained on this Klass instead. ---
+
+    def create_tcl_usage(self) -> str:
+        """
+        The one-line `create_<type> -flag <type> [-flag2 <type>] ... -
+        <description>` usage string registered for this class's generated
+        create_<type> command (and returned by its own new `-help` flag) -
+        required flags shown bare, optional ones bracketed, in
+        create_tcl_flag_defaults()'s own field order. A multi-parent class
+        (Shape/ViaLayer/Foreign/LayerDensityEntry) shows every parent flag
+        bracketed - "exactly one of these is required" doesn't fit cleanly
+        into per-flag bracket notation, so the fuller rule stays in this
+        class's own description/options text instead.
+
+        The result is embedded inside a generated Tcl `"..."`-quoted
+        string (both `-help`'s own return and the register_command_help
+        call use the identical literal), so every `[`/`]` this emits is
+        backslash-escaped up front (`\\[`/`\\]`) - unescaped, Tcl would
+        read an optional-flag bracket as command substitution, exactly
+        why get_<type>'s own hand-written usage line
+        (le_tcl_procs_generated_tcl_j2.py) already does the same for its
+        own `[-of ...]`/`[-filter ...]`/`[-help]` fragments.
+        """
+        parent_fields = self.get_parent_fields()
+        single_parent = len(parent_fields) == 1
+        parts = [f"create_{self.to_snake_case()}"]
+        for pf in parent_fields:
+            frag = f"-{pf.name} <token>"
+            parts.append(frag if single_parent else f"\\[{frag}\\]")
+        for f in self.get_create_fields():
+            frag = f"-{f.name} <{f.tcl_help_type_label()}>"
+            parts.append(frag if f.create_required() else f"\\[{frag}\\]")
+        parts.append("\\[-help\\]")
+        return " ".join(parts) + " - " + self.tcl_description_escaped()
+
+    def tcl_description_escaped(self) -> str:
+        """
+        This class's own description, escaped for safe embedding inside a
+        generated Tcl "..."-quoted string (see tcl_dquote_escape) - used
+        by create_tcl_usage()/update_tcl_usage() and by every family's
+        register_command_help call in le_tcl_procs_generated_tcl_j2.py
+        wherever it embeds the bare description as its own argument.
+        """
+        return tcl_dquote_escape(self.description)
+
+    def create_tcl_help_options(self) -> str:
+        """
+        Tcl list literal (inner content - wrap in {...} at the call site)
+        of this class's generated create_<type> command's own options, one
+        `{-flag {type T required R description {D}}}` entry per parent
+        field then create field, in create_tcl_flag_defaults()'s own field
+        order - the registration payload help/man/complete_command
+        (le_tcl_procs.tcl) read.
+        """
+        parent_fields = self.get_parent_fields()
+        single_parent = len(parent_fields) == 1
+        parts = []
+        for pf in parent_fields:
+            required = 1 if single_parent else 0
+            if single_parent:
+                desc = f"Parent {pf.type} token"
+            else:
+                desc = f"Parent {pf.type} token - exactly one of this class's parent flags is required"
+            parts.append(
+                f"{{-{pf.name} {{type token required {required} description {{{tcl_brace_escape(desc)}}}}}}}"
+            )
+        for f in self.get_create_fields():
+            required = 1 if f.create_required() else 0
+            parts.append(
+                f"{{-{f.name} {{type {f.tcl_help_type_label()} required {required} "
+                f"description {{{tcl_brace_escape(f.description)}}}}}}}"
+            )
+        return " ".join(parts)
+
+    def update_tcl_usage(self) -> str:
+        """
+        Same shape as create_tcl_usage(), but every flag is bracketed
+        (nothing is ever required to update - see update_tcl_flag_defaults())
+        and a leading `<id>` positional precedes the flags, matching
+        update_<type>'s own `{id args}` proc signature. A single-parent
+        class's own parent flag is included as an optional reassignment
+        flag; a multi-parent class gets none (matching
+        update_tcl_flag_defaults()). See create_tcl_usage()'s own comment
+        for why every `[`/`]` here is backslash-escaped.
+        """
+        parent_fields = self.get_parent_fields()
+        parts = [f"update_{self.to_snake_case()}", "<id>"]
+        if len(parent_fields) == 1:
+            parts.append(f"\\[-{parent_fields[0].name} <token>\\]")
+        for f in self.get_create_fields():
+            parts.append(f"\\[-{f.name} <{f.tcl_help_type_label()}>\\]")
+        parts.append("\\[-help\\]")
+        return " ".join(parts) + " - " + self.tcl_description_escaped()
+
+    def update_tcl_help_options(self) -> str:
+        """
+        update_tcl_usage()'s own options-list counterpart, mirroring
+        create_tcl_help_options() but with every `required` entry forced
+        to 0 (see update_tcl_call_args()'s own "nothing is ever required
+        to update" rule) and, for a single-parent class, its own optional
+        parent-reassignment flag instead of create's always-parent-token
+        entry.
+        """
+        parent_fields = self.get_parent_fields()
+        parts = []
+        if len(parent_fields) == 1:
+            pf = parent_fields[0]
+            desc = f"Reassign this object's parent {pf.type} (token)"
+            parts.append(f"{{-{pf.name} {{type token required 0 description {{{tcl_brace_escape(desc)}}}}}}}")
+        for f in self.get_create_fields():
+            parts.append(
+                f"{{-{f.name} {{type {f.tcl_help_type_label()} required 0 "
+                f"description {{{tcl_brace_escape(f.description)}}}}}}}"
+            )
+        return " ".join(parts)
+
+    def tcl_property_scalars(self) -> str:
+        """
+        Tcl list literal (inner content) of this class's own scalar
+        property names available for dot-path completion
+        (complete_command, le_tcl_procs.tcl) - exactly
+        get_filterable_scalar_fields()'s own field names, the same source
+        api_filter_tables_inc_j2.py's C++ filter-field table already uses,
+        so a suggested path can never diverge from what -filter/
+        get_properties actually accepts.
+        """
+        return " ".join(f.name for f in self.get_filterable_scalar_fields())
+
+    def tcl_property_hops(self) -> str:
+        """
+        Tcl list literal (inner content) of `{hop_name target_snake_case}`
+        pairs for this class's own traversal hops
+        (get_filterable_hop_fields()) - the target's own to_snake_case()
+        key back into ::property_scalars/::property_hops, so
+        complete_command can walk a chained dot-path
+        (.terminal_port.terminal.name) one hop at a time.
+        """
+        return " ".join(
+            f"{{{f.name} {f.hop_target_snake_case()}}}" for f in self.get_filterable_hop_fields()
+        )
+
     def update_api_body(self) -> str:
         """
         The full statement-list body of le_update_<type>(LeHandle
@@ -1724,6 +1914,33 @@ class Field:
         like Point/Rect/Symmetry.
         """
         return self._type_klass is not None and self._type_klass.is_enum
+
+    def hop_target_snake_case(self) -> str:
+        """
+        snake_case key of this hop field's own target Klass
+        (self._type_klass) - le_tcl_procs_generated_tcl_j2.py's own
+        ::property_hops table key, so complete_command's dot-path walk
+        (le_tcl_procs.tcl) can look up the next class's own
+        ::property_scalars/::property_hops entry after following this hop.
+        Only meaningful for a field get_filterable_hop_fields() would
+        return (is_reference() and not an enum) - self._type_klass is
+        None/an enum otherwise.
+        """
+        return self._type_klass.to_snake_case()
+
+    def tcl_help_type_label(self) -> str:
+        """
+        Human-readable `<type>` label for this field's own create_<type>/
+        update_<type> usage-string flag (Klass.create_tcl_usage()/
+        update_tcl_usage()) and help-options registration (Klass.
+        create_tcl_help_options()/update_tcl_help_options()) - this
+        field's own scalar/enum/compound type name as-is (str/int/double/
+        dbu/bool, an enum's own name, or a compound field's embedded-
+        struct Klass name, e.g. "Point"), with a trailing "..." for a
+        list_compound_kind() field (e.g. Shape.rects -> "Rect...") since
+        its flag actually takes a Tcl list of several such records.
+        """
+        return f"{self.type}..." if self.is_list else self.type
 
     def compound_klass(self) -> Optional[Klass]:
         """

@@ -8,7 +8,11 @@ TEMPLATE = """# GENERATED - do not edit by hand. Regenerate via the regen-tcl sk
 # this file directly, regenerate via the regen-tcl skill instead.
 # parse_get_args/check_of_prefixes/default_to_unset (le_tcl_procs.tcl)
 # are shared, class-agnostic helpers this file calls into, not generated
-# here.
+# here. register_command_help/::command_help (UPDATES.md item 20's help
+# system) are likewise defined in le_tcl_procs.tcl, sourced before this
+# file - every proc below registers itself right after its own
+# definition, so help/man/complete_command see the full generated
+# surface with no extra wiring.
 
 # Maps a friendly-id token to its {count name value path} shim-function
 # quadruplet - see le_tcl_procs.tcl's own property_accessors_for_token
@@ -21,6 +25,29 @@ proc property_accessors_for_token {token} {
     }
 {%- endfor %}
     error "get_properties: unrecognized token \\"$token\\" - expected a friendly id ({% for klass in readable_classes %}{{klass.to_snake_case()}}:{% if not loop.last %}/{% endif %}{% endfor %})"
+}
+
+# Dot-path completion tables (UPDATES.md item 20 point 3,
+# complete_command in le_tcl_procs.tcl) - one entry per TCL-readable
+# class, keyed the same way property_accessors_for_token dispatches
+# (klass.to_snake_case()). ::property_scalars holds this class's own
+# leaf property names; ::property_hops holds {hop_name target_key} pairs
+# so a chained path (.terminal_port.terminal.name) can be walked one hop
+# at a time, looking up the next class's own ::property_scalars/
+# ::property_hops entry after each hop. Both are mechanically derived
+# from Klass.get_filterable_scalar_fields()/get_filterable_hop_fields() -
+# the exact same source api_filter_tables_inc_j2.py's C++ table already
+# uses for -filter/get_properties path validation, so a suggested
+# completion can never name a path those commands would actually reject.
+array set ::property_scalars {
+{%- for klass in readable_classes %}
+    {{klass.to_snake_case()}} {{'{'}}{{klass.tcl_property_scalars()}}{{'}'}}
+{%- endfor %}
+}
+array set ::property_hops {
+{%- for klass in readable_classes %}
+    {{klass.to_snake_case()}} {{'{'}}{{klass.tcl_property_hops()}}{{'}'}}
+{%- endfor %}
 }
 
 # --- Current-instance access ---
@@ -41,10 +68,13 @@ proc set_current_{{klass.to_snake_case()}} {id} {
 {%- set scope = search_scopes[klass.name] %}
 {%- set id_field = klass.tcl_friendly_id_field() %}
 {%- set plural = klass.tcl_plural_snake_case() %}
+{%- set usage_line -%}
+get_{{plural}} {% if id_field %}\\[<name-expr>...\\] {% endif %}{% if scope.of_params %}\\[-of <token>...\\] {% endif %}\\[-filter <expr>\\] \\[-help\\] - {{klass.tcl_description_escaped()}}
+{%- endset %}
 proc get_{{plural}} {args} {
     set parsed [parse_get_args get_{{plural}} $args {{ 1 if id_field else 0 }}]
     if {[dict get $parsed help]} {
-        return "get_{{plural}} {% if id_field %}\\[<name-expr>...\\] {% endif %}{% if scope.of_params %}\\[-of <token>...\\] {% endif %}\\[-filter <expr>\\] \\[-help\\] - {{klass.description}}"
+        return "{{usage_line}}"
     }
     {%- if scope.of_params %}
     check_of_prefixes get_{{plural}} [dict get $parsed of_tokens] {{'{'}}{% for op in scope.of_params %}{{op.parent_klass.to_snake_case()}}{% if not loop.last %} {% endif %}{% endfor %}{{'}'}}
@@ -81,6 +111,16 @@ proc get_{{plural}} {args} {
     }
     return [lsort -unique $result]
 }
+set get_{{plural}}_options {}
+{%- if id_field %}
+lappend get_{{plural}}_options {<name-expr> {type str required 0 description {Glob-matched against {{id_field.name}} (Tcl string match syntax) - may be given more than once, OR'd}}}
+{%- endif %}
+{%- if scope.of_params %}
+lappend get_{{plural}}_options {-of {type token... required 0 description {Parent token(s) to scope the search to (OR'd across each -of value's own list) - defaults to the current view when omitted, see codegen/codegen/tcl_scope.py}}}
+{%- endif %}
+lappend get_{{plural}}_options {-filter {type expr required 0 description {A -filter expression (backend/src/database/filter.hpp) - field/hop names validated against this class's own allowlist}}}
+lappend get_{{plural}}_options {-help {type flag required 0 description {Show this usage message and return immediately}}}
+register_command_help get_{{plural}} "{{usage_line}}" "{{klass.tcl_description_escaped()}}" $get_{{plural}}_options
 {% endfor %}
 
 # --- create_<type> - `create_<type> [-flag value...]`, one flag per
@@ -98,11 +138,16 @@ proc get_{{plural}} {args} {
 # parent flags to resolve (after that default is applied), checked here
 # before calling down - same "exactly one" rule create_<type>_cmd's own
 # C++ body re-checks (defense in depth, not redundant: a caller could
-# reach the *_cmd form directly). ---
+# reach the *_cmd form directly). `-help` (UPDATES.md item 20) is checked
+# before the unknown-flag loop below, since it never receives a paired
+# value the way every other flag does. ---
 {% for klass in classes %}
 {%- set snake = klass.to_snake_case() %}
 {%- set parent_fields = klass.get_parent_fields() %}
 proc create_{{snake}} {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "{{klass.create_tcl_usage()}}"
+    }
     array set opts {{'{'}}{{klass.create_tcl_flag_defaults()}}{{'}'}}
     foreach {flag value} $args {
         if {![info exists opts($flag)]} {
@@ -128,6 +173,7 @@ proc create_{{snake}} {args} {
 {{klass.cmd_tcl_preamble('create')}}
     return [create_{{snake}}_cmd {{klass.create_tcl_call_args()}}]
 }
+register_command_help create_{{snake}} "{{klass.create_tcl_usage()}}" "{{klass.tcl_description_escaped()}}" {{'{'}}{{klass.create_tcl_help_options()}} {-help {type flag required 0 description {Show this usage message and return immediately}}}{{'}'}}
 {% endfor %}
 
 # --- update_<type> - `update_<type> <id> -flag value...` - mutates an
@@ -144,10 +190,16 @@ proc create_{{snake}} {args} {
 # it; a multi-parent class (e.g. Shape) accepts none at all - passing
 # -terminal_port/-obstruction to update_shape is an "unknown flag"
 # error, same as any other flag this class doesn't have. Returns the
-# (possibly-changed, e.g. after a rename) friendly id token. ---
+# (possibly-changed, e.g. after a rename) friendly id token. `-help`
+# (UPDATES.md item 20) is checked before the "at least one flag"
+# requirement below, so `update_<type> <id> -help` works even with no
+# other flags given. ---
 {% for klass in classes %}
 {%- set snake = klass.to_snake_case() %}
 proc update_{{snake}} {id args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "{{klass.update_tcl_usage()}}"
+    }
     if {[llength $args] == 0} {
         error "update_{{snake}}: at least one -flag is required"
     }
@@ -165,5 +217,6 @@ proc update_{{snake}} {id args} {
     }
     return $new_id
 }
+register_command_help update_{{snake}} "{{klass.update_tcl_usage()}}" "{{klass.tcl_description_escaped()}}" {{'{'}}{{klass.update_tcl_help_options()}} {-help {type flag required 0 description {Show this usage message and return immediately}}}{{'}'}}
 {% endfor %}
 """
