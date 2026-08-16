@@ -43,6 +43,15 @@ class _TerminalState extends State<Terminal> {
   int _currentHistoryIndex = -1;
   late StreamSubscription<String> _messageSubscription;
 
+  // Multiple Tab-completion candidates (see _completeCommand) - a
+  // transient hint shown right under the input line, not permanent
+  // scrollback, so it shouldn't survive past the moment it stops being
+  // relevant: cleared by _onInputChanged the instant the input text
+  // changes for any reason (typing further, a single-match completion
+  // splicing in, history recall, or _submit's own clear()), and by the
+  // Escape binding below for an explicit dismiss.
+  List<String>? _completionSuggestions;
+
   @override
   void initState() {
     super.initState();
@@ -53,15 +62,24 @@ class _TerminalState extends State<Terminal> {
         _scrollToEnd();
       });
     });
+    _inputController.addListener(_onInputChanged);
   }
 
   @override
   void dispose() {
     _messageSubscription.cancel();
+    _inputController.removeListener(_onInputChanged);
     _scrollController.dispose();
     _inputController.dispose();
     _inputFocusNode.dispose();
     super.dispose();
+  }
+
+  void _onInputChanged() {
+    if (_completionSuggestions == null) return;
+    setState(() {
+      _completionSuggestions = null;
+    });
   }
 
   TextSpan _messageToTextSpan(String message) {
@@ -140,11 +158,14 @@ class _TerminalState extends State<Terminal> {
   // completing whichever whitespace-delimited token is currently being
   // typed (a command name, a -flag, or a .-prefixed property path - see
   // that proc's own doc comment), then either splices the sole candidate
-  // in directly or, for more than one, lists them in the scrollback
-  // without touching the input - the same "single match completes,
-  // several just get listed" convention an interactive shell uses.
-  // Silent (does nothing) on zero candidates, an empty input, or a
-  // command still running - matches _submit()'s own guard.
+  // in directly or, for more than one, shows them as a transient hint
+  // under the input line (_completionSuggestions - see build()) without
+  // touching the input - the same "single match completes, several just
+  // get listed" convention an interactive shell uses, except the listing
+  // disappears on its own once it's no longer relevant (_onInputChanged)
+  // rather than becoming permanent scrollback. Silent (does nothing) on
+  // zero candidates, an empty input, or a command still running -
+  // matches _submit()'s own guard.
   Future<void> _completeCommand() async {
     if (_running) return;
     final text = _inputController.text;
@@ -185,9 +206,8 @@ class _TerminalState extends State<Terminal> {
       });
     } else {
       setState(() {
-        _lines.addAll(_formatColumns(candidates));
+        _completionSuggestions = candidates;
       });
-      _scrollToEnd();
     }
   }
 
@@ -299,6 +319,8 @@ class _TerminalState extends State<Terminal> {
                           _submit(),
                       const SingleActivator(LogicalKeyboardKey.tab): () =>
                           _completeCommand(),
+                      const SingleActivator(LogicalKeyboardKey.escape): () =>
+                          setState(() => _completionSuggestions = null),
                     },
                     child: TextField(
                       controller: _inputController,
@@ -321,6 +343,16 @@ class _TerminalState extends State<Terminal> {
                 ),
               ],
             ),
+            if (_completionSuggestions != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 2),
+                child: Text(
+                  _formatColumns(_completionSuggestions!).join('\n'),
+                  style: DefaultTextStyle.of(
+                    context,
+                  ).style.copyWith(color: Colors.white54),
+                ),
+              ),
           ],
         ),
       ),
