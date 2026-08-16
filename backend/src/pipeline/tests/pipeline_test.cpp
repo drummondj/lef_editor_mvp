@@ -433,7 +433,7 @@ TEST_F(PipelineFixture, GenerateShapesRecomputesAfterACrudMutationEvenForTheSame
     // Regression: a real crash-adjacent bug (see TCL_EXPLORATION.md and
     // pipeline.hpp's own class comment) - a Tcl/API CRUD mutation
     // (UPDATES.md item 15's Terminal/TerminalPort/Obstruction/Shape
-    // surface - api.cpp's le_create_terminal, le_add_shape_rect, etc.)
+    // surface - api.cpp's le_create_terminal, le_update_shape, etc.)
     // changes neither AbstractId nor ViewLayerSet (no LEF was re-read),
     // so before Root::mutation_version() existed, this cache had no way
     // to know the database changed at all - a Tcl-created Shape never
@@ -447,7 +447,7 @@ TEST_F(PipelineFixture, GenerateShapesRecomputesAfterACrudMutationEvenForTheSame
     ASSERT_EQ(pipeline.generate_calls(), 1u); // nothing changed - cache hit
 
     // Mirrors api.cpp's own CRUD functions: mutate, then bump the
-    // counter - see e.g. le_create_terminal_port_shape/le_add_shape_rect.
+    // counter - see e.g. le_create_shape/le_update_shape.
     add_terminal_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}});
     root.bump_mutation_version();
 

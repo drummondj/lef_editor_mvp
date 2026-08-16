@@ -272,59 +272,12 @@ proc report_properties {tokens} {
 
 # --- Shape (create_shape/update_shape are generated - unify the former
 # create_terminal_port_shape/create_obstruction_shape split into one
-# command taking -terminal_port|-obstruction, exactly one required) ---
-
-proc add_shape_rect {args} {
-    array set opts {-shape {} -rect {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "add_shape_rect: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-shape -rect} {
-        if {$opts($required) eq {}} {
-            error "add_shape_rect: $required is required"
-        }
-    }
-    if {[llength $opts(-rect)] != 4} {
-        error "add_shape_rect: -rect must be {ll_x ll_y ur_x ur_y}"
-    }
-    lassign $opts(-rect) ll_x ll_y ur_x ur_y
-    return [add_shape_rect_cmd $opts(-shape) $ll_x $ll_y $ur_x $ur_y]
-}
-
-proc add_shape_polygon {args} {
-    array set opts {-shape {} -points {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "add_shape_polygon: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-shape -points} {
-        if {$opts($required) eq {}} {
-            error "add_shape_polygon: $required is required"
-        }
-    }
-    return [add_shape_polygon_cmd $opts(-shape) $opts(-points)]
-}
-
-proc add_shape_path {args} {
-    array set opts {-shape {} -width {} -points {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "add_shape_path: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-shape -width -points} {
-        if {$opts($required) eq {}} {
-            error "add_shape_path: $required is required"
-        }
-    }
-    return [add_shape_path_cmd $opts(-shape) $opts(-width) $opts(-points)]
-}
+# command taking -terminal_port|-obstruction, exactly one required, and
+# take their own -rects/-polygons/-paths flags directly - geometry no
+# longer needs a separate add_shape_rect/_polygon/_path call after
+# create_shape; remove_shape_rect/_polygon/_path below still cover
+# removing one entry by index, the one thing update_shape's own
+# "replace-the-whole-list" flags don't do more conveniently) ---
 
 proc shape_rects {id} {
     set result {}

@@ -20,17 +20,24 @@ This is a **separate generation target** from `regen-database` - it
 covers property *reading*, `get_<type>` *search*, `create_<type>`, and
 `update_<type>` for every TCL-readable class, uniformly (~35 today -
 `Terminal`/`TerminalPort`/`Obstruction`/`Shape` also have a hand-written
-`delete_X` elsewhere, the only per-class CRUD still hand-written for any
-class - every class's `create_<type>`/`update_<type>` is generated,
-including these four). `update_<type>` is
+`delete_X` elsewhere, plus Shape's own `remove_shape_rect`/`_polygon`/
+`_path` (removing one geometry entry by index) - every class's
+`create_<type>`/`update_<type>` is generated, including these four, and
+including Shape's own `-rects`/`-polygons`/`-paths` flags, which take a
+*list* of a flattenable embedded struct, not just one - see
+`Field.list_compound_kind()`). `update_<type>` is
 the *only* way any field is ever mutated after creation - there is no
 per-field setter reachable from TCL anymore, generated or hand-written
 (see backend/CLAUDE.md's `src/tcl/` bullet for the full "no per-field
-setters" constraint). `read_lef`, session/viewport/design-selection,
-Shape's rect/polygon/path CRUD + the coordinate-list SWIG typemap,
-`delete_X` for the classes that still have hand-written CRUD, and the
+setters" constraint). `read_lef`, session/viewport/design-selection, the
+coordinate-list SWIG typemap itself (`le_api.i`, hand-written since it
+needs real Tcl_Interp access - the *generated* `%apply` lines that reuse
+it for each `list_compound_kind()` field live in
+`le_api_generated_i_j2.py`), `delete_X`/`remove_shape_rect`/`_polygon`/
+`_path` for the classes that still have hand-written CRUD, and the
 filter-expression evaluator itself (`filter.hpp`) all stay hand-written -
-none of that is per-class CRUD, so it doesn't belong in a generator. See
+none of that is per-class flag-driven CRUD, so it doesn't belong in a
+generator. See
 `create_api_body()`/`update_api_body()`'s own docstrings
 (`codegen/codegen/schema.py`) for exactly what each covers (field scope,
 required-vs-optional, compound-field flattening, the multi-parent
@@ -193,10 +200,16 @@ removed). `Shape`'s own `create_terminal_port_shape_cmd`/
 `create_shape -terminal_port|-obstruction`, not two - see
 `create_api_body()`'s exactly-one-parent check.
 `update_abstract_boundary` has no replacement - `Abstract.boundary` is a
-list field, out of `update_<type>`'s flag-per-field scope (same as
-`Shape`'s own rects/polygons/paths), so boundary-setting is unsupported
-via TCL until a future round adds list-field support - a real, accepted
-coverage gap, not an oversight. If a future round generates `delete_X`
-too (`Terminal`/`TerminalPort`/`Obstruction`/`Shape` are the last four
-classes with any hand-written CRUD left), delete that class's
-hand-written version from all of the files above first, the same way.
+list-of-`Polygon` field, structurally `list_compound_kind()`-eligible the
+same way `Shape.polygons` is, but explicitly deferred
+(`create_excluded=True` in `backend/src/database/schema.py`, this
+round's own scope was `Shape.rects`/`.polygons`/`.paths` specifically),
+so boundary-setting is unsupported via TCL until a future round flips
+that flag - a real, accepted coverage gap, not an oversight (see
+`Field.create_excluded`'s own docstring in `codegen/codegen/schema.py`
+for the full list of similarly-deferred fields across the schema). If a
+future round generates `delete_X` too (`Terminal`/`TerminalPort`/
+`Obstruction`/`Shape` are the last four classes with any hand-written
+CRUD left, alongside `Shape`'s own `remove_shape_rect`/`_polygon`/
+`_path`), delete that class's hand-written version from all of the files
+above first, the same way.

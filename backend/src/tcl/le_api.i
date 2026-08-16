@@ -3,9 +3,11 @@
 // Phase 4 CRUD/search surface and adds the one genuinely new SWIG
 // mechanism this phase needs: a custom typemap converting a Tcl list of
 // doubles into the flat `(const double*, int32_t count)` pairs
-// le_add_shape_polygon/le_add_shape_path take, so a Tcl caller passes
-// `{0 0 10 0 10 10}` rather than pre-flattening into a raw C array by
-// hand.
+// create_shape_cmd/update_shape_cmd's own generated -rects/-polygons/
+// -paths parameters take (le_api_generated_i_j2.py's own %apply lines,
+// see Klass.list_compound_swig_applies() in codegen/codegen/schema.py),
+// so a Tcl caller passes a real (possibly nested) list rather than
+// pre-flattening into a raw C array by hand.
 //
 // Wraps le_tcl_shim.hpp, not api.hpp directly - see this file's own
 // Phase 0 header comment (still accurate) for why: api.hpp's
@@ -26,7 +28,7 @@
 // typemap of its own either - only the coordinate-list one below.
 //
 // `-flag value` commands (create_terminal, update_terminal,
-// add_shape_rect, ...) are declared here under their internal `*_cmd`
+// create_shape, ...) are declared here under their internal `*_cmd`
 // name, taking plain positional arguments - SWIG-wrapped C++ functions
 // are always positional. le_tcl_procs.tcl supplies the real, flag-
 // parsing command name on top of each (see its own header comment for
@@ -72,10 +74,6 @@
     $2 = static_cast<int32_t>(listc);
 }
 
-// Applied to every real (const double*, int32_t count) parameter pair
-// this module wraps: add_shape_polygon_cmd/add_shape_path_cmd's own
-// `points_um`/`point_coord_count` (see le_tcl_shim.hpp).
-%apply (const double *POINTS_ARRAY_UM, int32_t POINTS_COORD_COUNT) { (const double *points_um, int32_t point_coord_count) };
 
 int read_lef(const char *path);
 int design_count();
@@ -110,20 +108,17 @@ int delete_shape(const char *id);
 
 int shape_rect_count(const char *id);
 const char *shape_rect_at(const char *id, int index);
-int add_shape_rect_cmd(const char *id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
 int remove_shape_rect(const char *id, int index);
 
 int shape_polygon_count(const char *id);
 int shape_polygon_point_count(const char *id, int polygon_index);
 const char *shape_polygon_point_at(const char *id, int polygon_index, int point_index);
-int add_shape_polygon_cmd(const char *id, const double *points_um, int32_t point_coord_count);
 int remove_shape_polygon(const char *id, int polygon_index);
 
 int shape_path_count(const char *id);
 double shape_path_width_um(const char *id, int path_index);
 int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
-int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
 int remove_shape_path(const char *id, int path_index);
 
 // --- Generated TCL property-reading surface (see backend/CLAUDE.md's

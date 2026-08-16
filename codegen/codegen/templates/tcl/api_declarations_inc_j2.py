@@ -79,12 +79,17 @@ Le{{klass.name}}Id le_search_result_{{klass.to_snake_case()}}_at(LeHandle *handl
 {% endfor %}
 
 // --- create_<type> - one flag per scalar field (str/int/double/dbu/bool/
-// enum), required iff Field.create_required(); is_child/is_list/embedded-
-// struct fields are out of scope here (a future add_X/set_X round - see
-// TCL_EXPLORATION.md). A dbu field crosses this C boundary in microns
-// (`<field>_um`, converted via database_units_microns()/to_dbu(), same
-// convention le_add_shape_rect's own ll_x_um/.../ur_y_um already uses).
-// An optional numeric field (int/double/dbu) gets a companion
+// enum), required iff Field.create_required(); a flattenable embedded
+// struct (Point/Rect/Symmetry/... - Field.compound_klass()) or a *list*
+// of one (Field.list_compound_kind() - e.g. Shape.rects/polygons/paths)
+// also gets its own flag, exploded into a fixed set of C slots or a
+// single flat (const double*, int32_t count) pair respectively; a
+// non-flattenable embedded struct or an is_child relationship stays out
+// of scope (a future add_X/set_X round - see TCL_EXPLORATION.md). A dbu
+// field (plain or nested inside a compound/list_compound one) crosses
+// this C boundary in microns (`<field>_um`, converted via
+// database_units_microns()/to_dbu()). An optional numeric field
+// (int/double/dbu) gets a companion
 // `has_<field>` int32_t so an omitted flag stores real std::nullopt, not
 // a zero value that could collide with a genuine, meaningful 0 - unlike
 // str/enum fields, which use nullptr for "omitted" directly (see

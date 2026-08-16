@@ -31,7 +31,7 @@ namespace le
     /// now-discarded ViewLayerSet. `Root::mutation_version()` is included
     /// because a Terminal/TerminalPort/Obstruction/Shape CRUD mutation
     /// (UPDATES.md item 15's TCL/API surface - api.cpp's le_create_terminal,
-    /// le_add_shape_rect, etc., each bumping this counter on success)
+    /// le_update_shape, etc., each bumping this counter on success)
     /// changes neither AbstractId nor ViewLayerSet (no LEF was re-read) -
     /// without it, this stage would keep returning the pre-mutation shape
     /// list forever, no matter how many times the caller re-rendered.

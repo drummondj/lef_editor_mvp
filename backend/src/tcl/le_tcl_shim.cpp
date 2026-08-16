@@ -320,11 +320,6 @@ const char *shape_rect_at(const char *id, int index)
     return return_string(out.str());
 }
 
-int add_shape_rect_cmd(const char *id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um)
-{
-    return le_add_shape_rect(session(), resolve_shape_id(id), ll_x_um, ll_y_um, ur_x_um, ur_y_um);
-}
-
 int remove_shape_rect(const char *id, int index)
 {
     return le_remove_shape_rect(session(), resolve_shape_id(id), index);
@@ -346,11 +341,6 @@ const char *shape_polygon_point_at(const char *id, int polygon_index, int point_
     std::ostringstream out;
     out << pt.x_um << ' ' << pt.y_um;
     return return_string(out.str());
-}
-
-int add_shape_polygon_cmd(const char *id, const double *points_um, int32_t point_coord_count)
-{
-    return le_add_shape_polygon(session(), resolve_shape_id(id), points_um, point_coord_count);
 }
 
 int remove_shape_polygon(const char *id, int polygon_index)
@@ -379,11 +369,6 @@ const char *shape_path_point_at(const char *id, int path_index, int point_index)
     std::ostringstream out;
     out << pt.x_um << ' ' << pt.y_um;
     return return_string(out.str());
-}
-
-int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count)
-{
-    return le_add_shape_path(session(), resolve_shape_id(id), width_um, points_um, point_coord_count);
 }
 
 int remove_shape_path(const char *id, int path_index)

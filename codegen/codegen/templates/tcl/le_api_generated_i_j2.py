@@ -30,6 +30,15 @@ int get_{{klass.tcl_plural_snake_case()}}_cmd({% for op in scope.of_params %}con
 const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
 {% endfor %}
 
+// --- list_compound_kind() create fields (Shape.rects/polygons/paths) -
+// %apply the shared POINTS_ARRAY_UM/POINTS_COORD_COUNT typemap (defined
+// hand-written, above this %include, in le_api.i itself) to each such
+// field's own flat parameter names, before any declaration below uses
+// them (SWIG requires %apply to precede the declarations it covers). ---
+{% for klass in classes %}
+{{klass.list_compound_swig_applies()}}
+{%- endfor %}
+
 {% for klass in classes %}
 const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}});
 {% endfor %}

@@ -653,7 +653,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithN
 {
     // Regression: a real user-reported bug - a Shape created via the
     // show_gui Tcl console (UPDATES.md item 15 - api.cpp's
-    // le_create_terminal_port_shape/le_add_shape_rect etc.) never
+    // le_create_shape/le_update_shape etc.) never
     // appeared on screen until an unrelated action (zooming) forced a
     // real recompute. Fixing Pipeline's own cache key (see pipeline_test.cpp's
     // GenerateShapesRecomputesAfterACrudMutation... test) wasn't enough -
@@ -707,7 +707,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysShowsAShapeAddedAfterACrudMutationWithN
     EXPECT_FALSE(scan_shows_m1_color(before)); // nothing there yet
 
     // Mirrors api.cpp's own CRUD functions exactly: mutate, then bump the
-    // counter - see e.g. le_create_terminal_port_shape/le_add_shape_rect.
+    // counter - see e.g. le_create_shape/le_update_shape.
     add_obstruction_shape(Shape{.layer_name = "M1", .rects = {Rect{.ll = {40, 40}, .ur = {60, 60}}}});
     root.bump_mutation_version();
 

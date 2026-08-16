@@ -901,15 +901,21 @@ extern "C"
     } LeSignalDirection;
 
     /// @brief Find the Terminal named `name` (exact match) within the
-    /// currently selected Design's Abstract (see le_set_current_design/
-    /// le_set_current_design_by_id - same current-view scoping
-    /// le_get_terminals already uses). A linear scan over
+    /// currently selected Abstract (le_set_current_abstract/
+    /// le_current_abstract's own handle->current_abstract_id - same
+    /// current-view scoping le_get_terminals' own default scope already
+    /// uses; deliberately *not* handle->scene.current_abstract(), a
+    /// separate GUI-rendering "current view" only ever moved as a side
+    /// effect of selecting a Design, e.g. le_set_current_design_by_id -
+    /// a script that builds an Abstract from scratch and calls
+    /// le_set_current_abstract directly, with no Design to select, needs
+    /// this to still work). A linear scan over
     /// Root::get_abstract_terminals, not a cmg index=True lookup - Terminal
     /// name uniqueness is per-Abstract (unique_per_parent, see
     /// backend/src/database/schema.py's own Terminal.name comment), not
     /// global, so a flat index=True lookup would be the wrong shape here.
     /// Returns an invalid LeTerminalId (index == UINT32_MAX) if handle or
-    /// name is null, no Design is currently selected, or no Terminal in
+    /// name is null, no Abstract is currently selected, or no Terminal in
     /// the current Abstract has that name.
     LeTerminalId le_terminal_by_name(LeHandle *handle, const char *name);
 
@@ -1090,17 +1096,18 @@ extern "C"
     /// le_message_at for either error).
     int32_t le_get_terminals(LeHandle *handle, LeAbstractId of_abstract, const char *name_expression, const char *filter_expression);
 
-    // --- TerminalPort/Obstruction filter-search, and Abstract
-    // boundary update (Phase 4, continued) ---
+    // --- TerminalPort/Obstruction filter-search (Phase 4, continued) ---
     //
     // le_create_terminal_port/le_create_obstruction (an empty parent
-    // only - no layer, no geometry) are generated (generated_tcl/
-    // declarations.inc, below), not hand-written here. Shape creation
-    // (le_create_shape) and all shape geometry (le_add_shape_rect/
-    // _polygon/_path, further below) are separate calls: rects aren't
-    // privileged over polygons/paths by being foldable into one "create"
-    // call while the others aren't - every shape member is added the
-    // same way, after the shape exists.
+    // only - no layer, no geometry) and le_create_shape/le_update_shape
+    // (including their own -rects/-polygons/-paths - see
+    // Klass.list_compound_kind() in codegen/codegen/schema.py) are all
+    // generated (generated_tcl/declarations.inc, below), not hand-written
+    // here. Only per-index rect/polygon/path removal
+    // (le_remove_shape_rect/_polygon/_path, further below) stays
+    // hand-written - adding/replacing geometry goes through
+    // le_create_shape/le_update_shape's own generated flat-array
+    // parameters instead.
 
     /// @brief Number of property rows for the TerminalPort at `id` - same
     /// by-id (not selection-scoped) shape as le_terminal_property_count.
@@ -1355,11 +1362,6 @@ extern "C"
     /// API, not a new one.
     LeRectUm le_shape_rect_at(LeHandle *handle, LeShapeId id, int32_t index);
 
-    /// @brief Append one rect to the Shape at `id`. Returns 0 on
-    /// success, nonzero if handle is null, id doesn't name a Shape on
-    /// this handle, or no Technology has been read yet.
-    int le_add_shape_rect(LeHandle *handle, LeShapeId id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
-
     /// @brief Remove the rect at `index` (0..le_shape_rect_count(id)-1)
     /// from the Shape at `id`, shifting every later rect's index down by
     /// one (matching le_shape_rect_at's own 0-based-position addressing
@@ -1387,15 +1389,6 @@ extern "C"
     /// this handle, either index is out of range, or no Technology has
     /// been read yet.
     LePointUm le_shape_polygon_point_at(LeHandle *handle, LeShapeId id, int32_t polygon_index, int32_t point_index);
-
-    /// @brief Append one polygon to the Shape at `id`, built from
-    /// `points_um` (a flat array of microns, alternating x/y -
-    /// `point_coord_count` must be a positive even number, at least 6 -
-    /// i.e. at least 3 points - to be a real polygon). Returns 0 on
-    /// success, nonzero if handle or points_um is null; id doesn't name
-    /// a Shape on this handle; point_coord_count is invalid; or no
-    /// Technology has been read yet.
-    int le_add_shape_polygon(LeHandle *handle, LeShapeId id, const double *points_um, int32_t point_coord_count);
 
     /// @brief Remove the polygon at `polygon_index`
     /// (0..le_shape_polygon_count(id)-1) from the Shape at `id` - same
@@ -1430,17 +1423,6 @@ extern "C"
     /// this handle, either index is out of range, or no Technology has
     /// been read yet.
     LePointUm le_shape_path_point_at(LeHandle *handle, LeShapeId id, int32_t path_index, int32_t point_index);
-
-    /// @brief Append one path to the Shape at `id`: `width_um` (the
-    /// path's stroke width) and `points_um`/`point_coord_count` (its
-    /// centerline, same flat-microns-array convention as
-    /// le_add_shape_polygon, but only at least 2 points - i.e.
-    /// point_coord_count >= 4 - are required, since a path's centerline
-    /// doesn't need to close into a loop). Returns 0 on success, nonzero
-    /// if handle or points_um is null; id doesn't name a Shape on this
-    /// handle; point_coord_count is invalid; or no Technology has been
-    /// read yet.
-    int le_add_shape_path(LeHandle *handle, LeShapeId id, double width_um, const double *points_um, int32_t point_coord_count);
 
     /// @brief Remove the path at `path_index`
     /// (0..le_shape_path_count(id)-1) from the Shape at `id` - same

@@ -220,7 +220,6 @@ int shape_rect_count(const char *id);
 /// @brief The rect at `index`, as a 4-element "ll_x ll_y ur_x ur_y"
 /// microns string (already a well-formed Tcl list of 4 numbers).
 const char *shape_rect_at(const char *id, int index);
-int add_shape_rect_cmd(const char *id, double ll_x_um, double ll_y_um, double ur_x_um, double ur_y_um);
 int remove_shape_rect(const char *id, int index);
 
 int shape_polygon_count(const char *id);
@@ -228,14 +227,12 @@ int shape_polygon_point_count(const char *id, int polygon_index);
 /// @brief The point at `point_index` in the polygon at `polygon_index`,
 /// as a 2-element "x y" microns string.
 const char *shape_polygon_point_at(const char *id, int polygon_index, int point_index);
-int add_shape_polygon_cmd(const char *id, const double *points_um, int32_t point_coord_count);
 int remove_shape_polygon(const char *id, int polygon_index);
 
 int shape_path_count(const char *id);
 double shape_path_width_um(const char *id, int path_index);
 int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
-int add_shape_path_cmd(const char *id, double width_um, const double *points_um, int32_t point_coord_count);
 int remove_shape_path(const char *id, int path_index);
 
 // --- Generated TCL property-reading surface (see backend/CLAUDE.md's

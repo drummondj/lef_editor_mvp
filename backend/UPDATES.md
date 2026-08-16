@@ -448,13 +448,15 @@ This is another generator-level change (`cmg`'s `Field.wrap_with_to_property`, s
 
 **Found and fixed a second real, previously-latent bug while implementing this one**: `get_properties shape:N .rects` (single-segment dot-path lookup, not the bare-token dict form) raised `unknown field 'rects' on Shape` - the dot-path resolver (`resolve_property_path`, backing every `le_X_property_path`) is built on the `-filter` DSL's `get_field()`, which only recognizes scalar leaf fields, never list fields like `rects`/`polygons`/`paths` (those are hops in filter terms, not leaves) - so a bare `.rects` could never have worked there, even though a plain `get_properties shape:N` (no name) already showed it via the unrelated `to_properties()`-based path. Fixed by having every `le_X_property_path` try a single-segment path against that same `build_X_properties()` row list first (the identical rows `get_properties $token` with no name already shows), falling back to the filter-DSL leaf/hop resolver only for a genuinely chained path (`.terminal.name`, `.shapes.layer_name`) - `build_X_properties()`'s row set is always a superset of the filter DSL's scalar leaves, so this is a pure widening, not a behavior change for anything that already worked. While fixing this, testing it surfaced a second, unrelated, genuinely dangerous bug: every `le_X_property_path` built its returned `LeProperty`'s `.name`/`.string_value` as raw `c_str()` pointers into a `std::optional<PropertyValue>` (or, for the new single-segment path, a freshly-built temporary `vector<PropertyValue>`) that was local to the function - a dangling pointer the instant the function returned. A short value (`"IN0"`) "worked" by sheer luck (small-string-optimized, its bytes often still intact in the just-freed stack slot when the caller read them milliseconds later), which is exactly why this went unnoticed through all of items 19.2's original dot-notation testing - only a longer, heap-allocated value (a formatted `rects`/`polygons`/`paths` coordinate list) reliably came back corrupted. Fixed by adding one more handle-owned single-slot cache (`cached_property_path_value`) that every `le_X_property_path` now writes its result into before returning `to_c()` of it - "valid until the next call", the same convention every other `LeProperty`-returning accessor in this file already relies on.
 
-# 20 Integrated help system
+# 20. Integrated help system
 
-I would like a couple of features applied to all TCL procs to help the user while they run interactive TCL commands in the GUI and le_shell:
+Features applied to all TCL procs to help the user while they run interactive TCL commands in the GUI and le_shell:
 
-1. global help command to return short usage messages for matching commands
-2. man command to display a man page style output for a specific command
-3. Command-line completion, when the user presses tab, a token is sent to the API with the current command line text and sugeestions for commands, and command arguments a provided (GUI only)
-4. Generate TCL command documentation in MD format, for evert command and command option.
+1. `help` command to return short usage messages for matching commands, i.e. help get\_\*
+2. `man` command to display a man page style output for a specific command
+3. Command-line completion, when the user presses tab, a token is sent to the API with the current command line text and sugeestions for commands, and command arguments a provided (GUI only for now). When the command argument provides a property name using dot-hop format. The property names should be auto-completed too. For example: get_properties shape:0 .[TAB] should list the properties available for the Shape object.
+4. Generate TCL command documentation in MD format, for every command and command option.
 
-The normal way to do this is to create some helper functions in TCL, that can be ran after creating a proc to annotate the usage and option data for that proc.
+The usual way to do this is to create some helper functions in TCL, that can be ran after creating a proc to annotate the usage and option data for that proc. The usage data can be stored in a global TCL variable and read by the help, man and command completetion procs. Then any custom TCL procs can be added to the help system at runtime.
+
+You should wrap all generated TCL commands with procs to enable this feature.

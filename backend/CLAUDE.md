@@ -189,9 +189,21 @@ none of these are duplicated here.
   `Layer`/`Via`/...), which nonetheless still gets a generated
   `create_<type>`/`update_<type>` pair like every other class (nothing calls
   either today, but it costs nothing extra to generate uniformly).
-  `Abstract.boundary` (a list field) has no update path — list-field
-  mutation is a future round's scope, same as `Shape`'s own rects/
-  polygons/paths, which keep their own separate hand-written CRUD instead.
+  `create_<type>`/`update_<type>` also cover a *list* of flattenable
+  embedded structs (`Field.list_compound_kind()`, e.g. `Shape.rects`/
+  `.polygons`/`.paths` — a `-rects {{ll_x ll_y ur_x ur_y} ...}`-shaped
+  flag per field), not just a single one — the former hand-written
+  `add_shape_rect`/`_polygon`/`_path` are gone, superseded by
+  `create_shape`/`update_shape`'s own generated flags (`update_shape`'s
+  own flag replaces the *whole* list, it doesn't append — a script
+  updating one entry among several reads the current list via
+  `get_properties`/`shape_rects` etc. and passes the full replacement).
+  `remove_shape_rect`/`_polygon`/`_path` (remove one entry by index)
+  still stay hand-written, alongside `delete_X`, since neither is
+  per-class flag-driven CRUD in the same sense. `Abstract.boundary` (a
+  list field structurally eligible the same way, but out of this round's
+  scope) has no update path yet — see `Field.create_excluded` in
+  `codegen/codegen/schema.py` for the deliberately-deferred fields.
   Fully covered by
   `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl` (run via
   `tclsh8.6`, not the generic `tclsh` — see the `build-test` skill).
@@ -292,8 +304,11 @@ in `codegen/codegen/schema.py` — see the `regen-tcl` skill for the opt-out/
 override mechanics and the full list of injection points) — uniformly
 across all ~35 classes today, including `Terminal`/`TerminalPort`/
 `Obstruction`/`Shape`, the only four classes that still have any
-hand-written CRUD elsewhere (`delete_X` — their `create_X`/per-field
-setters are gone too, superseded by `update_<type>`, see above).
+hand-written CRUD elsewhere (`delete_X`, plus `Shape`'s own
+`remove_shape_rect`/`_polygon`/`_path` for removing one geometry entry
+by index — their `create_X`/per-field setters, and `Shape`'s former
+`add_shape_rect`/`_polygon`/`_path`, are all gone too, superseded by
+`create_<type>`/`update_<type>`, see below).
 `Klass.has_current_access = True` (`Technology`/`Abstract`/`Schematic`) marks
 a class with a generated "current instance" concept (`current_X`/
 `set_current_X` — independent of any other "current view" state elsewhere,
@@ -304,14 +319,22 @@ from automatically, purely from schema graph structure — see
 the `regen-tcl` skill for the full injection-point list.
 
 `create_<type>` covers one flag per scalar field (`str`/`int`/`double`/
-`dbu`/`bool`/enum) plus one flag per *flattenable* embedded-struct field
+`dbu`/`bool`/enum), one flag per *flattenable* embedded-struct field
 (`Point`/`Rect`/`Symmetry`/`DensityCheckWindow`/... — see
 `Klass.embedded_scalar_leaves()`; the one embedded struct that isn't
 flattenable, `ParallelRunLengthSpacingTable`, a genuine variable-size
-table, stays out of scope). `is_child`/`is_list` fields stay out of scope
-entirely (a future `add_X`/`set_X` round, matching how `Shape`'s own
-rect/polygon/path CRUD is already separate from `create_shape`/
-`update_shape`). A flag is required iff `Field.create_required()` (mirrors
+table, stays out of scope), and one flag per *list* of a flattenable
+embedded struct (`Field.list_compound_kind()` — e.g. `Shape.rects`:
+`List[Rect]`, `.polygons`: `List[Polygon]`, `.paths`: `List[Path]`; see
+its own docstring for the three recognized element shapes — "flat" (a
+fixed-arity record like `Rect`), "points" (a variable-length list of
+points, like `Polygon`), "points_plus_scalars" (one point-list field
+plus sibling scalars, like `Path`'s `polygon`/`width`) — and
+`Field.create_excluded` for fields that structurally qualify but are
+deliberately deferred, e.g. `Abstract.boundary`, `Layer.min_sizes`).
+`is_child` fields stay out of scope entirely (an `add_X`/`set_X`
+relationship concern, not a value one). A flag is required iff
+`Field.create_required()` (mirrors
 `is_optional`, except `bool` and compound fields are always optional —
 `false` is already a zero-cost "not specified" default for `bool`, and a
 compound field's own `is_optional` is frequently just a scoping accident
@@ -327,15 +350,27 @@ cross the C boundary in microns (`<field>_um`, converted via
 `database_units_microns()`/`to_dbu()`), and an enum field crosses as its
 `to_string()`/`from_string()` spelling (e.g. `"INPUT"`, parsed via the
 matching generated `<enum>_from_string()` — see `enum_hpp_j2.py` — not a raw
-numeric code). A compound field explodes into one C slot per scalar leaf
-(`Point` → 2 doubles, `Rect` → 4, `Symmetry` → 3 `int32_t` flags) rather
-than reusing the existing `POINTS_ARRAY_UM` variable-length coordinate-list
-typemap (`le_api.i`) — a wrong-arity flag (`-size {1 2 3}`) then fails with
-a real, flag-naming Tcl error instead of deep inside C++ with no context; a
-`Symmetry`-shaped field instead takes a case-insensitive keyword set
-(`-symmetry {X Y R90}`, mirroring LEF's own `SYMMETRY X Y R90 ;` grammar).
-`Klass.cmd_tcl_preamble(mode)` generates the Tcl-side arity/keyword-set
-parsing (shared between `create_<type>` and `update_<type>`); `Field.
+numeric code). A single-struct compound field explodes into one C slot
+per scalar leaf (`Point` → 2 doubles, `Rect` → 4, `Symmetry` → 3
+`int32_t` flags), each individually arity-checked in Tcl before the
+`_cmd` call — a wrong-arity flag (`-size {1 2 3}`) then fails with a
+real, flag-naming Tcl error instead of deep inside C++ with no context;
+a `Symmetry`-shaped field instead takes a case-insensitive keyword set
+(`-symmetry {X Y R90}`, mirroring LEF's own `SYMMETRY X Y R90 ;`
+grammar). A *list*-of-struct compound field (`Field.list_compound_kind()`)
+instead flattens its whole nested Tcl list into a single `(const
+double*, int32_t count)` pair, reusing the existing `POINTS_ARRAY_UM`
+typemap (`le_api.i`) under its own `<field>_flat_um`/`<field>_flat_count`
+parameter names (`Klass.list_compound_swig_applies()` emits one `%apply`
+line per such field) — a "flat" element (`Rect`) needs no length prefix
+(fixed arity, arity-checked the same way a single-struct field is), a
+"points"/"points_plus_scalars" element (`Polygon`/`Path`) prefixes the
+whole flag with a record count and each record with its own point count,
+since each record's own length varies (`Field.list_compound_parse_lines()`
+parses this back apart api.cpp-side, with `count == 0` handled as a
+genuinely valid "no records" input, not a malformed one). `Klass.
+cmd_tcl_preamble(mode)` generates all of this Tcl-side flattening/arity
+checking (shared between `create_<type>` and `update_<type>`); `Field.
 cmd_param_slots(mode)` is the single place "one field → one or more C
 slots" is defined, so a signature can't drift from a call site. A
 multi-parent class (`Shape.terminal_port`/`.obstruction`, `ViaLayer`,
@@ -362,9 +397,15 @@ reparented in the same call, with the reparent applied first so the
 rename's own sibling-collision check already reflects the new parent.
 `update_<type>` is the *only* way any field is ever mutated after
 creation — see the `src/tcl/` bullet above for the "no per-field setters
-anywhere" constraint this enforces. `delete_X` stays a separate,
-hand-written concern; list-field mutation (`Abstract.boundary`, `Shape`'s
-own rects/polygons/paths) stays a separate, not-yet-built effort.
+anywhere" constraint this enforces. A `list_compound_kind()` field's own
+flag *replaces* the whole list when provided (matching every other
+field's "provide it, apply it" semantics), not appends — a caller adding
+one entry among several already-present ones reads the current list
+first (`get_properties`/`shape_rects` etc.) and passes the full
+replacement. `delete_X` stays a separate, hand-written concern;
+`Field.create_excluded` fields (`Abstract.boundary`, `Layer.min_sizes`,
+...) stay a separate, not-yet-enabled effort — deferred by explicit
+opt-out, not because the mechanism can't reach them.
 
 ## Open gaps (tracked in README's Plan checklist)
 

@@ -303,6 +303,7 @@ schema = Schema(
                     description="Orthogonal cut spacing table entries (LEF SPACINGTABLE ORTHOGONAL, CUT layers)",
                     type="OrthogonalSpacingEntry",
                     is_list=True,
+                    create_excluded=True,  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 ),
                 Field(
                     name="spacing_table_influence",
@@ -430,6 +431,7 @@ schema = Schema(
                     description="LEF MINSIZE (width, length) pairs, in database units",
                     type="MinSizeEntry",
                     is_list=True,
+                    create_excluded=True,  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 ),
                 Field(
                     name="min_enclosed_areas",
@@ -450,6 +452,7 @@ schema = Schema(
                     description="LEF ARRAYCUTS entries (CUT layers)",
                     type="ArrayCutsEntry",
                     is_list=True,
+                    create_excluded=True,  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 ),
                 Field(
                     name="array_spacing",
@@ -535,13 +538,14 @@ schema = Schema(
                 Field(name="side_area_factor", description="LEF ANTENNASIDEAREAFACTOR", type="double", example=1.0, is_optional=True),
                 Field(name="side_area_factor_diffuse_only", description="Whether ANTENNASIDEAREAFACTOR's DIFFUSEONLY suffix was specified", type="bool", example=False),
                 Field(name="diff_area_ratio", description="LEF ANTENNADIFFAREARATIO (scalar form)", type="double", example=100.0, is_optional=True),
-                Field(name="diff_area_ratio_pwl", description="LEF ANTENNADIFFAREARATIO PWL (list form) - mutually exclusive with diff_area_ratio", type="AntennaPWLEntry", is_list=True),
+                Field(name="diff_area_ratio_pwl", description="LEF ANTENNADIFFAREARATIO PWL (list form) - mutually exclusive with diff_area_ratio", type="AntennaPWLEntry", is_list=True, create_excluded=True),
                 Field(name="cum_diff_area_ratio", description="LEF ANTENNACUMDIFFAREARATIO (scalar form)", type="double", example=100.0, is_optional=True),
-                Field(name="cum_diff_area_ratio_pwl", description="LEF ANTENNACUMDIFFAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True),
+                Field(name="cum_diff_area_ratio_pwl", description="LEF ANTENNACUMDIFFAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True, create_excluded=True),
                 Field(name="diff_side_area_ratio", description="LEF ANTENNADIFFSIDEAREARATIO (scalar form)", type="double", example=100.0, is_optional=True),
-                Field(name="diff_side_area_ratio_pwl", description="LEF ANTENNADIFFSIDEAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True),
+                Field(name="diff_side_area_ratio_pwl", description="LEF ANTENNADIFFSIDEAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True, create_excluded=True),
                 Field(name="cum_diff_side_area_ratio", description="LEF ANTENNACUMDIFFSIDEAREARATIO (scalar form)", type="double", example=100.0, is_optional=True),
-                Field(name="cum_diff_side_area_ratio_pwl", description="LEF ANTENNACUMDIFFSIDEAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True),
+                Field(name="cum_diff_side_area_ratio_pwl", description="LEF ANTENNACUMDIFFSIDEAREARATIO PWL (list form)", type="AntennaPWLEntry", is_list=True, create_excluded=True),
+                # All four *_pwl fields above are structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only.
             ],
         ),
         Klass(
@@ -856,12 +860,14 @@ schema = Schema(
                     description="A list of rects",
                     type="Rect",
                     is_list=True,
+                    create_excluded=True,  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 ),
                 Field(
                     name="polygons",
                     description="A list of polygons",
                     type="Polygon",
                     is_list=True,
+                    create_excluded=True,
                 ),
                 Field(
                     name="rect_masks",
@@ -1426,24 +1432,28 @@ schema = Schema(
                     description="A list of raw RECT ITERATE statements, expanded into concrete rects by Pipeline::generate_shapes rather than at parse time",
                     type="RectIterate",
                     is_list=True,
+                    create_excluded=True,  # raw parser/writer artifact, never directly authored - see Field.create_excluded's own docstring
                 ),
                 Field(
                     name="path_iterates",
                     description="A list of raw PATH ITERATE statements, expanded into concrete paths by Pipeline::generate_shapes rather than at parse time",
                     type="PathIterate",
                     is_list=True,
+                    create_excluded=True,
                 ),
                 Field(
                     name="polygon_iterates",
                     description="A list of raw POLYGON ITERATE statements, expanded into concrete polygons by Pipeline::generate_shapes rather than at parse time",
                     type="PolygonIterate",
                     is_list=True,
+                    create_excluded=True,
                 ),
                 Field(
                     name="texts",
                     description="A list of texts",
                     type="Text",
                     is_list=True,
+                    create_excluded=True,  # Pipeline-computed render-time label, never LEF-authored data
                 ),
                 Field(
                     name="rect_masks",
@@ -1685,6 +1695,7 @@ schema = Schema(
                     description="The boundary of the abstract. If the block is rectilinear, then this matches the OVERLAP layer, otherwise it is the same as bbox.",
                     type="Polygon",
                     is_list=True,
+                    create_excluded=True,  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 ),
                 Field(
                     name="symmetry",
@@ -1775,7 +1786,7 @@ schema = Schema(
             fields=[
                 Field(name="abstract", description="Parent abstract", type="Abstract", parent="densities"),
                 Field(name="layer_name", description="The name of the layer", type="str", example="M1"),
-                Field(name="rects", description="The rects this layer's density values apply to", type="Rect", is_list=True),
+                Field(name="rects", description="The rects this layer's density values apply to", type="Rect", is_list=True, create_excluded=True),  # structurally list_compound-eligible but deferred - this round scoped to Shape.rects/polygons/paths only
                 Field(name="values", description="The density percentage per rect (parallel to rects)", type="double", example=45.0, is_list=True),
             ],
         ),

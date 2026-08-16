@@ -2396,45 +2396,6 @@ class LefEditorPluginBindings {
   late final _le_shape_rect_at = _le_shape_rect_atPtr
       .asFunction<LeRectUm Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
 
-  /// @brief Append one rect to the Shape at `id`. Returns 0 on
-  /// success, nonzero if handle is null, id doesn't name a Shape on
-  /// this handle, or no Technology has been read yet.
-  int le_add_shape_rect(
-    ffi.Pointer<LeHandle> handle,
-    LeShapeId id,
-    double ll_x_um,
-    double ll_y_um,
-    double ur_x_um,
-    double ur_y_um,
-  ) {
-    return _le_add_shape_rect(handle, id, ll_x_um, ll_y_um, ur_x_um, ur_y_um);
-  }
-
-  late final _le_add_shape_rectPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeShapeId,
-            ffi.Double,
-            ffi.Double,
-            ffi.Double,
-            ffi.Double,
-          )
-        >
-      >('le_add_shape_rect');
-  late final _le_add_shape_rect = _le_add_shape_rectPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          LeShapeId,
-          double,
-          double,
-          double,
-          double,
-        )
-      >();
-
   /// @brief Remove the rect at `index` (0..le_shape_rect_count(id)-1)
   /// from the Shape at `id`, shifting every later rect's index down by
   /// one (matching le_shape_rect_at's own 0-based-position addressing
@@ -2523,43 +2484,6 @@ class LefEditorPluginBindings {
   late final _le_shape_polygon_point_at = _le_shape_polygon_point_atPtr
       .asFunction<
         LePointUm Function(ffi.Pointer<LeHandle>, LeShapeId, int, int)
-      >();
-
-  /// @brief Append one polygon to the Shape at `id`, built from
-  /// `points_um` (a flat array of microns, alternating x/y -
-  /// `point_coord_count` must be a positive even number, at least 6 -
-  /// i.e. at least 3 points - to be a real polygon). Returns 0 on
-  /// success, nonzero if handle or points_um is null; id doesn't name
-  /// a Shape on this handle; point_coord_count is invalid; or no
-  /// Technology has been read yet.
-  int le_add_shape_polygon(
-    ffi.Pointer<LeHandle> handle,
-    LeShapeId id,
-    ffi.Pointer<ffi.Double> points_um,
-    int point_coord_count,
-  ) {
-    return _le_add_shape_polygon(handle, id, points_um, point_coord_count);
-  }
-
-  late final _le_add_shape_polygonPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeShapeId,
-            ffi.Pointer<ffi.Double>,
-            ffi.Int32,
-          )
-        >
-      >('le_add_shape_polygon');
-  late final _le_add_shape_polygon = _le_add_shape_polygonPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          LeShapeId,
-          ffi.Pointer<ffi.Double>,
-          int,
-        )
       >();
 
   /// @brief Remove the polygon at `polygon_index`
@@ -2671,54 +2595,6 @@ class LefEditorPluginBindings {
   late final _le_shape_path_point_at = _le_shape_path_point_atPtr
       .asFunction<
         LePointUm Function(ffi.Pointer<LeHandle>, LeShapeId, int, int)
-      >();
-
-  /// @brief Append one path to the Shape at `id`: `width_um` (the
-  /// path's stroke width) and `points_um`/`point_coord_count` (its
-  /// centerline, same flat-microns-array convention as
-  /// le_add_shape_polygon, but only at least 2 points - i.e.
-  /// point_coord_count >= 4 - are required, since a path's centerline
-  /// doesn't need to close into a loop). Returns 0 on success, nonzero
-  /// if handle or points_um is null; id doesn't name a Shape on this
-  /// handle; point_coord_count is invalid; or no Technology has been
-  /// read yet.
-  int le_add_shape_path(
-    ffi.Pointer<LeHandle> handle,
-    LeShapeId id,
-    double width_um,
-    ffi.Pointer<ffi.Double> points_um,
-    int point_coord_count,
-  ) {
-    return _le_add_shape_path(
-      handle,
-      id,
-      width_um,
-      points_um,
-      point_coord_count,
-    );
-  }
-
-  late final _le_add_shape_pathPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeShapeId,
-            ffi.Double,
-            ffi.Pointer<ffi.Double>,
-            ffi.Int32,
-          )
-        >
-      >('le_add_shape_path');
-  late final _le_add_shape_path = _le_add_shape_pathPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          LeShapeId,
-          double,
-          ffi.Pointer<ffi.Double>,
-          int,
-        )
       >();
 
   /// @brief Remove the path at `path_index`
@@ -9616,6 +9492,15 @@ class LefEditorPluginBindings {
     LeTerminalPortId terminal_port_id,
     LeObstructionId obstruction_id,
     ffi.Pointer<ffi.Char> layer_name,
+    int has_paths,
+    ffi.Pointer<ffi.Double> paths_flat_um,
+    int paths_flat_count,
+    int has_polygons,
+    ffi.Pointer<ffi.Double> polygons_flat_um,
+    int polygons_flat_count,
+    int has_rects,
+    ffi.Pointer<ffi.Double> rects_flat_um,
+    int rects_flat_count,
     int has_spacing,
     double spacing_um,
     int has_design_rule_width,
@@ -9627,6 +9512,15 @@ class LefEditorPluginBindings {
       terminal_port_id,
       obstruction_id,
       layer_name,
+      has_paths,
+      paths_flat_um,
+      paths_flat_count,
+      has_polygons,
+      polygons_flat_um,
+      polygons_flat_count,
+      has_rects,
+      rects_flat_um,
+      rects_flat_count,
       has_spacing,
       spacing_um,
       has_design_rule_width,
@@ -9644,6 +9538,15 @@ class LefEditorPluginBindings {
             LeObstructionId,
             ffi.Pointer<ffi.Char>,
             ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
             ffi.Double,
             ffi.Int32,
             ffi.Double,
@@ -9658,6 +9561,15 @@ class LefEditorPluginBindings {
           LeTerminalPortId,
           LeObstructionId,
           ffi.Pointer<ffi.Char>,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
           int,
           double,
           int,
@@ -12362,6 +12274,15 @@ class LefEditorPluginBindings {
     ffi.Pointer<LeHandle> handle,
     LeShapeId id,
     ffi.Pointer<ffi.Char> layer_name,
+    int has_paths,
+    ffi.Pointer<ffi.Double> paths_flat_um,
+    int paths_flat_count,
+    int has_polygons,
+    ffi.Pointer<ffi.Double> polygons_flat_um,
+    int polygons_flat_count,
+    int has_rects,
+    ffi.Pointer<ffi.Double> rects_flat_um,
+    int rects_flat_count,
     int has_spacing,
     double spacing_um,
     int has_design_rule_width,
@@ -12373,6 +12294,15 @@ class LefEditorPluginBindings {
       handle,
       id,
       layer_name,
+      has_paths,
+      paths_flat_um,
+      paths_flat_count,
+      has_polygons,
+      polygons_flat_um,
+      polygons_flat_count,
+      has_rects,
+      rects_flat_um,
+      rects_flat_count,
       has_spacing,
       spacing_um,
       has_design_rule_width,
@@ -12390,6 +12320,15 @@ class LefEditorPluginBindings {
             LeShapeId,
             ffi.Pointer<ffi.Char>,
             ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Double>,
+            ffi.Int32,
+            ffi.Int32,
             ffi.Double,
             ffi.Int32,
             ffi.Double,
@@ -12404,6 +12343,15 @@ class LefEditorPluginBindings {
           ffi.Pointer<LeHandle>,
           LeShapeId,
           ffi.Pointer<ffi.Char>,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
+          int,
+          ffi.Pointer<ffi.Double>,
+          int,
           int,
           double,
           int,

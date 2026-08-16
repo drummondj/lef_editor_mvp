@@ -74,8 +74,9 @@ def _leaf_param_name(field_name: str, flat: str, leaf: "Field") -> str:
     The C-level parameter name for one flattened scalar leaf of a compound
     create field, e.g. Abstract.bbox's ur_y leaf -> "bbox_ur_y_um" (dbu
     leaves get the same _um suffix Field.create_c_param_name() already
-    uses for a plain dbu field, matching le_add_shape_rect's own
-    ll_x_um/.../ur_y_um convention).
+    uses for a plain dbu field - matches the same microns-at-the-C-
+    boundary convention every dbu-crossing parameter in this generated
+    surface follows, e.g. le_create_shape's own rects_flat_um).
     """
     return f"{field_name}_{flat}_um" if leaf.type == "dbu" else f"{field_name}_{flat}"
 
@@ -521,6 +522,26 @@ class Klass:
             return "flags"
         raise ValueError(f"compound_leaf_kind: {self.name} has mixed leaf types {types!r} - no flag convention designed for this")
 
+    def is_point_list_wrapper(self) -> bool:
+        """
+        True for an embedded (has_pool=False, non-enum) Klass shaped like
+        Polygon: exactly one field, itself is_list=True, whose own
+        element type is flattenable (embedded_scalar_leaves() - e.g.
+        Point, 2 scalar leaves). This is the building block
+        Field.list_compound_kind()'s "points" and "points_plus_scalars"
+        kinds are both defined in terms of - a variable-length list of
+        fixed-size records (a polygon/path's own point list), as opposed
+        to embedded_scalar_leaves()'s "single fixed-size record"
+        (Point/Rect/Symmetry/...).
+        """
+        if self.has_pool or self.is_enum or len(self.fields) != 1:
+            return False
+        only = self.fields[0]
+        if not only.is_list or only.has_parent() or only.is_child:
+            return False
+        leaf_tk = only._type_klass
+        return leaf_tk is not None and not leaf_tk.is_enum and not leaf_tk.has_pool and leaf_tk.embedded_scalar_leaves() is not None
+
     def get_create_fields(self) -> List["Field"]:
         """
         Every field that gets its own flag on this class's generated
@@ -605,6 +626,32 @@ class Klass:
         parts = [f"resolve_{pf._parent_klass.to_snake_case()}_id({pf.name}_id)" for pf in self.get_parent_fields()]
         parts += self._create_field_forward_parts("create")
         return ", ".join(parts)
+
+    def list_compound_swig_applies(self) -> str:
+        """
+        `%apply` lines (le_api.i) letting each of this class's own
+        list_compound_kind() create fields reuse the existing
+        POINTS_ARRAY_UM/POINTS_COORD_COUNT typemap (le_api.i's own
+        coordinate-list typemap, hand-written there since it needs real
+        Tcl_Interp/Tcl_ListObjGetElements access no generated code
+        touches) under its own `<field>_flat_um`/
+        `<field>_flat_count` parameter names - SWIG's %apply matches by
+        exact parameter name, so a class with more than one such field
+        (e.g. Shape's rects/polygons/paths) needs one line per field, and
+        every one must appear before any declaration using those names
+        (le_api_generated_i_j2.py emits these as a preamble, ahead of
+        every create_<type>_cmd/update_<type>_cmd declaration, for
+        exactly this reason). Empty string if this class has no
+        list_compound_kind() create fields.
+        """
+        lines = []
+        for f in self.get_create_fields():
+            if f.list_compound_kind() is not None:
+                lines.append(
+                    "%apply (const double *POINTS_ARRAY_UM, int32_t POINTS_COORD_COUNT) "
+                    f"{{ (const double *{f.list_compound_c_param_name()}, int32_t {f.name}_flat_count) }};"
+                )
+        return "\n".join(lines)
 
     def create_api_body(self) -> str:
         """
@@ -700,6 +747,11 @@ class Klass:
             add(f'    handle->messages.push_back(fmt::format("ERROR: le_create_{snake}: no Technology has been read yet (needed for micron-to-dbu conversion)"));')
             add("    return invalid;")
             add("}")
+
+        list_compound_fields = [f for f in create_fields if f.list_compound_kind() is not None]
+        for f in list_compound_fields:
+            add()
+            lines.extend(f.list_compound_parse_lines("create", "return invalid;", f"le_create_{snake}"))
 
         add()
         add(f"const le::{self.name}Id created = handle->root.create_{snake}(le::{self.name}Data{{")
@@ -805,14 +857,19 @@ class Klass:
     def cmd_tcl_preamble(self, mode: str) -> str:
         """
         Generated Tcl statements, emitted after flag parsing and before
-        the _cmd call, that turn every compound create field's own Tcl
-        list flag value into its has-flag + leaf-parameter locals (see
+        the _cmd call, that turn every compound or list_compound_kind()-
+        eligible create field's own Tcl list flag value into its has-flag
+        (+ leaf-parameter locals, or a single flattened list - see
         Field.cmd_tcl_preamble()) - shared verbatim between create_<type>
         and update_<type> generation. Empty string if this class has no
-        compound create fields.
+        such create fields.
         """
         cmd_name = f"{mode}_{self.to_snake_case()}"
-        lines = [f.cmd_tcl_preamble(mode, cmd_name) for f in self.get_create_fields() if f.compound_klass() is not None]
+        lines = [
+            f.cmd_tcl_preamble(mode, cmd_name)
+            for f in self.get_create_fields()
+            if f.compound_klass() is not None or f.list_compound_kind() is not None
+        ]
         return "\n".join(line for line in lines if line)
 
     def update_api_params(self) -> str:
@@ -1017,6 +1074,11 @@ class Klass:
             add(f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: no Technology has been read yet (needed for micron-to-dbu conversion)"));')
             add("    return 1;")
             add("}")
+
+        list_compound_fields = [f for f in create_fields if f.list_compound_kind() is not None]
+        for f in list_compound_fields:
+            add()
+            lines.extend(f.list_compound_parse_lines("update", "return 1;", f"le_update_{snake}"))
 
         add()
         call_args = ["typed_id"]
@@ -1519,6 +1581,18 @@ class Field:
             field's value, mirroring this codebase's existing Id::valid()
             sentinel convention instead of introducing a new failure signal.
 
+        create_excluded (bool): Opt this field out of create_<type>/
+            update_<type> flag generation even though it would otherwise
+            structurally qualify (a scalar, a flattenable compound, or a
+            list_compound_kind()-eligible list) - e.g. Shape.rect_iterates/
+            path_iterates/polygon_iterates (raw LEF ITERATE statements,
+            re-expanded into concrete rects/paths/polygons by
+            Pipeline::generate_shapes, never meant to be directly
+            authored) and Shape.texts (a Pipeline-computed render-time
+            label, never LEF-authored data - see is_create_field()'s own
+            docstring for the general "not user-authorable data" theme
+            this flag exists for).
+
         value (int): Optional enum value.
     """
 
@@ -1533,6 +1607,7 @@ class Field:
     is_optional: bool = False
     index: bool = False
     unique_per_parent: bool = False
+    create_excluded: bool = False
     value: Optional[int] = None
     _parent_klass: Optional[Klass] = field(default=None, repr=False, init=False)
     _parent_field: Optional["Field"] = field(default=None, repr=False, init=False)
@@ -1675,23 +1750,316 @@ class Field:
             return False
         return self.compound_klass() is not None
 
+    def list_compound_kind(self) -> Optional[str]:
+        """
+        Whether this is_list field is a *list* of flattenable embedded
+        structs eligible for its own create_<type>/update_<type> flag -
+        distinct from compound_klass()'s single-struct case (Point/Rect/
+        Symmetry) in both shape (N records, not one) and Tcl wire format
+        (a nested list, flattened with embedded per-record lengths rather
+        than a fixed slot count - see Klass.cmd_tcl_preamble()/Field.
+        list_compound_parse_lines()). Three kinds, all built on top of
+        Klass.embedded_scalar_leaves()/is_point_list_wrapper():
+
+        - "flat": the element Klass is itself flattenable
+          (embedded_scalar_leaves() - e.g. Shape.rects: List[Rect], each
+          Rect always exactly 4 scalar leaves) - every record has the
+          same fixed arity, so the Tcl wire format needs no per-record
+          length prefix, just `{{ll_x ll_y ur_x ur_y} ...}`.
+        - "points": the element Klass is itself a point-list wrapper
+          (Klass.is_point_list_wrapper() - e.g. Shape.polygons:
+          List[Polygon], each Polygon a variable-length list of Points) -
+          each record's own length varies, so the wire format needs a
+          per-record point-count prefix.
+        - "points_plus_scalars": the element Klass has exactly one
+          point-list-wrapper-typed field (e.g. Path.polygon) plus one or
+          more other flattenable scalar/compound fields (e.g. Path.width)
+          - see list_compound_point_field()/list_compound_scalar_fields().
+          The wire format prefixes each record's scalar field(s) (in
+          declaration order) before its own point-count/coordinates.
+
+        None for a plain scalar list (e.g. Shape.rect_masks - already
+        excluded from is_create_field() the same way it always was), an
+        is_child/parent list, or an embedded-struct list whose element
+        doesn't match any of the three shapes above.
+        """
+        if not self.is_list or self.has_parent() or self.is_child:
+            return None
+        if self.create_excluded:
+            return None
+        tk = self._type_klass
+        if tk is None or tk.is_enum or tk.has_pool:
+            return None
+        leaves = tk.embedded_scalar_leaves()
+        if leaves is not None and all(leaf.type in ("dbu", "int", "double", "bool") for _, leaf in leaves):
+            # Excludes a str-leaved flattenable struct (e.g. Text - label
+            # is a str leaf embedded_scalar_leaves() itself doesn't
+            # reject, since it only checks structural well-formedness,
+            # not leaf types) - list_compound_parse_lines()'s "flat" kind
+            # always converts leaves numerically (_leaf_value_expr()), so
+            # a str leaf would either misconvert silently or fail to
+            # compile; excluded here instead of ever generating either.
+            return "flat"
+        if tk.is_point_list_wrapper():
+            return "points"
+        point_fields = [
+            f
+            for f in tk.fields
+            if not f.is_list
+            and not f.has_parent()
+            and not f.is_child
+            and f._type_klass is not None
+            and f._type_klass.is_point_list_wrapper()
+        ]
+        if len(point_fields) != 1:
+            return None
+        others = [f for f in tk.fields if f is not point_fields[0]]
+        others_ok = others and all(
+            not f.is_list
+            and not f.has_parent()
+            and not f.is_child
+            and (f._type_klass is None or f._type_klass.is_enum or f.is_compound_create_field())
+            for f in others
+        )
+        return "points_plus_scalars" if others_ok else None
+
+    def list_compound_point_field(self) -> Optional["Field"]:
+        """
+        For a "points_plus_scalars" list-compound field (see
+        list_compound_kind()), the element Klass's own single
+        point-list-wrapper-typed field (e.g. Path.polygon) - None for
+        "flat"/"points" kinds, which have no such field to single out.
+        """
+        if self.list_compound_kind() != "points_plus_scalars":
+            return None
+        tk = self._type_klass
+        for f in tk.fields:
+            if not f.is_list and not f.has_parent() and not f.is_child and f._type_klass is not None and f._type_klass.is_point_list_wrapper():
+                return f
+        return None
+
+    def list_compound_scalar_fields(self) -> List["Field"]:
+        """
+        For a "points_plus_scalars" list-compound field (see
+        list_compound_kind()), the element Klass's own remaining fields
+        besides list_compound_point_field() (e.g. Path.width) - in
+        declaration order, the order list_compound_parse_lines() reads
+        them from the flat wire encoding (each record's own scalars
+        prefix its point-count/coordinates). Empty for "flat"/"points"
+        kinds.
+        """
+        point_field = self.list_compound_point_field()
+        if point_field is None:
+            return []
+        return [f for f in self._type_klass.fields if f is not point_field]
+
+    @staticmethod
+    def _compound_ctor_expr_indexed(klass: "Klass", array_expr: str, base_expr: str, start_offset: int = 0) -> Tuple[str, int]:
+        """
+        `_compound_ctor_expr()`'s own array-indexed counterpart, used for
+        the "flat" list_compound_kind() (e.g. Rect) instead of the
+        named-parameter version create_<type>'s own single-struct
+        compound fields use - there are no named per-leaf parameters
+        here, only a flat `array_expr[base_expr + offset]` positional
+        walk (offset 0 omits the "+ 0"). `start_offset` threads a plain
+        integer accumulator through nested recursion (Rect -> ll/ur, each
+        a Point) rather than nesting "+ 2 + 1"-style string
+        concatenation, so a doubly-nested leaf's own index still reads as
+        a single "+ 3", not a chain of additions. Returns (ctor
+        expression, number of flat slots this call itself consumed - not
+        counting start_offset), so a caller stepping through several such
+        records in a loop knows how far to advance.
+        """
+        parts = []
+        offset = start_offset
+        for f in klass.fields:
+            tk = f._type_klass
+            if tk is not None and not tk.is_enum:
+                sub_expr, consumed = Field._compound_ctor_expr_indexed(tk, array_expr, base_expr, offset)
+                parts.append(f".{f.name} = {sub_expr}")
+                offset += consumed
+            else:
+                index_expr = base_expr if offset == 0 else f"{base_expr} + {offset}"
+                parts.append(f".{f.name} = " + _leaf_value_expr(f, f"{array_expr}[{index_expr}]"))
+                offset += 1
+        return f"le::{klass.name}{{" + ", ".join(parts) + "}", offset - start_offset
+
+    def list_compound_c_param_name(self) -> str:
+        """The flat-array C parameter name for this list-compound create field - `<field>_flat_um`."""
+        return f"{self.name}_flat_um"
+
+    def list_compound_parse_lines(self, mode: str, invalid_return: str, cmd_name: str) -> List[str]:
+        """
+        api.cpp-layer statements (8-space indented, matching create_api_body()/
+        update_api_body()'s own base indent) that parse this list-compound
+        create field's own `<field>_flat_um`/`<field>_flat_count` slots
+        (cmd_param_slots()) - the flat, per-record-length-prefixed
+        encoding Klass.cmd_tcl_preamble() builds Tcl-side (see its own
+        docstring for the exact wire format per kind) - into a ready-to-
+        use `<field>_value` local: a plain `std::vector<ElementKlass>` in
+        create mode (an omitted flag already means "no records", so the
+        parse loop just runs unconditionally over a possibly-empty flat
+        array); the same declaration but the parse loop itself guarded by
+        `if (has_<field>)` in update mode, so `<field>_value` stays
+        default-constructed (empty) - matched by
+        Field.update_root_arg_expr()'s own `has_<field> ? std::optional
+        (...) : std::nullopt` wrapping - when the flag was never provided
+        at all. Assumes a local `dbu_per_um` already exists
+        (cmd_uses_dbu() is always True for a list-compound field, so
+        create_api_body()/update_api_body() already guarantee this by
+        the time this runs). Every arity/malformed-encoding check here is
+        defense in depth against a caller reaching *_cmd directly with a
+        hand-built flat array - the generated Tcl preamble already
+        guarantees a well-formed one.
+        """
+        kind = self.list_compound_kind()
+        element_klass = self._type_klass
+        name = self.name
+        param = self.list_compound_c_param_name()
+        count_param = f"{name}_flat_count"
+        lines: List[str] = []
+
+        def add(text: str = "", depth: int = 0) -> None:
+            lines.append(f"        {'    ' * depth}{text}" if text else "")
+
+        add(f"std::vector<le::{element_klass.name}> {name}_value;")
+        guarded = mode == "update"
+        if guarded:
+            add(f"if (has_{name})")
+            add("{")
+        d = 1 if guarded else 0
+
+        if kind == "flat":
+            leaf_count = len(element_klass.embedded_scalar_leaves())
+            add(f"if ({count_param} % {leaf_count} != 0)", d)
+            add("{", d)
+            add(
+                f'    handle->messages.push_back(fmt::format("ERROR: {cmd_name}: -{name}: each entry needs '
+                f'{leaf_count} coordinates"));',
+                d,
+            )
+            add(f"    {invalid_return}", d)
+            add("}", d)
+            ctor_expr, _ = Field._compound_ctor_expr_indexed(element_klass, param, "i")
+            add(f"for (int32_t i = 0; i < {count_param}; i += {leaf_count})", d)
+            add(f"    {name}_value.push_back({ctor_expr});", d)
+        elif kind == "points":
+            # {count_param} == 0 is a genuinely valid "zero records"
+            # input (not just the Tcl preamble's own always-present
+            # record-count prefix collapsing to a 1-element {0} - a
+            # direct C caller reasonably passes a truly empty array/0
+            # count for "none provided" too), so it's guarded separately
+            # from the malformed-encoding checks inside the loop, which
+            # only apply once we know at least the record-count prefix
+            # itself is present.
+            point_field = element_klass.fields[0]  # the sole is_list field (Klass.is_point_list_wrapper())
+            add(f"if ({count_param} > 0)", d)
+            add("{", d)
+            add("    int32_t i = 0;", d)
+            add(f"    const int32_t {name}_record_count = static_cast<int32_t>({param}[i++]);", d)
+            add(f"    for (int32_t r = 0; r < {name}_record_count; ++r)", d)
+            add("    {", d)
+            add(f"        if (i >= {count_param})", d)
+            add("        {", d)
+            add(f'            handle->messages.push_back(fmt::format("ERROR: {cmd_name}: -{name}: malformed entry"));', d)
+            add(f"            {invalid_return}", d)
+            add("        }", d)
+            add(f"        const int32_t {name}_point_count = static_cast<int32_t>({param}[i++]);", d)
+            add(f"        if ({name}_point_count < 2 || i + {name}_point_count * 2 > {count_param})", d)
+            add("        {", d)
+            add(
+                f'            handle->messages.push_back(fmt::format("ERROR: {cmd_name}: -{name}: each entry '
+                f'needs at least 2 points"));',
+                d,
+            )
+            add(f"            {invalid_return}", d)
+            add("        }", d)
+            add(f"        le::{element_klass.name} {name}_record;", d)
+            add(f"        for (int32_t c = 0; c < {name}_point_count; ++c)", d)
+            add("        {", d)
+            add(
+                f"            {name}_record.{point_field.name}.push_back(le::Point{{.x = to_dbu({param}[i], "
+                f"*dbu_per_um), .y = to_dbu({param}[i + 1], *dbu_per_um)}});",
+                d,
+            )
+            add("            i += 2;", d)
+            add("        }", d)
+            add(f"        {name}_value.push_back(std::move({name}_record));", d)
+            add("    }", d)
+            add("}", d)
+        else:  # "points_plus_scalars"
+            # See the "points" branch's own comment on why {count_param}
+            # == 0 is guarded separately as a valid "zero records" input,
+            # not folded into the malformed-encoding checks below.
+            point_field = self.list_compound_point_field()
+            scalar_fields = self.list_compound_scalar_fields()
+            add(f"if ({count_param} > 0)", d)
+            add("{", d)
+            add("    int32_t i = 0;", d)
+            add(f"    const int32_t {name}_record_count = static_cast<int32_t>({param}[i++]);", d)
+            add(f"    for (int32_t r = 0; r < {name}_record_count; ++r)", d)
+            add("    {", d)
+            add(f"        if (i + {len(scalar_fields)} >= {count_param})", d)
+            add("        {", d)
+            add(f'            handle->messages.push_back(fmt::format("ERROR: {cmd_name}: -{name}: malformed entry"));', d)
+            add(f"            {invalid_return}", d)
+            add("        }", d)
+            scalar_value_exprs = []
+            for sf in scalar_fields:
+                scalar_value_exprs.append(_leaf_value_expr(sf, f"{param}[i]"))
+                add(f"        const auto {name}_{sf.name} = {scalar_value_exprs[-1]};", d)
+                add("        ++i;", d)
+            add(f"        const int32_t {name}_point_count = static_cast<int32_t>({param}[i++]);", d)
+            add(f"        if ({name}_point_count < 2 || i + {name}_point_count * 2 > {count_param})", d)
+            add("        {", d)
+            add(
+                f'            handle->messages.push_back(fmt::format("ERROR: {cmd_name}: -{name}: each entry '
+                f'needs at least 2 points"));',
+                d,
+            )
+            add(f"            {invalid_return}", d)
+            add("        }", d)
+            add(f"        le::{point_field.type} {name}_points;", d)
+            add(f"        for (int32_t c = 0; c < {name}_point_count; ++c)", d)
+            add("        {", d)
+            add(
+                f"            {name}_points.{point_field._type_klass.fields[0].name}.push_back(le::Point{{.x = "
+                f"to_dbu({param}[i], *dbu_per_um), .y = to_dbu({param}[i + 1], *dbu_per_um)}});",
+                d,
+            )
+            add("            i += 2;", d)
+            add("        }", d)
+            ctor_parts = [f".{point_field.name} = std::move({name}_points)"]
+            ctor_parts += [f".{sf.name} = {name}_{sf.name}" for sf in scalar_fields]
+            add(f"        {name}_value.push_back(le::{element_klass.name}{{" + ", ".join(ctor_parts) + "});", d)
+            add("    }", d)
+            add("}", d)
+
+        if guarded:
+            add("}")
+        return lines
+
     def is_create_field(self) -> bool:
         """
         Whether this field gets its own flag on the generated
         create_<type>/update_<type> TCL/API commands - a scalar leaf value
         (str/int/double/dbu/bool/enum), not a parent reference, not a
         child relationship (is_child, set via a future add_X/set_X round,
-        not at creation), not a plain list (same reasoning - an empty
-        vector already conveys "no items" at creation, appended to
-        afterward), OR a flattenable embedded-struct field (Point/Rect/
+        not at creation), a flattenable embedded-struct field (Point/Rect/
         Symmetry/DensityCheckWindow/... - see is_compound_create_field()),
-        exploded into one flag with several C slots. A non-flattenable
-        embedded struct (e.g. ParallelRunLengthSpacingTable, a genuine
-        variable-size table) stays excluded, deferred to a future add_X/
-        set_X round the same way is_list fields already are.
+        exploded into one flag with several C slots, or a *list* of
+        flattenable embedded structs (see list_compound_kind() - e.g.
+        Shape.rects/polygons/paths). A plain scalar list (e.g.
+        Shape.rect_masks) or a non-flattenable embedded struct (e.g.
+        ParallelRunLengthSpacingTable, a genuine variable-size table)
+        stays excluded, deferred to a future add_X/set_X round. Never
+        True if create_excluded is set, regardless of what this field
+        would otherwise structurally qualify as.
         """
-        if self.has_parent() or self.is_child or self.is_list:
+        if self.create_excluded or self.has_parent() or self.is_child:
             return False
+        if self.is_list:
+            return self.list_compound_kind() is not None
         if self._type_klass is None or self._type_klass.is_enum:
             return True
         return self.is_compound_create_field()
@@ -1724,6 +2092,8 @@ class Field:
             return False
         if self.is_compound_create_field():
             return False
+        if self.list_compound_kind() is not None:
+            return False
         return not self.is_optional
 
     def create_needs_has_flag(self, mode: str = "create") -> bool:
@@ -1735,7 +2105,12 @@ class Field:
         overwrite.
         - A compound field always needs one (one has-flag for the whole
           struct, not one per leaf - create_required() is always False for
-          these, so this fires in both modes).
+          these, so this fires in both modes). A list_compound field
+          (Field.list_compound_kind()) likewise always needs one - the
+          flat array's own element count can't distinguish "omitted" from
+          "explicitly provided as an empty list" (both flatten to count
+          0), the same "zero is a legitimate value" reasoning `bool`
+          needs one for in update mode.
         - str/enum never need one: they already have an unambiguous
           "omitted" signal at the C layer (nullptr, distinct from a real,
           even empty, string/enum name) that a companion flag would be
@@ -1749,7 +2124,7 @@ class Field:
           is required there), and in create mode whenever create_required()
           is False.
         """
-        if self.is_compound_create_field():
+        if self.is_compound_create_field() or self.list_compound_kind() is not None:
             return True
         if mode == "update":
             return self.type in ("int", "double", "dbu", "bool")
@@ -1759,9 +2134,10 @@ class Field:
         """
         The C-level parameter name for this create-field's value slot -
         `<name>_um` for a dbu field (its value crosses the C API in
-        microns, converted via database_units_microns()/to_dbu(), same
-        convention as le_add_shape_rect's own ll_x_um/.../ur_y_um), the
-        bare field name for everything else.
+        microns, converted via database_units_microns()/to_dbu() - the
+        same microns-at-the-C-boundary convention every dbu-crossing
+        parameter in this generated surface follows), the bare field
+        name for everything else.
         """
         return f"{self.name}_um" if self.type == "dbu" else self.name
 
@@ -1817,6 +2193,10 @@ class Field:
         slots: List[Tuple[str, str]] = []
         if self.create_needs_has_flag(mode):
             slots.append(("int32_t", f"has_{self.name}"))
+        if self.list_compound_kind() is not None:
+            slots.append(("const double *", self.list_compound_c_param_name()))
+            slots.append(("int32_t", f"{self.name}_flat_count"))
+            return slots
         ck = self.compound_klass()
         if ck is None:
             slots.append((self.create_c_type(), self.create_c_param_name()))
@@ -1844,6 +2224,10 @@ class Field:
         exprs: List[str] = []
         if self.create_needs_has_flag(mode):
             exprs.append(f"has_{self.name}")
+        if self.list_compound_kind() is not None:
+            exprs.append(self.list_compound_c_param_name())
+            exprs.append(f"{self.name}_flat_count")
+            return exprs
         ck = self.compound_klass()
         if ck is not None:
             for flat, leaf in ck.embedded_scalar_leaves():
@@ -1865,6 +2249,8 @@ class Field:
         qualify; Symmetry, all-bool, does not).
         """
         if self.type == "dbu":
+            return True
+        if self.list_compound_kind() is not None:
             return True
         ck = self.compound_klass()
         if ck is None:
@@ -1926,6 +2312,15 @@ class Field:
         """
         if self.is_compound_create_field():
             return f"has_{self.name} ? std::optional<le::{self.type}>({self.cmd_value_expr()}) : std::nullopt"
+        if self.list_compound_kind() is not None:
+            # Klass.create_api_body() already parsed the flat wire
+            # encoding into a `<field>_value` std::vector<ElementKlass>
+            # local (see Field.list_compound_parse_lines()) - an omitted
+            # flag already means "no records" there (create mode's parse
+            # loop always runs, has_<field> or not), so this is a plain
+            # move, never optional-wrapped - ShapeData.rects etc. are
+            # themselves plain std::vector<T>, never std::optional<...>.
+            return f"std::move({self.name}_value)"
         name = self.create_c_param_name()
         if self.is_enum_type():
             return f"*parsed_{self.name}" if self.create_required() else f"parsed_{self.name}"
@@ -1966,10 +2361,17 @@ class Field:
         ck = self.compound_klass()
         args: List[str] = []
         if self.create_needs_has_flag(mode):
-            if ck is not None:
+            if ck is not None or self.list_compound_kind() is not None:
                 args.append(f"$has_{self.name}")
             else:
                 args.append(f"[expr {{{opt} ne {{}} ? 1 : 0}}]")
+        if self.list_compound_kind() is not None:
+            # The flat list itself, not a separate count - the shared
+            # POINTS_ARRAY_UM SWIG typemap derives the count from the
+            # Tcl list's own length (le_api.i), the same as every
+            # existing points_um-taking command already relies on.
+            args.append(f"${self.name}_flat")
+            return args
         if ck is not None:
             for flat, leaf in ck.embedded_scalar_leaves():
                 args.append(f"${_leaf_param_name(self.name, flat, leaf)}")
@@ -1983,6 +2385,78 @@ class Field:
         args.append(opt)
         return args
 
+    def _list_compound_tcl_preamble(self, cmd_name: str) -> str:
+        """
+        cmd_tcl_preamble()'s own list_compound_kind() branch, factored
+        out for readability - turns this field's own nested-list flag
+        value (`$opts(-rects)` etc.) into `has_<field>` and a single flat
+        `<field>_flat` Tcl list, in the wire encoding
+        Field.list_compound_parse_lines() parses back apart api.cpp-side:
+        "flat" (Rect-like) needs no per-record length prefix, since every
+        record has the same fixed arity (arity-checked here instead, a
+        real Tcl error naming the flag, the same reason create_<type>'s
+        single-struct compound fields already validate arity in Tcl
+        rather than leaving a wrong-length flat array to fail deep in
+        C++ with no flag context); "points"/"points_plus_scalars" prefix
+        the whole list with a record count, then each record with its
+        own point count (and, for "points_plus_scalars", its scalar
+        field(s) first, in declaration order) - see list_compound_kind()'s
+        own docstring for the full per-kind wire format.
+        """
+        kind = self.list_compound_kind()
+        element_klass = self._type_klass
+        vals_var = f"{self.name}_vals"
+        has_var = f"has_{self.name}"
+        flat_var = f"{self.name}_flat"
+        lines = [
+            f"    set {vals_var} $opts(-{self.name})",
+            f"    set {has_var} [expr {{[llength ${vals_var}] > 0 ? 1 : 0}}]",
+            f"    set {flat_var} {{}}",
+        ]
+        if kind == "flat":
+            n = len(element_klass.embedded_scalar_leaves())
+            lines.append(f"    foreach entry ${vals_var} {{")
+            lines.append(f"        if {{[llength $entry] != {n}}} {{")
+            lines.append(f'            error "{cmd_name}: -{self.name}: each entry needs {n} coordinates, got [llength $entry]"')
+            lines.append("        }")
+            lines.append(f"        foreach c $entry {{ lappend {flat_var} $c }}")
+            lines.append("    }")
+        elif kind == "points":
+            lines.append(f"    lappend {flat_var} [llength ${vals_var}]")
+            lines.append(f"    foreach entry ${vals_var} {{")
+            lines.append("        if {[llength $entry] % 2 != 0} {")
+            lines.append(
+                f'            error "{cmd_name}: -{self.name}: each entry needs an even number of x/y '
+                'coordinates, got [llength $entry]"'
+            )
+            lines.append("        }")
+            lines.append(f"        lappend {flat_var} [expr {{[llength $entry] / 2}}]")
+            lines.append(f"        foreach c $entry {{ lappend {flat_var} $c }}")
+            lines.append("    }")
+        else:  # "points_plus_scalars"
+            scalar_fields = self.list_compound_scalar_fields()
+            scalar_names = " ".join(sf.name for sf in scalar_fields)
+            arity = len(scalar_fields) + 1
+            example = " ".join(f"<{sf.name}>" for sf in scalar_fields) + " {x y x y ...}"
+            lines.append(f"    lappend {flat_var} [llength ${vals_var}]")
+            lines.append(f"    foreach entry ${vals_var} {{")
+            lines.append(f"        if {{[llength $entry] != {arity}}} {{")
+            lines.append(f'            error "{cmd_name}: -{self.name}: each entry must be {{{example}}}"')
+            lines.append("        }")
+            lines.append(f"        lassign $entry {scalar_names} points")
+            lines.append("        if {[llength $points] % 2 != 0} {")
+            lines.append(
+                f'            error "{cmd_name}: -{self.name}: each entry\'s point list needs an even number '
+                'of x/y coordinates, got [llength $points]"'
+            )
+            lines.append("        }")
+            for sf in scalar_fields:
+                lines.append(f"        lappend {flat_var} ${sf.name}")
+            lines.append(f"        lappend {flat_var} [expr {{[llength $points] / 2}}]")
+            lines.append(f"        foreach c $points {{ lappend {flat_var} $c }}")
+            lines.append("    }")
+        return "\n".join(lines)
+
     def cmd_tcl_preamble(self, mode: str, cmd_name: str) -> str:
         """
         Generated Tcl statements for this compound field, emitted (by
@@ -1990,9 +2464,13 @@ class Field:
         field) after flag parsing and before the _cmd call - turns the
         flag's own Tcl list value into its has-flag + leaf-parameter
         locals cmd_tcl_call_args() references. Empty string if this field
-        isn't compound. `cmd_name` (e.g. "create_abstract") is only used
-        to make an arity/keyword error message name the actual command.
+        isn't compound or list_compound_kind()-eligible (see
+        _list_compound_tcl_preamble() for that branch). `cmd_name` (e.g.
+        "create_abstract") is only used to make an arity/keyword error
+        message name the actual command.
         """
+        if self.list_compound_kind() is not None:
+            return self._list_compound_tcl_preamble(cmd_name)
         ck = self.compound_klass()
         if ck is None:
             return ""
@@ -2052,6 +2530,9 @@ class Field:
         "le::"; `qualified=False` (root_hpp_j2.py's own parameter
         declaration, already inside `namespace le`) leaves it bare.
         """
+        if self.list_compound_kind() is not None:
+            element = f"le::{self.type}" if qualified else self.type
+            return f"std::vector<{element}>"
         ck = self.compound_klass()
         if ck is not None:
             return f"le::{self.type}" if qualified else self.type
@@ -2093,6 +2574,14 @@ class Field:
         if self.type == "str":
             name = self.create_c_param_name()
             return f"({name} && {name}[0]) ? std::optional<std::string>({name}) : std::nullopt"
+        if self.list_compound_kind() is not None:
+            # Klass.update_api_body()'s own list-compound parsing already
+            # guards the parse loop itself with `if (has_<field>)`, but
+            # `<field>_value` stays a plain std::vector<ElementKlass> (see
+            # Field.list_compound_parse_lines()) - the optional wrap
+            # happens here, at the same call site every other has-flag
+            # field wraps its own value at.
+            return f"has_{self.name} ? std::optional<{self.root_value_cpp_type()}>({self.name}_value) : std::nullopt"
         cpp_type = self.root_value_cpp_type()
         return f"has_{self.name} ? std::optional<{cpp_type}>({self.cmd_value_expr()}) : std::nullopt"
 

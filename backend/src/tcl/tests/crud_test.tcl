@@ -274,9 +274,12 @@ if {![catch {update_shape $shape -terminal_port $port}]} {
 }
 puts "ok: update_shape -terminal_port is an unknown flag (no reparenting for multi-parent classes)"
 
-check "add_shape_rect return code" 0 [add_shape_rect -shape $shape -rect {2 2 8 8}]
-check "add_shape_polygon return code" 0 [add_shape_polygon -shape $shape -points {0 0 5 0 5 5 0 5}]
-check "add_shape_path return code" 0 [add_shape_path -shape $shape -width 0.5 -points {0 0 10 10 20 0}]
+# Geometry is set through update_shape's own -rects/-polygons/-paths
+# flags now (add_shape_rect/_polygon/_path are gone - create_shape could
+# have set all three at creation time too, see the compound-flag tests
+# further down for that path).
+check "update_shape geometry return code" $shape \
+    [update_shape $shape -rects {{2 2 8 8}} -polygons {{0 0 5 0 5 5 0 5}} -paths {{0.5 {0 0 10 10 20 0}}}]
 
 set rects [shape_rects $shape]
 check "shape_rects count" 1 [llength $rects]
@@ -337,9 +340,13 @@ check "rect_masks_count is unaffected (list of a plain int, not an object)" \
     0 [dict get $shape_props rect_masks_count]
 
 # Two rects stay unambiguously grouped (not flattened into one 4-point
-# list) - add a second rect, then remove it again so the rest of this
-# test still sees exactly the one rect it expects below.
-check "add second shape rect return code" 0 [add_shape_rect -shape $shape -rect {10 10 20 20}]
+# list) - update_shape -rects replaces the whole list, so pass both the
+# existing rect and a new one, then remove_shape_rect the new one again
+# so the rest of this test still sees exactly the one rect it expects
+# below (remove_shape_rect still works by index after create_shape/
+# update_shape - it's just the incremental add that's gone).
+check "update_shape -rects with two entries return code" $shape \
+    [update_shape $shape -rects {{2 2 8 8} {10 10 20 20}}]
 set two_rects [dict get [get_properties $shape] rects]
 check "get_properties rects keeps each rect as its own list element" 2 [llength $two_rects]
 check "get_properties rects first element" {{2 2} {8 8}} [lindex $two_rects 0]
@@ -378,8 +385,12 @@ check "shape_rects after remove" {} [shape_rects $shape]
 set obstruction [create_obstruction -abstract $abstract_token]
 check_true "create_obstruction returned a valid friendly id" [expr {$obstruction ne {}}]
 
-set obstruction_shape [create_shape -obstruction $obstruction -layer_name M1]
-check "add rect to obstruction shape" 0 [add_shape_rect -shape $obstruction_shape -rect {0 0 1 1}]
+# -rects (and -polygons/-paths) work directly on create_shape too, not
+# just update_shape - a rect provided at creation time, not added
+# afterward.
+set obstruction_shape [create_shape -obstruction $obstruction -layer_name M1 -rects {{0 0 1 1}}]
+check_true "create_shape (-obstruction, with -rects) returned a valid friendly id" [expr {$obstruction_shape ne {}}]
+check "create_shape -rects took effect immediately" {0 0 1 1} [lindex [shape_rects $obstruction_shape] 0]
 check "obstruction_shapes lists the created shape" $obstruction_shape [obstruction_shapes $obstruction]
 
 set obstruction_matches [get_obstructions -filter {.shapes.layer_name == M1}]
@@ -514,5 +525,45 @@ foreach id [get_terminals] {
     lappend testcell_terminal_names [dict get [get_properties $id] name]
 }
 check "get_terminals default scope back in TESTCELL's view only sees TESTCELL's own terminal, not OTHERCELL's" A $testcell_terminal_names
+
+# --- Building a Library/Design/Abstract entirely from scratch (no
+# read_lef'd Design to open_design into at all - just create_library/
+# create_design/create_abstract, then set_current_abstract directly) -
+# a regression check for a real user-reported bug: le_terminal_by_name
+# (api.cpp), Terminal's own hand-written friendly-id resolver, used to
+# read handle->scene.current_abstract() - a separate GUI-rendering
+# "current view" only ever moved as a side effect of selecting a Design
+# (le_set_current_design/le_set_current_design_by_id) - instead of
+# handle->current_abstract_id, the same field set_current_abstract
+# itself sets and get_terminals' own default scope already derives
+# from. open_design happens to touch both together (it selects a
+# Design first), which is exactly why this went unnoticed until a
+# script had no existing Design to open_design into at all. ---
+
+set scratch_library [create_library -name SCRATCH_LIB]
+check_true "create_library (from-scratch flow) returned a valid friendly id" [expr {$scratch_library ne {}}]
+
+set scratch_design [create_design -library $scratch_library -name SCRATCH_DESIGN]
+check_true "create_design (from-scratch flow) returned a valid friendly id" [expr {$scratch_design ne {}}]
+
+set scratch_abstract [create_abstract -design $scratch_design]
+check_true "create_abstract (from-scratch flow) returned a valid friendly id" [expr {$scratch_abstract ne {}}]
+
+set_current_abstract $scratch_abstract
+check "current_abstract reflects the from-scratch Abstract" $scratch_abstract [current_abstract]
+
+# create_terminal with no -abstract (defaults to current_abstract - see
+# Klass.create_tcl_current_defaults()), then create_terminal_port
+# resolving that Terminal by name - the exact two calls the original
+# bug report's own script made, in the same order.
+set scratch_in [create_terminal -name IN -direction INPUT]
+check_true "create_terminal (from-scratch flow) returned a valid friendly id" [expr {$scratch_in ne {}}]
+
+set scratch_port [create_terminal_port -terminal $scratch_in]
+check_true "create_terminal_port successfully resolved the just-created Terminal by name" [expr {$scratch_port ne {}}]
+
+set scratch_shape [create_shape -terminal_port $scratch_port -layer_name M1 -rects {{0 0 10 10}}]
+check_true "create_shape on the from-scratch TerminalPort returned a valid friendly id" [expr {$scratch_shape ne {}}]
+check "the from-scratch shape's rect round-trips" {0 0 10 10} [lindex [shape_rects $scratch_shape] 0]
 
 puts "le_tcl CRUD test passed"
