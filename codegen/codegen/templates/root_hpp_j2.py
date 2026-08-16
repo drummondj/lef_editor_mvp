@@ -80,6 +80,26 @@ namespace {{schema.namespace}} {
             return id;
         }
 
+        /// @brief Update an existing {{klass.name}} in place - the *only*
+        /// way any {{klass.name}} field is ever mutated after creation (no
+        /// generated or hand-written per-field setter exists for this
+        /// class - see this round's own plan/commit message). Every
+        /// parameter beyond `id`{% if klass.get_parent_fields() | length == 1 %} (including the parent){% endif %} is a
+        /// std::optional<T> whose has_value() means "apply this field";
+        /// omitted (nullopt) means "leave unchanged", the opposite of
+        /// create_{{klass.to_snake_case()}}()'s own "omitted means unset"
+        /// convention. False (no-op, nothing applied) if `id` doesn't
+        /// exist{% if klass.get_parent_fields() | length == 1 and klass.get_unique_per_parent_fields() %}, if the new parent already has a sibling {{klass.name}} sharing the current {{klass.get_unique_per_parent_fields()[0].name}} (reparenting), or if a sibling under the (possibly just-reassigned) parent already has the requested {{klass.get_unique_per_parent_fields()[0].name}} (renaming){% elif klass.get_unique_per_parent_fields() %}, or if a sibling {{klass.name}} sharing the same {{klass.get_parent_field().name}} already has the requested {{klass.get_unique_per_parent_fields()[0].name}}{% endif %}.
+        {%- if klass.get_parent_fields() | length > 1 %}
+        /// {{klass.name}} has multiple parent fields ({%- for pf in klass.get_parent_fields() -%}{{pf.name}}{% if not loop.last %}, {% endif %}{%- endfor -%}) -
+        /// no parent flag is generated at all here, since reassigning one
+        /// alone would violate the "exactly one parent set" invariant
+        /// create_{{klass.to_snake_case()}}() itself enforces.
+        {%- endif %}
+        bool update_{{klass.to_snake_case()}}({{klass.update_root_params()}}) {
+{{klass.update_root_body()}}
+        }
+
         /// @brief Erase the {{klass.name}} at {{klass.name}}Id, cleaning up
         /// any parent/index bookkeeping that referenced it. Does not
         /// cascade to children referencing this id - a child holding a

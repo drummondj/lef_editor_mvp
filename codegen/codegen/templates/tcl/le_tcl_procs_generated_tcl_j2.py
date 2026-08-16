@@ -86,11 +86,19 @@ proc get_{{plural}} {args} {
 # --- create_<type> - `create_<type> [-flag value...]`, one flag per
 # scalar field plus one per parent (a friendly-id token, e.g. `-abstract
 # abstract:0` - see api_declarations_inc_j2's own comment for the field-
-# scope/optionality conventions this follows uniformly). A multi-parent
-# class (e.g. Shape's -terminal_port/-obstruction) requires exactly one
-# of its parent flags, checked here before calling down - same "exactly
-# one" rule create_<type>_cmd's own C++ body re-checks (defense in depth,
-# not redundant: a caller could reach the *_cmd form directly). ---
+# scope/optionality conventions this follows uniformly). A parent flag
+# whose own Klass has has_current_access=True (e.g. -abstract, since
+# Abstract does) defaults to current_<parent_klass> when omitted (see
+# Klass.create_tcl_current_defaults() - only when every other parent
+# flag was also left empty, for a multi-parent class), the same way
+# get_<type>'s own default (-of omitted) scope already derives from
+# current_abstract - so create_terminal needs no explicit -abstract once
+# set_current_abstract/open_design has been called. A multi-parent class
+# (e.g. Shape's -terminal_port/-obstruction) requires exactly one of its
+# parent flags to resolve (after that default is applied), checked here
+# before calling down - same "exactly one" rule create_<type>_cmd's own
+# C++ body re-checks (defense in depth, not redundant: a caller could
+# reach the *_cmd form directly). ---
 {% for klass in classes %}
 {%- set snake = klass.to_snake_case() %}
 {%- set parent_fields = klass.get_parent_fields() %}
@@ -102,6 +110,7 @@ proc create_{{snake}} {args} {
         }
         set opts($flag) $value
     }
+{{klass.create_tcl_current_defaults()}}
     {%- if parent_fields|length > 1 %}
     set provided_parents 0
     {%- for pf in parent_fields %}
@@ -116,7 +125,45 @@ proc create_{{snake}} {args} {
             error "create_{{snake}}: $required is required"
         }
     }
+{{klass.cmd_tcl_preamble('create')}}
     return [create_{{snake}}_cmd {{klass.create_tcl_call_args()}}]
+}
+{% endfor %}
+
+# --- update_<type> - `update_<type> <id> -flag value...` - mutates an
+# *existing* object in place; the *only* way any field is ever updated
+# (no per-field setter, generated or hand-written, exists anymore - see
+# this round's own plan/commit message). Same flag set as create_<type>
+# (same compound/enum/dbu conventions - see api_declarations_inc_j2's
+# own comment), but every flag here means "leave unchanged" when
+# omitted, the opposite of create_<type>'s "omitted means unset" - so,
+# unlike create_<type>, nothing is ever required *except* that at least
+# one flag must be given (an update with zero flags is a no-op call,
+# rejected here rather than silently doing nothing). A single-parent
+# class also accepts its own parent flag (e.g. -abstract) to reassign
+# it; a multi-parent class (e.g. Shape) accepts none at all - passing
+# -terminal_port/-obstruction to update_shape is an "unknown flag"
+# error, same as any other flag this class doesn't have. Returns the
+# (possibly-changed, e.g. after a rename) friendly id token. ---
+{% for klass in classes %}
+{%- set snake = klass.to_snake_case() %}
+proc update_{{snake}} {id args} {
+    if {[llength $args] == 0} {
+        error "update_{{snake}}: at least one -flag is required"
+    }
+    array set opts {{'{'}}{{klass.update_tcl_flag_defaults()}}{{'}'}}
+    foreach {flag value} $args {
+        if {![info exists opts($flag)]} {
+            error "update_{{snake}}: unknown flag $flag"
+        }
+        set opts($flag) $value
+    }
+{{klass.cmd_tcl_preamble('update')}}
+    set new_id [update_{{snake}}_cmd $id {{klass.update_tcl_call_args()}}]
+    if {$new_id eq {}} {
+        error "update_{{snake}}: failed to update \\"$id\\""
+    }
+    return $new_id
 }
 {% endfor %}
 """

@@ -1,6 +1,6 @@
 ---
 name: regen-tcl
-description: Regenerate the TCL/SWIG property-reading, search, and create_<type> surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class, a has_current_access flag, or a create-field's optionality/type, or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope, stale create_<type> signature).
+description: Regenerate the TCL/SWIG property-reading, search, create_<type>, and update_<type> surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class, a has_current_access flag, or a create/update-field's optionality/type, or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope, stale create_<type>/update_<type> signature).
 user-invocable: true
 allowed-tools:
   - Bash
@@ -17,20 +17,24 @@ class's `get_<type>` default scope (`-of` omitted) is derived. Never edit
 `generated_tcl/`/`tcl/generated/` directly - re-run codegen instead.
 
 This is a **separate generation target** from `regen-database` - it
-covers property *reading*, `get_<type>` *search*, and `create_<type>` for
-every TCL-readable class, uniformly (~35 today - `Terminal`/`TerminalPort`/
-`Obstruction`/`Shape` also have hand-written `delete_X`/`set_X_<field>`
-elsewhere - see `codegen/codegen/tcl_generator.py`'s
-`HAND_WRITTEN_CRUD_CLASSES`, kept purely as documentation of that, not an
-exclusion set for `create_X` - every class's `create_<type>` is generated,
-including these four). `read_lef`, session/viewport/design-selection,
+covers property *reading*, `get_<type>` *search*, `create_<type>`, and
+`update_<type>` for every TCL-readable class, uniformly (~35 today -
+`Terminal`/`TerminalPort`/`Obstruction`/`Shape` also have a hand-written
+`delete_X` elsewhere, the only per-class CRUD still hand-written for any
+class - every class's `create_<type>`/`update_<type>` is generated,
+including these four). `update_<type>` is
+the *only* way any field is ever mutated after creation - there is no
+per-field setter reachable from TCL anymore, generated or hand-written
+(see backend/CLAUDE.md's `src/tcl/` bullet for the full "no per-field
+setters" constraint). `read_lef`, session/viewport/design-selection,
 Shape's rect/polygon/path CRUD + the coordinate-list SWIG typemap,
-`update_abstract_boundary`, `delete_X`/`set_X_<field>` for the classes that
-still have hand-written CRUD, and the filter-expression evaluator itself
-(`filter.hpp`) all stay hand-written - none of that is per-class CRUD, so
-it doesn't belong in a generator. See `create_api_body()`'s own docstring
-(`codegen/codegen/schema.py`) for exactly what `create_<type>` covers
-(field scope, required-vs-optional, the multi-parent exactly-one check).
+`delete_X` for the classes that still have hand-written CRUD, and the
+filter-expression evaluator itself (`filter.hpp`) all stay hand-written -
+none of that is per-class CRUD, so it doesn't belong in a generator. See
+`create_api_body()`/`update_api_body()`'s own docstrings
+(`codegen/codegen/schema.py`) for exactly what each covers (field scope,
+required-vs-optional, compound-field flattening, the multi-parent
+exactly-one check, the single-parent-only reparent flag).
 
 ## Steps
 
@@ -85,9 +89,17 @@ class, since the generated `Root::get_X_by_<field>()` for a
 single-value lookup this pair assumes; a class in that situation needs its
 own hand-written `resolve_X_id`/`format_X_id`/`le_X_by_<field>` (see
 `Terminal`'s in `le_tcl_shim.cpp`/`api.cpp` for the pattern - current-
-abstract-scoped name lookup, not a flat Root index). `create_<type>` is
-unaffected either way - it never uses `tcl_indexed_id_field()`/
-`tcl_friendly_id_field()`, only `Klass.get_create_fields()`.
+abstract-scoped name lookup, not a flat Root index). `create_<type>`/
+`update_<type>` are unaffected either way - neither ever uses
+`tcl_indexed_id_field()`/`tcl_friendly_id_field()`, only
+`Klass.get_create_fields()`. Note the current-view scoping this implies
+for `Terminal` specifically: `update_terminal <id> -abstract <token>`
+moves the Terminal, but `<id>`'s own hand-written `resolve_terminal_id`
+stays scoped to whatever Abstract is *currently selected* - a caller that
+needs to address the just-reparented Terminal again by its own friendly
+id (e.g. to delete it) must switch the current view to its new Abstract
+first (`open_design`/`set_current_abstract`), the same way `get_terminals`
+already requires for search.
 
 ## `has_current_access` and the `get_<type>` default-scope algorithm
 
@@ -128,7 +140,7 @@ again on subsequent regenerations:
   `#include "generated_tcl/declarations.inc"` further down (friendly-id-
   by-name lookups, property-table declarations, `is_child` enumeration,
   current-instance access, `get_<type>` search declarations, and
-  `le_create_<type>` declarations).
+  `le_create_<type>`/`le_update_<type>` declarations).
 - `api.cpp` - **four** injection points: `#include "generated_tcl/handle_fields.inc"`
   inside `struct LeHandle`'s body (per-class property-table caches,
   search-result caches, `current_X_id` fields); `#include "generated_tcl/property_accessors_internal.inc"`
@@ -137,7 +149,8 @@ again on subsequent regenerations:
   another translation unit); `#include "generated_tcl/property_accessors_public.inc"`
   *inside* `extern "C" { ... }` (the real `le_X_property_count/_at/_path`,
   friendly-id-by-name lookups, `current_X`/`set_current_X`, and
-  `le_create_X` - external C linkage required since `le_tcl_shim.cpp` calls
+  `le_create_X`/`le_update_X` - external C linkage required since
+  `le_tcl_shim.cpp` calls
   them; a function defined
   inside an anonymous namespace has internal linkage regardless of
   `extern "C"`, so putting these there produces unresolved-symbol link
@@ -161,21 +174,29 @@ again on subsequent regenerations:
   hand-written, shared/class-agnostic helpers the generated procs call
   into).
 
-`create_<type>` is generated for every class already (property reading,
-search, and create are all uniform today) - `Terminal`/`TerminalPort`/
-`Obstruction`/`Shape` had hand-written `create_X` before this, deleted
-across every file above (`api.hpp`/`api.cpp`/`le_tcl_shim.hpp`/`.cpp`/
-`le_api.i`/`le_tcl_procs.tcl`) when the generated equivalents landed, to
-avoid duplicate-symbol link errors (`le_create_X`) or a stale hand-written
-Tcl `proc` silently shadowing the generated one (Tcl allows redefining a
-`proc` with no error - `le_tcl_procs.tcl` sources
+`create_<type>` and `update_<type>` are generated for every class already
+(property reading, search, create, and update are all uniform today) -
+`Terminal`/`TerminalPort`/`Obstruction`/`Shape` had hand-written `create_X`
+before this, and `Terminal`/`Shape`/`Abstract` had hand-written per-field
+setters (`set_terminal_name`/`set_terminal_direction_cmd`/
+`set_shape_layer_name`/`update_abstract_boundary_cmd`) before `update_X`
+landed - all deleted across every file above (`api.hpp`/`api.cpp`/
+`le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`) when the generated
+equivalents landed, to avoid duplicate-symbol link errors or a stale
+hand-written Tcl `proc` silently shadowing the generated one (Tcl allows
+redefining a `proc` with no error - `le_tcl_procs.tcl` sources
 `generated/le_tcl_procs_generated.tcl` *before* its own hand-written procs,
 so a same-named hand-written one defined later always wins silently rather
 than erroring, which is exactly what happened until the stale ones were
 removed). `Shape`'s own `create_terminal_port_shape_cmd`/
 `create_obstruction_shape_cmd` split became one generated
 `create_shape -terminal_port|-obstruction`, not two - see
-`create_api_body()`'s exactly-one-parent check. If a future round generates
-`delete_X`/`set_X_<field>` too (shrinking `HAND_WRITTEN_CRUD_CLASSES`
-further), delete that class's hand-written versions from all of the files
-above first, the same way.
+`create_api_body()`'s exactly-one-parent check.
+`update_abstract_boundary` has no replacement - `Abstract.boundary` is a
+list field, out of `update_<type>`'s flag-per-field scope (same as
+`Shape`'s own rects/polygons/paths), so boundary-setting is unsupported
+via TCL until a future round adds list-field support - a real, accepted
+coverage gap, not an oversight. If a future round generates `delete_X`
+too (`Terminal`/`TerminalPort`/`Obstruction`/`Shape` are the last four
+classes with any hand-written CRUD left), delete that class's
+hand-written version from all of the files above first, the same way.

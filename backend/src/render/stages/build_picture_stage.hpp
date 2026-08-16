@@ -56,7 +56,7 @@ namespace le
                 draw_grid(*canvas, scene);
 
                 if (const AbstractData *abstract = root.get_abstract(scene.current_abstract()))
-                    draw_origin_marker(*canvas, scene, abstract->origin);
+                    draw_origin_marker(*canvas, scene, abstract->origin.value_or(Point{}));
 
                 for (const auto &[view_layer_id, group] : shapes)
                 {

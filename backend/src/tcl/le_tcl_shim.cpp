@@ -271,17 +271,7 @@ void set_session_handle(long long handle_address)
     injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
 }
 
-// --- Terminal (create_terminal_cmd is generated) ---
-
-int set_terminal_name(const char *id, const char *name)
-{
-    return le_set_terminal_name(session(), resolve_terminal_id(id), name);
-}
-
-int set_terminal_direction_cmd(const char *id, int direction)
-{
-    return le_set_terminal_direction(session(), resolve_terminal_id(id), direction);
-}
+// --- Terminal (create_terminal_cmd/update_terminal_cmd are generated) ---
 
 int delete_terminal(const char *id)
 {
@@ -302,26 +292,14 @@ int delete_obstruction(const char *id)
     return le_delete_obstruction(session(), resolve_obstruction_id(id));
 }
 
-// --- Abstract boundary ---
-
-int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count)
-{
-    return le_update_abstract_boundary(session(), unpack<LeAbstractId>(abstract_id), points_um, point_coord_count);
-}
-
-// --- Shape (create_shape_cmd is generated - unifies the former
-// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split into
-// one function taking both parent tokens, exactly one of which must
-// resolve) ---
+// --- Shape (create_shape_cmd/update_shape_cmd are generated - unify the
+// former create_terminal_port_shape_cmd/create_obstruction_shape_cmd
+// split into one function taking both parent tokens, exactly one of
+// which must resolve) ---
 
 const char *shape_layer_name(const char *id)
 {
     return le_shape_layer_name(session(), resolve_shape_id(id));
-}
-
-int set_shape_layer_name(const char *id, const char *layer_name)
-{
-    return le_set_shape_layer_name(session(), resolve_shape_id(id), layer_name);
 }
 
 int delete_shape(const char *id)

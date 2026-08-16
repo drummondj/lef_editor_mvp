@@ -24,22 +24,12 @@ from codegen.templates.tcl import (
     le_tcl_shim_generated_inc_j2,
 )
 from codegen.schema import Schema
-from codegen.tcl_scope import compute_search_scope, render_default_scope_cpp, render_of_check_cpp
+from codegen.tcl_scope import (
+    compute_search_scope,
+    render_default_scope_cpp,
+    render_of_check_cpp,
+)
 from codegen.validation import SchemaRuleSet
-
-# Classes with hand-written CRUD (create_X/delete_X/set_X_<field>) today -
-# property-reading and search are generated for these exactly like every
-# other class (see get_generated_classes()); only the genuinely bespoke
-# mutation commands (and read_lef/session/viewport/Shape geometry CRUD +
-# the coordinate typemap/update_abstract_boundary, which aren't per-class
-# at all) stay hand-written. Kept here purely as documentation of which
-# classes also have hand-written code elsewhere, not as an exclusion set.
-HAND_WRITTEN_CRUD_CLASSES = {
-    "Terminal",
-    "TerminalPort",
-    "Obstruction",
-    "Shape",
-}
 
 
 def get_generated_classes(schema: Schema):
@@ -63,7 +53,10 @@ def get_search_scopes(classes, current_access_classes) -> dict:
     """Klass.name -> SearchScope, computed once and reused across every
     template that needs it (api_search, le_tcl_shim search wrappers,
     le_tcl_procs search wrappers)."""
-    return {klass.name: compute_search_scope(klass, current_access_classes) for klass in classes}
+    return {
+        klass.name: compute_search_scope(klass, current_access_classes)
+        for klass in classes
+    }
 
 
 def generate(schema: Schema, output_dir: str, logger: Logger) -> int:
@@ -100,14 +93,23 @@ def generate(schema: Schema, output_dir: str, logger: Logger) -> int:
         (api_dir / "ids.inc", api_ids_inc_j2.TEMPLATE),
         (api_dir / "declarations.inc", api_declarations_inc_j2.TEMPLATE),
         (api_dir / "handle_fields.inc", api_handle_fields_inc_j2.TEMPLATE),
-        (api_dir / "property_accessors_internal.inc", api_property_accessors_internal_inc_j2.TEMPLATE),
-        (api_dir / "property_accessors_public.inc", api_property_accessors_public_inc_j2.TEMPLATE),
+        (
+            api_dir / "property_accessors_internal.inc",
+            api_property_accessors_internal_inc_j2.TEMPLATE,
+        ),
+        (
+            api_dir / "property_accessors_public.inc",
+            api_property_accessors_public_inc_j2.TEMPLATE,
+        ),
         (api_dir / "filter_tables.inc", api_filter_tables_inc_j2.TEMPLATE),
         (api_dir / "search.inc", api_search_inc_j2.TEMPLATE),
         (tcl_dir / "le_tcl_shim_generated.hpp", le_tcl_shim_generated_hpp_j2.TEMPLATE),
         (tcl_dir / "le_tcl_shim_generated.inc", le_tcl_shim_generated_inc_j2.TEMPLATE),
         (tcl_dir / "le_api_generated.i", le_api_generated_i_j2.TEMPLATE),
-        (tcl_dir / "le_tcl_procs_generated.tcl", le_tcl_procs_generated_tcl_j2.TEMPLATE),
+        (
+            tcl_dir / "le_tcl_procs_generated.tcl",
+            le_tcl_procs_generated_tcl_j2.TEMPLATE,
+        ),
     ]
     for path, template_str in files:
         content = jinja2.Template(template_str).render(

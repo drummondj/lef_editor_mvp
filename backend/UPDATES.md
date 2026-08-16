@@ -199,7 +199,7 @@ Rendering: the live ghost segment (mouse-driven, recomputed every frame) lives i
 
 Covered by new `scene_test.cpp`/`api_test.cpp`/`render_test.cpp` cases (orthogonal constraint, free-form, the multi-ruler and distance-guard behavior, zoom mid-ruler leaving points unchanged, cache-invalidation regression tests for both new render stages, and a pixel-sampling test proving a committed segment actually renders). Full backend suite (556 tests) passes; `flutter_plugin`/`frontend` both build and launch cleanly with the new API surface linked.
 
-# 14. Properties revisit
+# 14. Properties revisit - DONE
 
 I notice that the properties contain the bbox of shapes and not the raw values. I would like to see the raw polygon, path and rect values as properties, in addition to the bbox.
 
@@ -314,7 +314,7 @@ Renaming a Terminal changes what its friendly id refers to, by construction (the
 
 **Known, deliberately out-of-scope gap**: `lefrPinCbkFn` (`src/io/lef_reader.cpp`) still has no duplicate-PIN-name check when _reading_ a LEF file (bypasses the new API-layer uniqueness check entirely, calling `Root::create_terminal` directly) - two same-named PINs in one malformed `MACRO` would produce two Terminals sharing one friendly id, and the second becomes unreachable by name from TCL (still present in the database, just not addressable by `terminal:name`). Left as a documented gap, not fixed here - this item was about TCL ergonomics/API-level create/rename validation, not LEF-import validation.
 
-# 19. Common TCL command patterns for all object types
+# 19. Common TCL command patterns for all object types - DONE
 
 ## 19.1 get\_\*
 
@@ -447,3 +447,14 @@ This is another generator-level change (`cmg`'s `Field.wrap_with_to_property`, s
 **Follow-up (Shape's rects/polygons/paths report clean micron coordinates, not raw dbu)**: the generic `to_property_string()` fix above still left `Shape.rects`/`polygons`/`paths` showing e.g. `rects {{Rect{ll=Point{x=396000 y=0 } ur=Point{x=398000 y=1000000 } }}}` - correct contents, but raw database units with type-tag noise, not the plain coordinate list every other coordinate-reporting command in this project uses (`shape_rect_at`, `bbox_um`, ...). `cmg`'s generated code has no fix available here: `to_properties()`/`to_property_string()` only ever see the bare `ShapeData` struct, never `Root`, so they have no way to reach `Technology`'s `dbu_per_um` and convert. Fixed by hand in `api.cpp` instead, where that access already exists: `build_shape_properties` now calls `le::to_properties()` as before, then `replace_shape_geometry_properties` overwrites just the `rects`/`polygons`/`paths` rows (by property name) with a clean listing built from `format_coordinate_um` (already used for `bbox_um`) - `rects {{2 2} {8 8}}` (one `{ll} {ur}` pair per rect), `polygons {{0 0} {5 0} {5 5} {0 5}}` (one `{x y}` per point), `paths {{0 0} {10 10} {20 0} 0.500}` (the path's points, then its width, all in one group) - each rect/polygon/path keeping its own brace grouping so multiple elements never get flatten-merged into one ambiguous point list. `rect_iterates`/`path_iterates`/`polygon_iterates`/`texts`/`vias`/`via_iterates` keep the raw-dbu, `to_property_string()`-based form for now - not asked for, and each has its own shape (a `Text` isn't a coordinate list at all) that would need its own case-by-case formatting decision.
 
 **Found and fixed a second real, previously-latent bug while implementing this one**: `get_properties shape:N .rects` (single-segment dot-path lookup, not the bare-token dict form) raised `unknown field 'rects' on Shape` - the dot-path resolver (`resolve_property_path`, backing every `le_X_property_path`) is built on the `-filter` DSL's `get_field()`, which only recognizes scalar leaf fields, never list fields like `rects`/`polygons`/`paths` (those are hops in filter terms, not leaves) - so a bare `.rects` could never have worked there, even though a plain `get_properties shape:N` (no name) already showed it via the unrelated `to_properties()`-based path. Fixed by having every `le_X_property_path` try a single-segment path against that same `build_X_properties()` row list first (the identical rows `get_properties $token` with no name already shows), falling back to the filter-DSL leaf/hop resolver only for a genuinely chained path (`.terminal.name`, `.shapes.layer_name`) - `build_X_properties()`'s row set is always a superset of the filter DSL's scalar leaves, so this is a pure widening, not a behavior change for anything that already worked. While fixing this, testing it surfaced a second, unrelated, genuinely dangerous bug: every `le_X_property_path` built its returned `LeProperty`'s `.name`/`.string_value` as raw `c_str()` pointers into a `std::optional<PropertyValue>` (or, for the new single-segment path, a freshly-built temporary `vector<PropertyValue>`) that was local to the function - a dangling pointer the instant the function returned. A short value (`"IN0"`) "worked" by sheer luck (small-string-optimized, its bytes often still intact in the just-freed stack slot when the caller read them milliseconds later), which is exactly why this went unnoticed through all of items 19.2's original dot-notation testing - only a longer, heap-allocated value (a formatted `rects`/`polygons`/`paths` coordinate list) reliably came back corrupted. Fixed by adding one more handle-owned single-slot cache (`cached_property_path_value`) that every `le_X_property_path` now writes its result into before returning `to_c()` of it - "valid until the next call", the same convention every other `LeProperty`-returning accessor in this file already relies on.
+
+# 20 Integrated help system
+
+I would like a couple of features applied to all TCL procs to help the user while they run interactive TCL commands in the GUI and le_shell:
+
+1. global help command to return short usage messages for matching commands
+2. man command to display a man page style output for a specific command
+3. Command-line completion, when the user presses tab, a token is sent to the API with the current command line text and sugeestions for commands, and command arguments a provided (GUI only)
+4. Generate TCL command documentation in MD format, for evert command and command option.
+
+The normal way to do this is to create some helper functions in TCL, that can be ran after creating a proc to annotate the usage and option data for that proc.

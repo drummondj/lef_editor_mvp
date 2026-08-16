@@ -153,4 +153,23 @@ const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}})
     return return_string(format_{{klass.to_snake_case()}}_id(id));
 }
 {% endfor %}
+
+// --- update_<type> - resolves `id` to a real Le<Klass>Id *before*
+// calling le_update_<type> and reuses that same resolved id to format
+// the return value, rather than re-resolving the caller's original
+// friendly-id string afterward - correct even for a class whose
+// friendly id can change as a result of the update itself (e.g.
+// Terminal's own name-based one after a rename), unlike create_<type>_cmd
+// above (which formats the brand-new id le_create_<type> itself
+// returns, nothing to re-resolve). ---
+{% for klass in classes %}
+const char *update_{{klass.to_snake_case()}}_cmd({{klass.update_shim_params()}})
+{
+    const Le{{klass.name}}Id typed_id = resolve_{{klass.to_snake_case()}}_id(id);
+    int rc = le_update_{{klass.to_snake_case()}}(session(), typed_id{% if klass.update_shim_forward_args() %}, {{klass.update_shim_forward_args()}}{% endif %});
+    if (rc != 0)
+        return return_string("");
+    return return_string(format_{{klass.to_snake_case()}}_id(typed_id));
+}
+{% endfor %}
 """

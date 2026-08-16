@@ -33,4 +33,8 @@ const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
 {% for klass in classes %}
 const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}});
 {% endfor %}
+
+{% for klass in classes %}
+const char *update_{{klass.to_snake_case()}}_cmd({{klass.update_shim_params()}});
+{% endfor %}
 """

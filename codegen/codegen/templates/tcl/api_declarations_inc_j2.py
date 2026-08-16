@@ -9,9 +9,8 @@ TEMPLATE = """// GENERATED - do not edit by hand. Regenerate via the regen-tcl s
 // classes only), property table accessors, is_child-field enumeration
 // pairs, get_<type> search, and current-instance access (has_current_access
 // classes only), per class. Covers every TCL-readable class uniformly -
-// see codegen/codegen/tcl_generator.py's HAND_WRITTEN_CRUD_CLASSES for
-// which classes *also* have hand-written create_X/delete_X/set_X_<field>
-// mutation commands elsewhere (unrelated to this file).
+// only delete_X still has a hand-written counterpart elsewhere, currently
+// for Terminal/TerminalPort/Obstruction/Shape (unrelated to this file).
 
 // --- Friendly-id-by-name lookups (name-indexed classes only) ---
 {% for klass in classes %}
@@ -96,5 +95,26 @@ Le{{klass.name}}Id le_search_result_{{klass.to_snake_case()}}_at(LeHandle *handl
 // le_create_<type> itself rejects zero or more than one resolving. ---
 {% for klass in classes %}
 Le{{klass.name}}Id le_create_{{klass.to_snake_case()}}(LeHandle *handle{% if klass.create_api_params() %}, {{klass.create_api_params()}}{% endif %});
+{% endfor %}
+
+// --- update_<type> - the *only* way any TCL-readable class's fields are
+// ever mutated after creation (no per-field setter, generated or hand-
+// written, exists anymore - see this round's own plan/commit message).
+// Same flag set as create_<type> (same compound/enum/dbu conventions),
+// but every field's own has_<field>/nullptr signal here means "leave
+// unchanged" when omitted, the opposite of create_<type>'s "omitted
+// means unset". A single-parent class also takes a has_<parent>/
+// Le<Parent>Id pair to optionally reassign its parent; a multi-parent
+// class (Shape/ViaLayer/Foreign/LayerDensityEntry) gets no parent
+// parameter at all - reassigning one parent field alone would violate
+// the "exactly one parent set" invariant create_<type> itself enforces,
+// and there's no atomic "swap parent, clear siblings" primitive
+// designed. Returns 0 on success, nonzero (with a message pushed to
+// handle->messages) if id/the resolved parent doesn't exist, an enum
+// flag is unrecognized, or Root::update_<klass>() itself failed (a
+// rename/reparent collision - see Root::update_<klass>()'s own
+// docstring in root.hpp). ---
+{% for klass in classes %}
+int le_update_{{klass.to_snake_case()}}(LeHandle *handle, {{klass.update_api_params()}});
 {% endfor %}
 """

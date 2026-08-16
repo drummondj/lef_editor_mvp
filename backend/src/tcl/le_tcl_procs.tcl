@@ -21,26 +21,6 @@
 
 set kInvalidId 4294967295
 
-# Mirrors LeSignalDirection's declaration order (api.hpp) - kept in sync
-# by hand since this is Tcl, not generated code; extend if
-# LeSignalDirection ever gains a member.
-array set direction_codes {
-    INPUT 0
-    OUTPUT 1
-    INOUT 2
-    NONE 3
-    OUTPUT_TRISTATE 4
-    FEEDTHRU 5
-}
-
-proc direction_code {name} {
-    global direction_codes
-    if {![info exists direction_codes($name)]} {
-        error "unknown direction $name - expected one of: [array names direction_codes]"
-    }
-    return $direction_codes($name)
-}
-
 proc set_viewport_size {args} {
     array set opts {-width {} -height {}}
     foreach {flag value} $args {
@@ -283,35 +263,14 @@ proc report_properties {tokens} {
     }
 }
 
-# --- Terminal (create_terminal is generated - le_tcl_procs_generated.tcl) ---
-
-proc set_terminal_direction {id direction} {
-    return [set_terminal_direction_cmd $id [direction_code $direction]]
-}
+# --- Terminal (create_terminal/update_terminal are generated -
+# le_tcl_procs_generated.tcl) ---
 
 # --- TerminalPort (create_terminal_port is generated) ---
 
 # --- Obstruction (create_obstruction is generated) ---
 
-# --- Abstract boundary ---
-
-proc update_abstract_boundary {args} {
-    array set opts {-abstract {} -points {}}
-    foreach {flag value} $args {
-        if {![info exists opts($flag)]} {
-            error "update_abstract_boundary: unknown flag $flag"
-        }
-        set opts($flag) $value
-    }
-    foreach required {-abstract -points} {
-        if {$opts($required) eq {}} {
-            error "update_abstract_boundary: $required is required"
-        }
-    }
-    return [update_abstract_boundary_cmd $opts(-abstract) $opts(-points)]
-}
-
-# --- Shape (create_shape is generated - unifies the former
+# --- Shape (create_shape/update_shape are generated - unify the former
 # create_terminal_port_shape/create_obstruction_shape split into one
 # command taking -terminal_port|-obstruction, exactly one required) ---
 

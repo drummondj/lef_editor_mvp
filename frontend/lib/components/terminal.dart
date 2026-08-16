@@ -167,9 +167,9 @@ class _TerminalState extends State<Terminal> {
             if (_lines.isNotEmpty)
               KeyboardListener(
                 focusNode: FocusNode(),
-                onKeyEvent: (value) {
-                  _inputFocusNode.requestFocus();
-                },
+                // onKeyEvent: (value) {
+                //   _inputFocusNode.requestFocus();
+                // },
                 child: SelectableText.rich(
                   scrollPhysics: NeverScrollableScrollPhysics(),
                   TextSpan(

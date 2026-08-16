@@ -105,6 +105,18 @@ check "create_terminal friendly id is name-based" terminal:IN0 $in0
 set out0 [create_terminal -abstract $abstract_token -name OUT0 -direction OUTPUT]
 check_true "second create_terminal returned a valid friendly id" [expr {$out0 ne {}}]
 
+# --- -abstract defaults to current_abstract when omitted (Abstract has
+# has_current_access=True - open_design above already selected it) - the
+# same defaulting create_<type> gives any has_current_access parent flag
+# uniformly (Klass.create_tcl_current_defaults()), not a Terminal-only
+# special case. ---
+
+check "current_abstract matches abstract_token" $abstract_token [current_abstract]
+set from_current [create_terminal -name FROM_CURRENT -direction INPUT]
+check_true "create_terminal without -abstract returned a valid friendly id" [expr {$from_current ne {}}]
+check "create_terminal without -abstract lands on current_abstract" $from_current [get_terminals -of $abstract_token FROM_CURRENT]
+check "delete_terminal (current-abstract-default fixture) return code" 0 [delete_terminal $from_current]
+
 # --- Terminal-name uniqueness enforcement (UPDATES.md's friendly-id item) ---
 
 set messages_before_duplicate [message_count]
@@ -114,10 +126,14 @@ check_true "create_terminal name collision pushed an error message" \
     [expr {[message_count] > $messages_before_duplicate}]
 
 set messages_before_rename_collision [message_count]
-check "set_terminal_name to a colliding name fails" 1 [set_terminal_name $out0 IN0]
-check_true "set_terminal_name name collision pushed an error message" \
+if {![catch {update_terminal $out0 -name IN0}]} {
+    puts stderr "FAIL: update_terminal -name to a colliding name did not raise a Tcl error"
+    exit 1
+}
+puts "ok: update_terminal -name to a colliding name fails"
+check_true "update_terminal -name collision pushed an error message" \
     [expr {[message_count] > $messages_before_rename_collision}]
-check "set_terminal_name failure left OUT0 untouched" OUT0 [dict get [get_properties $out0] name]
+check "update_terminal -name failure left OUT0 untouched" OUT0 [dict get [get_properties $out0] name]
 
 set props [get_properties $in0]
 check "get_properties name" IN0 [dict get $props name]
@@ -177,21 +193,28 @@ if {[catch {get_properties $in0 .bogus_property}]} {
 report_properties [list $in0 $out0]
 
 # Renaming changes what the friendly id refers to (it *is* the name) -
-# $in0 ("terminal:IN0") goes stale the instant this succeeds; re-derive
-# it from the new name rather than assuming the old string still
-# resolves (see le_tcl_shim.hpp's own comment on set_terminal_name).
-check "set_terminal_name return code" 0 [set_terminal_name $in0 IN0_RENAMED]
-set in0 [get_terminals IN0_RENAMED]
-check "renamed terminal is findable via its new friendly id" terminal:IN0_RENAMED $in0
+# $in0 ("terminal:IN0") goes stale the instant this succeeds; update_terminal
+# itself returns the new token (rather than echoing the caller's input),
+# exactly so a script doesn't have to re-derive it separately.
+set in0 [update_terminal $in0 -name IN0_RENAMED]
+check "update_terminal -name returns the new friendly id" terminal:IN0_RENAMED $in0
+check "renamed terminal is findable via its new friendly id" terminal:IN0_RENAMED [get_terminals IN0_RENAMED]
 check "renamed get_properties name" IN0_RENAMED [dict get [get_properties $in0] name]
 
-check "set_terminal_name restore return code" 0 [set_terminal_name $in0 IN0]
-set in0 [get_terminals IN0]
-check "restored terminal is findable via its restored friendly id" terminal:IN0 $in0
+set in0 [update_terminal $in0 -name IN0]
+check "update_terminal -name restore returns the restored friendly id" terminal:IN0 $in0
+check "restored terminal is findable via its restored friendly id" terminal:IN0 [get_terminals IN0]
 
-check "set_terminal_direction return code" 0 [set_terminal_direction $in0 INOUT]
+set in0 [update_terminal $in0 -direction INOUT]
+check "update_terminal -direction leaves the (name-based) friendly id unchanged" terminal:IN0 $in0
 check "changed get_properties direction" INOUT [dict get [get_properties $in0] direction]
-check "set_terminal_direction restore return code" 0 [set_terminal_direction $in0 INPUT]
+set in0 [update_terminal $in0 -direction INPUT]
+
+if {![catch {update_terminal $in0}]} {
+    puts stderr "FAIL: update_terminal with zero flags did not raise a Tcl error"
+    exit 1
+}
+puts "ok: update_terminal with zero flags fails"
 
 set matches [get_terminals IN*]
 check "get_terminals name-expression glob match" $in0 $matches
@@ -240,7 +263,16 @@ check "get_properties chained list-hop path after a shape exists" M1 \
     [get_properties $port .shapes.layer_name]
 
 check "shape_layer_name" M1 [shape_layer_name $shape]
-check "set_shape_layer_name return code" 0 [set_shape_layer_name $shape M1]
+check "update_shape -layer_name returns the (unchanged, non-name-based) friendly id" $shape [update_shape $shape -layer_name M1]
+
+# Shape has multiple parent fields (terminal_port/obstruction) -
+# update_shape gets no parent-reassignment flag at all (decision 5 -
+# reassigning one alone would violate "exactly one parent set").
+if {![catch {update_shape $shape -terminal_port $port}]} {
+    puts stderr "FAIL: update_shape -terminal_port did not raise a Tcl error (multi-parent classes get no reparent flag)"
+    exit 1
+}
+puts "ok: update_shape -terminal_port is an unknown flag (no reparenting for multi-parent classes)"
 
 check "add_shape_rect return code" 0 [add_shape_rect -shape $shape -rect {2 2 8 8}]
 check "add_shape_polygon return code" 0 [add_shape_polygon -shape $shape -points {0 0 5 0 5 5 0 5}]
@@ -356,9 +388,92 @@ check "get_obstructions -filter list-hop match" $obstruction $obstruction_matche
 check "delete_obstruction return code" 0 [delete_obstruction $obstruction]
 check "get_obstructions after delete" {} [get_obstructions -filter {.shapes.layer_name == M1}]
 
-# --- Abstract boundary ---
+# --- update_abstract - compound (embedded-struct) create/update flags
+# (-size/-origin/-bbox/-symmetry), exploded into one C slot per scalar
+# leaf rather than a coordinate-list typemap (see Klass.cmd_tcl_preamble's
+# own docstring, codegen/codegen/schema.py). update_abstract_boundary
+# (the one hand-written update_* command) is gone - Abstract.boundary is
+# a list field, out of create_<type>/update_<type>'s flag-per-field
+# scope, same as Shape's rects/polygons/paths - boundary-setting is
+# unsupported via TCL until a future round adds list-field support. ---
 
-check "update_abstract_boundary return code" 0 [update_abstract_boundary -abstract $abstract_id -points {0 0 10 0 10 10 0 10}]
+set updated_abstract [update_abstract $abstract_token -size {2.0 3.0} -origin {0.5 0.5} -bbox {0 0 10 10} -symmetry {X R90}]
+check "update_abstract returns the (unchanged, non-name-based) friendly id" $abstract_token $updated_abstract
+set abstract_props [get_properties $abstract_token]
+# Every one of these is an is_optional field - its property value is a
+# 0-or-1-element list (empty if unset, one element - itself the
+# point/rect/symmetry's own nested representation - if set), same
+# convention this codebase already used for every other optional field's
+# to_property_string(), not a bare flat tuple.
+check "update_abstract -size round-trips through get_properties" {{2 3}} [dict get $abstract_props size]
+check "update_abstract -origin round-trips through get_properties" {{0.500 0.500}} [dict get $abstract_props origin]
+check "update_abstract -bbox round-trips through get_properties" {{{0 0} {10 10}}} [dict get $abstract_props bbox]
+# Symmetry's own property value is r90/x/y raw flags, in that declaration
+# order (not the -symmetry flag's own keyword-list input spelling) - X R90
+# above sets x and r90, leaves y clear.
+check "update_abstract -symmetry round-trips through get_properties (r90/x set, y clear)" {{1 1 0}} [dict get $abstract_props symmetry]
+
+if {[catch {update_abstract $abstract_token -size {1.0}} err]} {
+    check "update_abstract -size wrong-arity error message" \
+        "update_abstract: -size expects 2 values {x y}, got 1" $err
+} else {
+    puts stderr "FAIL: update_abstract -size with the wrong arity did not raise a Tcl error"
+    exit 1
+}
+
+if {[catch {update_abstract $abstract_token -symmetry {Z}} err]} {
+    check "update_abstract -symmetry unknown-keyword error message" \
+        "update_abstract: -symmetry: unknown keyword \"Z\" - expected R90/X/Y" $err
+} else {
+    puts stderr "FAIL: update_abstract -symmetry with an unknown keyword did not raise a Tcl error"
+    exit 1
+}
+
+if {![catch {update_abstract $abstract_token}]} {
+    puts stderr "FAIL: update_abstract with zero flags did not raise a Tcl error"
+    exit 1
+}
+puts "ok: update_abstract with zero flags fails"
+
+# --- Terminal reparenting (update_terminal -abstract) - needs a second,
+# independent Abstract to reparent onto, so read othercell.lef (MACRO
+# OTHERCELL, PIN B) here rather than down in the current-view-scoping
+# section below, which already expects it loaded by the time it gets
+# there. ---
+
+check "read_lef (othercell.lef) return code" 0 [read_lef $other_lef_path]
+set other_abstract_token [get_abstracts -of design:OTHERCELL]
+check_true "other_abstract_token is a friendly id" [expr {$other_abstract_token ne {}}]
+
+set reparent_test [create_terminal -abstract $abstract_token -name REPARENT_TEST -direction INPUT]
+check_true "create_terminal (reparent fixture) returned a valid friendly id" [expr {$reparent_test ne {}}]
+
+set reparent_test [update_terminal $reparent_test -abstract $other_abstract_token]
+check "update_terminal -abstract returns a friendly id still based on the (unchanged) name" terminal:REPARENT_TEST $reparent_test
+check "reparented terminal is found under its new Abstract" $reparent_test [get_terminals -of $other_abstract_token REPARENT_TEST]
+check "reparented terminal is no longer found under its original Abstract" {} [get_terminals -of $abstract_token REPARENT_TEST]
+
+# Reparent collision: othercell.lef's own PIN B already occupies "B" on
+# other_abstract_token - reparenting a same-named Terminal onto it must
+# fail, leaving the Terminal under its original Abstract untouched.
+set collision_test [create_terminal -abstract $abstract_token -name B -direction INPUT]
+check_true "create_terminal (reparent-collision fixture) returned a valid friendly id" [expr {$collision_test ne {}}]
+if {![catch {update_terminal $collision_test -abstract $other_abstract_token}]} {
+    puts stderr "FAIL: update_terminal -abstract onto a same-named sibling did not raise a Tcl error"
+    exit 1
+}
+puts "ok: update_terminal -abstract onto a colliding Abstract fails"
+check "reparent-collision terminal is still under its original Abstract" $collision_test [get_terminals -of $abstract_token B]
+
+# collision_test never moved, so it's still resolvable in the current
+# (TESTCELL) view; reparent_test now lives under OTHERCELL, and
+# resolve_terminal_id (le_tcl_shim.cpp) is itself current-view-scoped
+# (same as get_terminals) - so deleting it by its own friendly id needs
+# the view switched to match first.
+check "delete_terminal (reparent-collision fixture) return code" 0 [delete_terminal $collision_test]
+open_design OTHERCELL
+check "delete_terminal (reparent fixture) return code" 0 [delete_terminal $reparent_test]
+open_design TESTCELL
 
 # --- Cascade delete: deleting the Terminal must take its TerminalPort
 # (and that port's Shape) with it, since neither is reachable any other
@@ -376,15 +491,13 @@ check "get_terminals after deleting both created terminals" A [dict get [get_pro
 
 # --- Current-view scoping (UPDATES.md item 17) ---
 #
-# Read a second, independent Design (othercell.lef's OTHERCELL/PIN B)
-# into the same session and confirm switching the current view via
-# open_design actually confines get_terminals to the Abstract in view -
-# neither Design's terminals leak into the other's results.
-# get_obstructions/get_terminal_ports share get_terminals' own
-# current-abstract scoping mechanism (api.cpp), so this one check
-# exercises the same code path all three rely on.
-
-check "read_lef (othercell.lef) return code" 0 [read_lef $other_lef_path]
+# othercell.lef (OTHERCELL/PIN B) was already read above (the Terminal
+# reparenting section needed a second, independent Abstract) - confirm
+# switching the current view via open_design actually confines
+# get_terminals to the Abstract in view - neither Design's terminals leak
+# into the other's results. get_obstructions/get_terminal_ports share
+# get_terminals' own current-abstract scoping mechanism (api.cpp), so
+# this one check exercises the same code path all three rely on.
 
 check "open_design OTHERCELL returns a friendly design id" design:OTHERCELL [open_design OTHERCELL]
 

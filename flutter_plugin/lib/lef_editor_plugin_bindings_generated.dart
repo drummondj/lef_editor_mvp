@@ -256,274 +256,6 @@ class LefEditorPluginBindings {
   late final _le_set_current_design_by_id = _le_set_current_design_by_idPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, LeDesignId)>();
 
-  /// @brief Look up the Design named `name` (exact match) on this
-  /// handle - lets a caller resolve a name straight to a LeDesignId
-  /// (e.g. for le_set_current_design_by_id) without walking the flat
-  /// le_library_design_at() enumeration by hand (UPDATES.md item 17's
-  /// `open_design <name>`). Returns an invalid id (index == UINT32_MAX)
-  /// if handle or name is null, or no Design with that name is loaded
-  /// on this handle.
-  LeDesignId le_design_by_name(
-    ffi.Pointer<LeHandle> handle,
-    ffi.Pointer<ffi.Char> name,
-  ) {
-    return _le_design_by_name(handle, name);
-  }
-
-  late final _le_design_by_namePtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
-        >
-      >('le_design_by_name');
-  late final _le_design_by_name = _le_design_by_namePtr
-      .asFunction<
-        LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
-      >();
-
-  /// @brief Look up the Library named `name` (exact match) on this
-  /// handle - same contract as le_design_by_name, one level up. Returns
-  /// an invalid id (index == UINT32_MAX) if handle or name is null, or
-  /// no Library with that name is loaded on this handle.
-  LeLibraryId le_library_by_name(
-    ffi.Pointer<LeHandle> handle,
-    ffi.Pointer<ffi.Char> name,
-  ) {
-    return _le_library_by_name(handle, name);
-  }
-
-  late final _le_library_by_namePtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
-        >
-      >('le_library_by_name');
-  late final _le_library_by_name = _le_library_by_namePtr
-      .asFunction<
-        LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
-      >();
-
-  /// @brief The Library at `id`'s own name - a direct field accessor
-  /// (same convention as le_terminal_name), for a caller that has an id
-  /// (e.g. from le_search_result_library_at) rather than a flat index
-  /// (le_library_at's own addressing). Returned pointer is owned by the
-  /// handle's Root - valid until the next call that mutates this
-  /// handle's Library pool - copy out immediately, don't hold across
-  /// another call. Returns nullptr if handle is null or id doesn't name
-  /// a Library on this handle.
-  ffi.Pointer<ffi.Char> le_library_name(
-    ffi.Pointer<LeHandle> handle,
-    LeLibraryId id,
-  ) {
-    return _le_library_name(handle, id);
-  }
-
-  late final _le_library_namePtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
-        >
-      >('le_library_name');
-  late final _le_library_name = _le_library_namePtr
-      .asFunction<
-        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
-      >();
-
-  /// @brief The Design at `id`'s own name - same contract as
-  /// le_library_name, one level down. Distinct from le_design_name
-  /// above (which is flat-index addressed, like le_library_at/
-  /// le_library_design_at's own enumeration) since this plain-C API
-  /// can't overload on parameter type.
-  ffi.Pointer<ffi.Char> le_design_name_by_id(
-    ffi.Pointer<LeHandle> handle,
-    LeDesignId id,
-  ) {
-    return _le_design_name_by_id(handle, id);
-  }
-
-  late final _le_design_name_by_idPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
-        >
-      >('le_design_name_by_id');
-  late final _le_design_name_by_id = _le_design_name_by_idPtr
-      .asFunction<
-        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
-      >();
-
-  /// @brief Search every Library on this handle - unlike
-  /// le_get_terminals/le_get_designs/le_get_abstracts, Library has no
-  /// parent type, so there is no `-of`/default-scope concept here; this
-  /// always searches every Library loaded so far. `name_expression`
-  /// (glob-matched against Library::name, Tcl `string match` semantics)
-  /// and `filter_expression` (see backend/src/database/filter.hpp) are
-  /// each optional - pass null or "" to skip that axis. Returns the
-  /// match count (0 if handle is null or nothing matched), or -1 if
-  /// filter_expression fails to parse or references an unknown
-  /// field/hop (see le_message_count/le_message_at for either error).
-  /// Read results back via le_search_result_library_at, same "valid
-  /// until the next call" convention as this API's other cached-result
-  /// accessors.
-  int le_get_libraries(
-    ffi.Pointer<LeHandle> handle,
-    ffi.Pointer<ffi.Char> name_expression,
-    ffi.Pointer<ffi.Char> filter_expression,
-  ) {
-    return _le_get_libraries(handle, name_expression, filter_expression);
-  }
-
-  late final _le_get_librariesPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int32 Function(
-            ffi.Pointer<LeHandle>,
-            ffi.Pointer<ffi.Char>,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_get_libraries');
-  late final _le_get_libraries = _le_get_librariesPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          ffi.Pointer<ffi.Char>,
-          ffi.Pointer<ffi.Char>,
-        )
-      >();
-
-  /// @brief The LeLibraryId at `index` (0..le_get_libraries' last
-  /// return value - 1) from the most recent le_get_libraries call.
-  /// Returns an invalid id (index == UINT32_MAX) if handle is null or
-  /// index is out of range.
-  LeLibraryId le_search_result_library_at(
-    ffi.Pointer<LeHandle> handle,
-    int index,
-  ) {
-    return _le_search_result_library_at(handle, index);
-  }
-
-  late final _le_search_result_library_atPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
-        >
-      >('le_search_result_library_at');
-  late final _le_search_result_library_at = _le_search_result_library_atPtr
-      .asFunction<LeLibraryId Function(ffi.Pointer<LeHandle>, int)>();
-
-  /// @brief Search Designs. `of_library` scopes to one Library's own
-  /// Designs (see le_library_by_name) - pass an invalid id (e.g. a
-  /// default-constructed LeLibraryId) to use the default scope instead:
-  /// the current view's own Design's Library if a Design is currently
-  /// selected (le_set_current_design/le_set_current_design_by_id), else
-  /// every Design loaded on this handle. `name_expression`/
-  /// `filter_expression` - see le_get_libraries' own comment. Returns
-  /// the match count, or -1 on a filter parse/validation error.
-  int le_get_designs(
-    ffi.Pointer<LeHandle> handle,
-    LeLibraryId of_library,
-    ffi.Pointer<ffi.Char> name_expression,
-    ffi.Pointer<ffi.Char> filter_expression,
-  ) {
-    return _le_get_designs(
-      handle,
-      of_library,
-      name_expression,
-      filter_expression,
-    );
-  }
-
-  late final _le_get_designsPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int32 Function(
-            ffi.Pointer<LeHandle>,
-            LeLibraryId,
-            ffi.Pointer<ffi.Char>,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_get_designs');
-  late final _le_get_designs = _le_get_designsPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          LeLibraryId,
-          ffi.Pointer<ffi.Char>,
-          ffi.Pointer<ffi.Char>,
-        )
-      >();
-
-  /// @brief The LeDesignId at `index` from the most recent le_get_designs
-  /// call - see le_search_result_library_at's own contract.
-  LeDesignId le_search_result_design_at(
-    ffi.Pointer<LeHandle> handle,
-    int index,
-  ) {
-    return _le_search_result_design_at(handle, index);
-  }
-
-  late final _le_search_result_design_atPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Int32)
-        >
-      >('le_search_result_design_at');
-  late final _le_search_result_design_at = _le_search_result_design_atPtr
-      .asFunction<LeDesignId Function(ffi.Pointer<LeHandle>, int)>();
-
-  /// @brief Search Abstracts. `of_design` scopes to one Design's own
-  /// Abstract (today always exactly one, per Design - see
-  /// le_design_by_name) - pass an invalid id to use the default scope:
-  /// the currently selected Design's Abstract if one is selected, else
-  /// none. Abstract has no name field (LEF has no concept of naming an
-  /// Abstract independently of its Design), so there is no
-  /// `name_expression` parameter here, only `filter_expression` - see
-  /// le_get_libraries' own comment. Returns the match count, or -1 on a
-  /// filter parse/validation error.
-  int le_get_abstracts(
-    ffi.Pointer<LeHandle> handle,
-    LeDesignId of_design,
-    ffi.Pointer<ffi.Char> filter_expression,
-  ) {
-    return _le_get_abstracts(handle, of_design, filter_expression);
-  }
-
-  late final _le_get_abstractsPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int32 Function(
-            ffi.Pointer<LeHandle>,
-            LeDesignId,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_get_abstracts');
-  late final _le_get_abstracts = _le_get_abstractsPtr
-      .asFunction<
-        int Function(ffi.Pointer<LeHandle>, LeDesignId, ffi.Pointer<ffi.Char>)
-      >();
-
-  /// @brief The LeAbstractId at `index` from the most recent
-  /// le_get_abstracts call - see le_search_result_library_at's own
-  /// contract.
-  LeAbstractId le_search_result_abstract_at(
-    ffi.Pointer<LeHandle> handle,
-    int index,
-  ) {
-    return _le_search_result_abstract_at(handle, index);
-  }
-
-  late final _le_search_result_abstract_atPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeAbstractId Function(ffi.Pointer<LeHandle>, ffi.Int32)
-        >
-      >('le_search_result_abstract_at');
-  late final _le_search_result_abstract_at = _le_search_result_abstract_atPtr
-      .asFunction<LeAbstractId Function(ffi.Pointer<LeHandle>, int)>();
-
   /// @brief Number of layer-widget rows currently available - mirrors
   /// ViewLayerSet::rows() directly (see LeLayerRow's own comment: this
   /// includes BOUNDARY and any future non-Technology-derived "extra"
@@ -1513,65 +1245,17 @@ class LefEditorPluginBindings {
   late final _le_render_pixel_buffer = _le_render_pixel_bufferPtr
       .asFunction<LePixelBuffer Function(ffi.Pointer<LeHandle>)>();
 
-  /// @brief Create a Terminal (a.k.a. pin) on the Abstract at
-  /// `abstract_id` (UPDATES.md item 15's `create_terminal -name IN0
-  /// -direction IN`). Only name/direction are settable here - every
-  /// other Terminal field (LEF's optional use/shape/antenna/etc.
-  /// fields) defaults to its zero value; extend this function's
-  /// parameter list if a real caller needs to set one at creation time
-  /// rather than via a later le_set_terminal_* call. `name` must be
-  /// unique among Terminals already on `abstract_id` (a TCL script
-  /// addresses a Terminal by name - UPDATES.md's Terminal-friendly-id
-  /// item - so a collision would be genuinely ambiguous, not just
-  /// unusual; enforced by a linear scan over
-  /// Root::get_abstract_terminals, not a cmg index=True lookup, since
-  /// real LEF libraries legitimately reuse pin names like VDD/IN0
-  /// across different Abstracts and index=True's generated index is
-  /// flat/global, not per-Abstract). Returns an invalid LeTerminalId
-  /// (index == UINT32_MAX) if handle or name is null, abstract_id
-  /// doesn't name an Abstract on this handle, or name collides with an
-  /// existing Terminal on it (pushes an ERROR message the same way a
-  /// filter-expression parse error does - see le_message_count/
-  /// le_message_at).
-  LeTerminalId le_create_terminal(
-    ffi.Pointer<LeHandle> handle,
-    LeAbstractId abstract_id,
-    ffi.Pointer<ffi.Char> name,
-    int direction,
-  ) {
-    return _le_create_terminal(handle, abstract_id, name, direction);
-  }
-
-  late final _le_create_terminalPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeTerminalId Function(
-            ffi.Pointer<LeHandle>,
-            LeAbstractId,
-            ffi.Pointer<ffi.Char>,
-            ffi.Int32,
-          )
-        >
-      >('le_create_terminal');
-  late final _le_create_terminal = _le_create_terminalPtr
-      .asFunction<
-        LeTerminalId Function(
-          ffi.Pointer<LeHandle>,
-          LeAbstractId,
-          ffi.Pointer<ffi.Char>,
-          int,
-        )
-      >();
-
   /// @brief Find the Terminal named `name` (exact match) within the
   /// currently selected Design's Abstract (see le_set_current_design/
   /// le_set_current_design_by_id - same current-view scoping
   /// le_get_terminals already uses). A linear scan over
-  /// Root::get_abstract_terminals, not a cmg index=True lookup - see
-  /// le_create_terminal's own comment for why. Returns an invalid
-  /// LeTerminalId (index == UINT32_MAX) if handle or name is null, no
-  /// Design is currently selected, or no Terminal in the current
-  /// Abstract has that name.
+  /// Root::get_abstract_terminals, not a cmg index=True lookup - Terminal
+  /// name uniqueness is per-Abstract (unique_per_parent, see
+  /// backend/src/database/schema.py's own Terminal.name comment), not
+  /// global, so a flat index=True lookup would be the wrong shape here.
+  /// Returns an invalid LeTerminalId (index == UINT32_MAX) if handle or
+  /// name is null, no Design is currently selected, or no Terminal in
+  /// the current Abstract has that name.
   LeTerminalId le_terminal_by_name(
     ffi.Pointer<LeHandle> handle,
     ffi.Pointer<ffi.Char> name,
@@ -1933,62 +1617,6 @@ class LefEditorPluginBindings {
         )
       >();
 
-  /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
-  /// `update_terminal_port -name ...` pattern, applied to Terminal
-  /// itself) - `name` isn't index=True so this is a direct field
-  /// mutation, not a generated Root::set_terminal_name (see
-  /// TCL_EXPLORATION.md's "cmg codegen design" for why only
-  /// indexed/parent fields get a generated setter). Same uniqueness
-  /// enforcement as le_create_terminal, scoped to the Terminal's own
-  /// Abstract - renaming to the Terminal's own current name is a no-op
-  /// success, not a self-collision. Returns 0 on success, nonzero if
-  /// handle or name is null, id doesn't name a Terminal on this handle,
-  /// or name collides with a different Terminal already on the same
-  /// Abstract (pushes an ERROR message, same convention as
-  /// le_create_terminal).
-  int le_set_terminal_name(
-    ffi.Pointer<LeHandle> handle,
-    LeTerminalId id,
-    ffi.Pointer<ffi.Char> name,
-  ) {
-    return _le_set_terminal_name(handle, id, name);
-  }
-
-  late final _le_set_terminal_namePtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeTerminalId,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_set_terminal_name');
-  late final _le_set_terminal_name = _le_set_terminal_namePtr
-      .asFunction<
-        int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Pointer<ffi.Char>)
-      >();
-
-  /// @brief Change the Terminal at `id`'s signal direction. Returns 0
-  /// on success, nonzero if handle is null or id doesn't name a
-  /// Terminal on this handle.
-  int le_set_terminal_direction(
-    ffi.Pointer<LeHandle> handle,
-    LeTerminalId id,
-    int direction,
-  ) {
-    return _le_set_terminal_direction(handle, id, direction);
-  }
-
-  late final _le_set_terminal_directionPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Int32)
-        >
-      >('le_set_terminal_direction');
-  late final _le_set_terminal_direction = _le_set_terminal_directionPtr
-      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId, int)>();
-
   /// @brief Delete the Terminal at `id`, cascading to every
   /// TerminalPort it owns first - unlike Root::delete_terminal's own
   /// no-cascade default (see its doc comment), a orphaned port here
@@ -2118,29 +1746,6 @@ class LefEditorPluginBindings {
           ffi.Pointer<ffi.Char>,
           ffi.Pointer<ffi.Char>,
         )
-      >();
-
-  /// @brief Create an empty TerminalPort owned by the Terminal at
-  /// `terminal_id` - no shapes yet, see le_create_terminal_port_shape.
-  /// Returns an invalid LeTerminalPortId (index == UINT32_MAX) if
-  /// handle is null, or terminal_id doesn't name a Terminal on this
-  /// handle.
-  LeTerminalPortId le_create_terminal_port(
-    ffi.Pointer<LeHandle> handle,
-    LeTerminalId terminal_id,
-  ) {
-    return _le_create_terminal_port(handle, terminal_id);
-  }
-
-  late final _le_create_terminal_portPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeTerminalPortId Function(ffi.Pointer<LeHandle>, LeTerminalId)
-        >
-      >('le_create_terminal_port');
-  late final _le_create_terminal_port = _le_create_terminal_portPtr
-      .asFunction<
-        LeTerminalPortId Function(ffi.Pointer<LeHandle>, LeTerminalId)
       >();
 
   /// @brief Number of property rows for the TerminalPort at `id` - same
@@ -2324,29 +1929,6 @@ class LefEditorPluginBindings {
         int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Pointer<ffi.Char>)
       >();
 
-  /// @brief Create an empty Obstruction on the Abstract at
-  /// `abstract_id` - no shapes yet, see le_create_obstruction_shape.
-  /// Returns an invalid LeObstructionId (index == UINT32_MAX) if
-  /// handle is null, or abstract_id doesn't name an Abstract on this
-  /// handle.
-  LeObstructionId le_create_obstruction(
-    ffi.Pointer<LeHandle> handle,
-    LeAbstractId abstract_id,
-  ) {
-    return _le_create_obstruction(handle, abstract_id);
-  }
-
-  late final _le_create_obstructionPtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
-        >
-      >('le_create_obstruction');
-  late final _le_create_obstruction = _le_create_obstructionPtr
-      .asFunction<
-        LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
-      >();
-
   /// @brief Number of property rows for the Obstruction at `id` - same
   /// by-id shape as le_terminal_property_count. Rows: "shapes_count"
   /// (int) - cmg's generated to_properties() output for
@@ -2509,112 +2091,6 @@ class LefEditorPluginBindings {
   late final _le_get_obstructions = _le_get_obstructionsPtr
       .asFunction<
         int Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Pointer<ffi.Char>)
-      >();
-
-  /// @brief Replace the Abstract at `id`'s boundary outline wholesale
-  /// with a single polygon built from `coords_um` (UPDATES.md item
-  /// 15's `update_abstract -boundary {x y x y ...}`) - a flat array of
-  /// microns, alternating x/y, `coord_count` must be a positive even
-  /// number (at least 3 points, i.e. coord_count >= 6, to be a real
-  /// polygon - a smaller count is rejected). No standalone Boundary
-  /// object exists (see TCL_EXPLORATION.md's round-2 decision) -
-  /// `Abstract.boundary` is a plain field, so this is a direct
-  /// mutation through le::Root::get_abstract(), not a generated
-  /// Root::set_abstract_boundary. Returns 0 on success, nonzero if
-  /// handle or coords_um is null, id doesn't name an Abstract on this
-  /// handle, coord_count is invalid, or no Technology has been read
-  /// yet (needed for the micron-to-dbu conversion).
-  int le_update_abstract_boundary(
-    ffi.Pointer<LeHandle> handle,
-    LeAbstractId id,
-    ffi.Pointer<ffi.Double> coords_um,
-    int coord_count,
-  ) {
-    return _le_update_abstract_boundary(handle, id, coords_um, coord_count);
-  }
-
-  late final _le_update_abstract_boundaryPtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeAbstractId,
-            ffi.Pointer<ffi.Double>,
-            ffi.Int32,
-          )
-        >
-      >('le_update_abstract_boundary');
-  late final _le_update_abstract_boundary = _le_update_abstract_boundaryPtr
-      .asFunction<
-        int Function(
-          ffi.Pointer<LeHandle>,
-          LeAbstractId,
-          ffi.Pointer<ffi.Double>,
-          int,
-        )
-      >();
-
-  /// @brief Create an empty Shape (just `layer_name`, no geometry yet)
-  /// owned by the TerminalPort at `port_id`. Returns an invalid
-  /// LeShapeId (index == UINT32_MAX) if handle or layer_name is null,
-  /// or port_id doesn't name a TerminalPort on this handle.
-  LeShapeId le_create_terminal_port_shape(
-    ffi.Pointer<LeHandle> handle,
-    LeTerminalPortId port_id,
-    ffi.Pointer<ffi.Char> layer_name,
-  ) {
-    return _le_create_terminal_port_shape(handle, port_id, layer_name);
-  }
-
-  late final _le_create_terminal_port_shapePtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeShapeId Function(
-            ffi.Pointer<LeHandle>,
-            LeTerminalPortId,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_create_terminal_port_shape');
-  late final _le_create_terminal_port_shape = _le_create_terminal_port_shapePtr
-      .asFunction<
-        LeShapeId Function(
-          ffi.Pointer<LeHandle>,
-          LeTerminalPortId,
-          ffi.Pointer<ffi.Char>,
-        )
-      >();
-
-  /// @brief Create an empty Shape owned by the Obstruction at
-  /// `obstruction_id` - see le_create_terminal_port_shape's own
-  /// comment for the general contract. Returns an invalid LeShapeId if
-  /// handle or layer_name is null, or obstruction_id doesn't name an
-  /// Obstruction on this handle.
-  LeShapeId le_create_obstruction_shape(
-    ffi.Pointer<LeHandle> handle,
-    LeObstructionId obstruction_id,
-    ffi.Pointer<ffi.Char> layer_name,
-  ) {
-    return _le_create_obstruction_shape(handle, obstruction_id, layer_name);
-  }
-
-  late final _le_create_obstruction_shapePtr =
-      _lookup<
-        ffi.NativeFunction<
-          LeShapeId Function(
-            ffi.Pointer<LeHandle>,
-            LeObstructionId,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_create_obstruction_shape');
-  late final _le_create_obstruction_shape = _le_create_obstruction_shapePtr
-      .asFunction<
-        LeShapeId Function(
-          ffi.Pointer<LeHandle>,
-          LeObstructionId,
-          ffi.Pointer<ffi.Char>,
-        )
       >();
 
   /// @brief Search Shapes (UPDATES.md item 19.1) - `of_terminal_port`/
@@ -2844,7 +2320,7 @@ class LefEditorPluginBindings {
 
   /// @brief The layer name of the Shape at `id`. Owned by the handle's
   /// Root - valid until the handle is destroyed, this shape is
-  /// deleted, or le_set_shape_layer_name changes it, never owned by
+  /// deleted, or le_update_shape changes it, never owned by
   /// the caller. Returns null if handle is null or id doesn't name a
   /// Shape on this handle.
   ffi.Pointer<ffi.Char> le_shape_layer_name(
@@ -2863,32 +2339,6 @@ class LefEditorPluginBindings {
   late final _le_shape_layer_name = _le_shape_layer_namePtr
       .asFunction<
         ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeShapeId)
-      >();
-
-  /// @brief Rename the Shape at `id`'s layer. Returns 0 on success,
-  /// nonzero if handle or layer_name is null, or id doesn't name a
-  /// Shape on this handle.
-  int le_set_shape_layer_name(
-    ffi.Pointer<LeHandle> handle,
-    LeShapeId id,
-    ffi.Pointer<ffi.Char> layer_name,
-  ) {
-    return _le_set_shape_layer_name(handle, id, layer_name);
-  }
-
-  late final _le_set_shape_layer_namePtr =
-      _lookup<
-        ffi.NativeFunction<
-          ffi.Int Function(
-            ffi.Pointer<LeHandle>,
-            LeShapeId,
-            ffi.Pointer<ffi.Char>,
-          )
-        >
-      >('le_set_shape_layer_name');
-  late final _le_set_shape_layer_name = _le_set_shape_layer_namePtr
-      .asFunction<
-        int Function(ffi.Pointer<LeHandle>, LeShapeId, ffi.Pointer<ffi.Char>)
       >();
 
   /// @brief Delete the Shape at `id`. Its parent (TerminalPort or
@@ -3292,6 +2742,10256 @@ class LefEditorPluginBindings {
       >('le_remove_shape_path');
   late final _le_remove_shape_path = _le_remove_shape_pathPtr
       .asFunction<int Function(ffi.Pointer<LeHandle>, LeShapeId, int)>();
+
+  /// @brief The LayerId whose name matches `name`
+  /// (Root::get_layer_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeLayerId le_layer_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_layer_by_name(handle, name);
+  }
+
+  late final _le_layer_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_layer_by_name');
+  late final _le_layer_by_name = _le_layer_by_namePtr
+      .asFunction<
+        LeLayerId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the Layer at `id` - the reverse of
+  /// le_layer_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a Layer on this handle.
+  ffi.Pointer<ffi.Char> le_layer_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_name_by_id(handle, id);
+  }
+
+  late final _le_layer_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLayerId)
+        >
+      >('le_layer_name_by_id');
+  late final _le_layer_name_by_id = _le_layer_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLayerId)
+      >();
+
+  /// @brief The SiteId whose name matches `name`
+  /// (Root::get_site_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeSiteId le_site_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_site_by_name(handle, name);
+  }
+
+  late final _le_site_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSiteId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_site_by_name');
+  late final _le_site_by_name = _le_site_by_namePtr
+      .asFunction<
+        LeSiteId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the Site at `id` - the reverse of
+  /// le_site_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a Site on this handle.
+  ffi.Pointer<ffi.Char> le_site_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeSiteId id,
+  ) {
+    return _le_site_name_by_id(handle, id);
+  }
+
+  late final _le_site_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeSiteId)
+        >
+      >('le_site_name_by_id');
+  late final _le_site_name_by_id = _le_site_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeSiteId)
+      >();
+
+  /// @brief The NonDefaultRuleId whose name matches `name`
+  /// (Root::get_non_default_rule_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeNonDefaultRuleId le_non_default_rule_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_non_default_rule_by_name(handle, name);
+  }
+
+  late final _le_non_default_rule_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleId Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_non_default_rule_by_name');
+  late final _le_non_default_rule_by_name = _le_non_default_rule_by_namePtr
+      .asFunction<
+        LeNonDefaultRuleId Function(
+          ffi.Pointer<LeHandle>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// @brief The name of the NonDefaultRule at `id` - the reverse of
+  /// le_non_default_rule_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a NonDefaultRule on this handle.
+  ffi.Pointer<ffi.Char> le_non_default_rule_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+  ) {
+    return _le_non_default_rule_name_by_id(handle, id);
+  }
+
+  late final _le_non_default_rule_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+          )
+        >
+      >('le_non_default_rule_name_by_id');
+  late final _le_non_default_rule_name_by_id =
+      _le_non_default_rule_name_by_idPtr
+          .asFunction<
+            ffi.Pointer<ffi.Char> Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleId,
+            )
+          >();
+
+  /// @brief The ViaId whose name matches `name`
+  /// (Root::get_via_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeViaId le_via_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_via_by_name(handle, name);
+  }
+
+  late final _le_via_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_via_by_name');
+  late final _le_via_by_name = _le_via_by_namePtr
+      .asFunction<
+        LeViaId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the Via at `id` - the reverse of
+  /// le_via_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a Via on this handle.
+  ffi.Pointer<ffi.Char> le_via_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId id,
+  ) {
+    return _le_via_name_by_id(handle, id);
+  }
+
+  late final _le_via_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeViaId)
+        >
+      >('le_via_name_by_id');
+  late final _le_via_name_by_id = _le_via_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeViaId)
+      >();
+
+  /// @brief The ViaRuleId whose name matches `name`
+  /// (Root::get_via_rule_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeViaRuleId le_via_rule_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_via_rule_by_name(handle, name);
+  }
+
+  late final _le_via_rule_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_via_rule_by_name');
+  late final _le_via_rule_by_name = _le_via_rule_by_namePtr
+      .asFunction<
+        LeViaRuleId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the ViaRule at `id` - the reverse of
+  /// le_via_rule_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a ViaRule on this handle.
+  ffi.Pointer<ffi.Char> le_via_rule_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId id,
+  ) {
+    return _le_via_rule_name_by_id(handle, id);
+  }
+
+  late final _le_via_rule_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeViaRuleId)
+        >
+      >('le_via_rule_name_by_id');
+  late final _le_via_rule_name_by_id = _le_via_rule_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeViaRuleId)
+      >();
+
+  /// @brief The LibraryId whose name matches `name`
+  /// (Root::get_library_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeLibraryId le_library_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_library_by_name(handle, name);
+  }
+
+  late final _le_library_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_library_by_name');
+  late final _le_library_by_name = _le_library_by_namePtr
+      .asFunction<
+        LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the Library at `id` - the reverse of
+  /// le_library_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a Library on this handle.
+  ffi.Pointer<ffi.Char> le_library_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+  ) {
+    return _le_library_name_by_id(handle, id);
+  }
+
+  late final _le_library_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
+        >
+      >('le_library_name_by_id');
+  late final _le_library_name_by_id = _le_library_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeLibraryId)
+      >();
+
+  /// @brief The DesignId whose name matches `name`
+  /// (Root::get_design_by_name, a real global cmg
+  /// index=True lookup). Returns an invalid id (index == UINT32_MAX) if
+  /// handle/name is null or nothing matches.
+  LeDesignId le_design_by_name(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_design_by_name(handle, name);
+  }
+
+  late final _le_design_by_namePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_design_by_name');
+  late final _le_design_by_name = _le_design_by_namePtr
+      .asFunction<
+        LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief The name of the Design at `id` - the reverse of
+  /// le_design_by_name above, needed to format a friendly id
+  /// from an Id alone (e.g. when enumerating a parent's children). Named
+  /// with a `_by_id` suffix (unlike le_terminal_name/le_library_name's own
+  /// hand-written precedent) so it can never collide with an unrelated,
+  /// differently-shaped accessor of the bare name for some other class
+  /// (e.g. le_design_name(LeHandle*, int32_t index), a flat-index
+  /// enumeration accessor predating this generator). Owned by the handle's
+  /// Root - valid until the handle is destroyed. Returns nullptr if handle
+  /// is null or id doesn't name a Design on this handle.
+  ffi.Pointer<ffi.Char> le_design_name_by_id(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId id,
+  ) {
+    return _le_design_name_by_id(handle, id);
+  }
+
+  late final _le_design_name_by_idPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
+        >
+      >('le_design_name_by_id');
+  late final _le_design_name_by_id = _le_design_name_by_idPtr
+      .asFunction<
+        ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, LeDesignId)
+      >();
+
+  /// --- Property tables (count/at/path - see le_terminal_property_count's
+  /// own api.hpp comment for the general by-id property-table contract
+  /// every one of these mirrors) ---
+  int le_technology_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_property_count(handle, id);
+  }
+
+  late final _le_technology_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_property_count');
+  late final _le_technology_property_count = _le_technology_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeProperty le_technology_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_property_at(handle, id, index);
+  }
+
+  late final _le_technology_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeTechnologyId, ffi.Int32)
+        >
+      >('le_technology_property_at');
+  late final _le_technology_property_at = _le_technology_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeTechnologyId, int)
+      >();
+
+  LeProperty le_technology_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_technology_property_path(handle, id, path);
+  }
+
+  late final _le_technology_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_technology_property_path');
+  late final _le_technology_property_path = _le_technology_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_property_definition_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LePropertyDefinitionId id,
+  ) {
+    return _le_property_definition_property_count(handle, id);
+  }
+
+  late final _le_property_definition_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LePropertyDefinitionId)
+        >
+      >('le_property_definition_property_count');
+  late final _le_property_definition_property_count =
+      _le_property_definition_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LePropertyDefinitionId)
+          >();
+
+  LeProperty le_property_definition_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LePropertyDefinitionId id,
+    int index,
+  ) {
+    return _le_property_definition_property_at(handle, id, index);
+  }
+
+  late final _le_property_definition_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePropertyDefinitionId,
+            ffi.Int32,
+          )
+        >
+      >('le_property_definition_property_at');
+  late final _le_property_definition_property_at =
+      _le_property_definition_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LePropertyDefinitionId,
+              int,
+            )
+          >();
+
+  LeProperty le_property_definition_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LePropertyDefinitionId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_property_definition_property_path(handle, id, path);
+  }
+
+  late final _le_property_definition_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePropertyDefinitionId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_property_definition_property_path');
+  late final _le_property_definition_property_path =
+      _le_property_definition_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LePropertyDefinitionId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_layer_property_count(ffi.Pointer<LeHandle> handle, LeLayerId id) {
+    return _le_layer_property_count(handle, id);
+  }
+
+  late final _le_layer_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_property_count');
+  late final _le_layer_property_count = _le_layer_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeProperty le_layer_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_property_at(handle, id, index);
+  }
+
+  late final _le_layer_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Int32)
+        >
+      >('le_layer_property_at');
+  late final _le_layer_property_at = _le_layer_property_atPtr
+      .asFunction<LeProperty Function(ffi.Pointer<LeHandle>, LeLayerId, int)>();
+
+  LeProperty le_layer_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_layer_property_path(handle, id, path);
+  }
+
+  late final _le_layer_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_layer_property_path');
+  late final _le_layer_property_path = _le_layer_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_antenna_model_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAntennaModelId id,
+  ) {
+    return _le_antenna_model_property_count(handle, id);
+  }
+
+  late final _le_antenna_model_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAntennaModelId)
+        >
+      >('le_antenna_model_property_count');
+  late final _le_antenna_model_property_count =
+      _le_antenna_model_property_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeAntennaModelId)>();
+
+  LeProperty le_antenna_model_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAntennaModelId id,
+    int index,
+  ) {
+    return _le_antenna_model_property_at(handle, id, index);
+  }
+
+  late final _le_antenna_model_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeAntennaModelId,
+            ffi.Int32,
+          )
+        >
+      >('le_antenna_model_property_at');
+  late final _le_antenna_model_property_at = _le_antenna_model_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeAntennaModelId, int)
+      >();
+
+  LeProperty le_antenna_model_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeAntennaModelId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_antenna_model_property_path(handle, id, path);
+  }
+
+  late final _le_antenna_model_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeAntennaModelId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_antenna_model_property_path');
+  late final _le_antenna_model_property_path =
+      _le_antenna_model_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeAntennaModelId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_array_spacing_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeArraySpacingId id,
+  ) {
+    return _le_array_spacing_property_count(handle, id);
+  }
+
+  late final _le_array_spacing_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeArraySpacingId)
+        >
+      >('le_array_spacing_property_count');
+  late final _le_array_spacing_property_count =
+      _le_array_spacing_property_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeArraySpacingId)>();
+
+  LeProperty le_array_spacing_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeArraySpacingId id,
+    int index,
+  ) {
+    return _le_array_spacing_property_at(handle, id, index);
+  }
+
+  late final _le_array_spacing_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeArraySpacingId,
+            ffi.Int32,
+          )
+        >
+      >('le_array_spacing_property_at');
+  late final _le_array_spacing_property_at = _le_array_spacing_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeArraySpacingId, int)
+      >();
+
+  LeProperty le_array_spacing_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeArraySpacingId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_array_spacing_property_path(handle, id, path);
+  }
+
+  late final _le_array_spacing_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeArraySpacingId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_array_spacing_property_path');
+  late final _le_array_spacing_property_path =
+      _le_array_spacing_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeArraySpacingId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_two_widths_spacing_entry_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTwoWidthsSpacingEntryId id,
+  ) {
+    return _le_two_widths_spacing_entry_property_count(handle, id);
+  }
+
+  late final _le_two_widths_spacing_entry_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTwoWidthsSpacingEntryId)
+        >
+      >('le_two_widths_spacing_entry_property_count');
+  late final _le_two_widths_spacing_entry_property_count =
+      _le_two_widths_spacing_entry_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeTwoWidthsSpacingEntryId)
+          >();
+
+  LeProperty le_two_widths_spacing_entry_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTwoWidthsSpacingEntryId id,
+    int index,
+  ) {
+    return _le_two_widths_spacing_entry_property_at(handle, id, index);
+  }
+
+  late final _le_two_widths_spacing_entry_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTwoWidthsSpacingEntryId,
+            ffi.Int32,
+          )
+        >
+      >('le_two_widths_spacing_entry_property_at');
+  late final _le_two_widths_spacing_entry_property_at =
+      _le_two_widths_spacing_entry_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeTwoWidthsSpacingEntryId,
+              int,
+            )
+          >();
+
+  LeProperty le_two_widths_spacing_entry_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeTwoWidthsSpacingEntryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_two_widths_spacing_entry_property_path(handle, id, path);
+  }
+
+  late final _le_two_widths_spacing_entry_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeTwoWidthsSpacingEntryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_two_widths_spacing_entry_property_path');
+  late final _le_two_widths_spacing_entry_property_path =
+      _le_two_widths_spacing_entry_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeTwoWidthsSpacingEntryId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_prefer_enclosure_entry_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LePreferEnclosureEntryId id,
+  ) {
+    return _le_prefer_enclosure_entry_property_count(handle, id);
+  }
+
+  late final _le_prefer_enclosure_entry_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LePreferEnclosureEntryId)
+        >
+      >('le_prefer_enclosure_entry_property_count');
+  late final _le_prefer_enclosure_entry_property_count =
+      _le_prefer_enclosure_entry_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LePreferEnclosureEntryId)
+          >();
+
+  LeProperty le_prefer_enclosure_entry_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LePreferEnclosureEntryId id,
+    int index,
+  ) {
+    return _le_prefer_enclosure_entry_property_at(handle, id, index);
+  }
+
+  late final _le_prefer_enclosure_entry_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePreferEnclosureEntryId,
+            ffi.Int32,
+          )
+        >
+      >('le_prefer_enclosure_entry_property_at');
+  late final _le_prefer_enclosure_entry_property_at =
+      _le_prefer_enclosure_entry_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LePreferEnclosureEntryId,
+              int,
+            )
+          >();
+
+  LeProperty le_prefer_enclosure_entry_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LePreferEnclosureEntryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_prefer_enclosure_entry_property_path(handle, id, path);
+  }
+
+  late final _le_prefer_enclosure_entry_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePreferEnclosureEntryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_prefer_enclosure_entry_property_path');
+  late final _le_prefer_enclosure_entry_property_path =
+      _le_prefer_enclosure_entry_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LePreferEnclosureEntryId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_enclosure_entry_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeEnclosureEntryId id,
+  ) {
+    return _le_enclosure_entry_property_count(handle, id);
+  }
+
+  late final _le_enclosure_entry_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeEnclosureEntryId)
+        >
+      >('le_enclosure_entry_property_count');
+  late final _le_enclosure_entry_property_count =
+      _le_enclosure_entry_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeEnclosureEntryId)
+          >();
+
+  LeProperty le_enclosure_entry_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeEnclosureEntryId id,
+    int index,
+  ) {
+    return _le_enclosure_entry_property_at(handle, id, index);
+  }
+
+  late final _le_enclosure_entry_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeEnclosureEntryId,
+            ffi.Int32,
+          )
+        >
+      >('le_enclosure_entry_property_at');
+  late final _le_enclosure_entry_property_at =
+      _le_enclosure_entry_property_atPtr
+          .asFunction<
+            LeProperty Function(ffi.Pointer<LeHandle>, LeEnclosureEntryId, int)
+          >();
+
+  LeProperty le_enclosure_entry_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeEnclosureEntryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_enclosure_entry_property_path(handle, id, path);
+  }
+
+  late final _le_enclosure_entry_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeEnclosureEntryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_enclosure_entry_property_path');
+  late final _le_enclosure_entry_property_path =
+      _le_enclosure_entry_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeEnclosureEntryId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_layer_density_entry_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerDensityEntryId id,
+  ) {
+    return _le_layer_density_entry_property_count(handle, id);
+  }
+
+  late final _le_layer_density_entry_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerDensityEntryId)
+        >
+      >('le_layer_density_entry_property_count');
+  late final _le_layer_density_entry_property_count =
+      _le_layer_density_entry_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeLayerDensityEntryId)
+          >();
+
+  LeProperty le_layer_density_entry_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerDensityEntryId id,
+    int index,
+  ) {
+    return _le_layer_density_entry_property_at(handle, id, index);
+  }
+
+  late final _le_layer_density_entry_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerDensityEntryId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_density_entry_property_at');
+  late final _le_layer_density_entry_property_at =
+      _le_layer_density_entry_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerDensityEntryId,
+              int,
+            )
+          >();
+
+  LeProperty le_layer_density_entry_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerDensityEntryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_layer_density_entry_property_path(handle, id, path);
+  }
+
+  late final _le_layer_density_entry_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerDensityEntryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_layer_density_entry_property_path');
+  late final _le_layer_density_entry_property_path =
+      _le_layer_density_entry_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerDensityEntryId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_macro_site_placement_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroSitePlacementId id,
+  ) {
+    return _le_macro_site_placement_property_count(handle, id);
+  }
+
+  late final _le_macro_site_placement_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeMacroSitePlacementId)
+        >
+      >('le_macro_site_placement_property_count');
+  late final _le_macro_site_placement_property_count =
+      _le_macro_site_placement_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeMacroSitePlacementId)
+          >();
+
+  LeProperty le_macro_site_placement_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroSitePlacementId id,
+    int index,
+  ) {
+    return _le_macro_site_placement_property_at(handle, id, index);
+  }
+
+  late final _le_macro_site_placement_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroSitePlacementId,
+            ffi.Int32,
+          )
+        >
+      >('le_macro_site_placement_property_at');
+  late final _le_macro_site_placement_property_at =
+      _le_macro_site_placement_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeMacroSitePlacementId,
+              int,
+            )
+          >();
+
+  LeProperty le_macro_site_placement_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroSitePlacementId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_macro_site_placement_property_path(handle, id, path);
+  }
+
+  late final _le_macro_site_placement_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroSitePlacementId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_macro_site_placement_property_path');
+  late final _le_macro_site_placement_property_path =
+      _le_macro_site_placement_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeMacroSitePlacementId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_site_property_count(ffi.Pointer<LeHandle> handle, LeSiteId id) {
+    return _le_site_property_count(handle, id);
+  }
+
+  late final _le_site_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeSiteId)>
+      >('le_site_property_count');
+  late final _le_site_property_count = _le_site_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeSiteId)>();
+
+  LeProperty le_site_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeSiteId id,
+    int index,
+  ) {
+    return _le_site_property_at(handle, id, index);
+  }
+
+  late final _le_site_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeSiteId, ffi.Int32)
+        >
+      >('le_site_property_at');
+  late final _le_site_property_at = _le_site_property_atPtr
+      .asFunction<LeProperty Function(ffi.Pointer<LeHandle>, LeSiteId, int)>();
+
+  LeProperty le_site_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeSiteId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_site_property_path(handle, id, path);
+  }
+
+  late final _le_site_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeSiteId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_site_property_path');
+  late final _le_site_property_path = _le_site_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeSiteId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_non_default_rule_layer_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleLayerId id,
+  ) {
+    return _le_non_default_rule_layer_property_count(handle, id);
+  }
+
+  late final _le_non_default_rule_layer_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleLayerId)
+        >
+      >('le_non_default_rule_layer_property_count');
+  late final _le_non_default_rule_layer_property_count =
+      _le_non_default_rule_layer_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleLayerId)
+          >();
+
+  LeProperty le_non_default_rule_layer_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleLayerId id,
+    int index,
+  ) {
+    return _le_non_default_rule_layer_property_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_layer_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_layer_property_at');
+  late final _le_non_default_rule_layer_property_at =
+      _le_non_default_rule_layer_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleLayerId,
+              int,
+            )
+          >();
+
+  LeProperty le_non_default_rule_layer_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleLayerId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_non_default_rule_layer_property_path(handle, id, path);
+  }
+
+  late final _le_non_default_rule_layer_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_non_default_rule_layer_property_path');
+  late final _le_non_default_rule_layer_property_path =
+      _le_non_default_rule_layer_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_non_default_rule_via_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+  ) {
+    return _le_non_default_rule_via_property_count(handle, id);
+  }
+
+  late final _le_non_default_rule_via_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleViaId)
+        >
+      >('le_non_default_rule_via_property_count');
+  late final _le_non_default_rule_via_property_count =
+      _le_non_default_rule_via_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleViaId)
+          >();
+
+  LeProperty le_non_default_rule_via_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+    int index,
+  ) {
+    return _le_non_default_rule_via_property_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_via_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleViaId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_via_property_at');
+  late final _le_non_default_rule_via_property_at =
+      _le_non_default_rule_via_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleViaId,
+              int,
+            )
+          >();
+
+  LeProperty le_non_default_rule_via_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_non_default_rule_via_property_path(handle, id, path);
+  }
+
+  late final _le_non_default_rule_via_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleViaId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_non_default_rule_via_property_path');
+  late final _le_non_default_rule_via_property_path =
+      _le_non_default_rule_via_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleViaId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_non_default_rule_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+  ) {
+    return _le_non_default_rule_property_count(handle, id);
+  }
+
+  late final _le_non_default_rule_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+        >
+      >('le_non_default_rule_property_count');
+  late final _le_non_default_rule_property_count =
+      _le_non_default_rule_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+          >();
+
+  LeProperty le_non_default_rule_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+    int index,
+  ) {
+    return _le_non_default_rule_property_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_property_at');
+  late final _le_non_default_rule_property_at =
+      _le_non_default_rule_property_atPtr
+          .asFunction<
+            LeProperty Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId, int)
+          >();
+
+  LeProperty le_non_default_rule_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_non_default_rule_property_path(handle, id, path);
+  }
+
+  late final _le_non_default_rule_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_non_default_rule_property_path');
+  late final _le_non_default_rule_property_path =
+      _le_non_default_rule_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_minimum_cut_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeMinimumCutId id,
+  ) {
+    return _le_minimum_cut_property_count(handle, id);
+  }
+
+  late final _le_minimum_cut_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeMinimumCutId)
+        >
+      >('le_minimum_cut_property_count');
+  late final _le_minimum_cut_property_count = _le_minimum_cut_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeMinimumCutId)>();
+
+  LeProperty le_minimum_cut_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeMinimumCutId id,
+    int index,
+  ) {
+    return _le_minimum_cut_property_at(handle, id, index);
+  }
+
+  late final _le_minimum_cut_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeMinimumCutId, ffi.Int32)
+        >
+      >('le_minimum_cut_property_at');
+  late final _le_minimum_cut_property_at = _le_minimum_cut_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeMinimumCutId, int)
+      >();
+
+  LeProperty le_minimum_cut_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeMinimumCutId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_minimum_cut_property_path(handle, id, path);
+  }
+
+  late final _le_minimum_cut_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMinimumCutId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_minimum_cut_property_path');
+  late final _le_minimum_cut_property_path = _le_minimum_cut_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeMinimumCutId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_min_step_property_count(ffi.Pointer<LeHandle> handle, LeMinStepId id) {
+    return _le_min_step_property_count(handle, id);
+  }
+
+  late final _le_min_step_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeMinStepId)
+        >
+      >('le_min_step_property_count');
+  late final _le_min_step_property_count = _le_min_step_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeMinStepId)>();
+
+  LeProperty le_min_step_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeMinStepId id,
+    int index,
+  ) {
+    return _le_min_step_property_at(handle, id, index);
+  }
+
+  late final _le_min_step_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeMinStepId, ffi.Int32)
+        >
+      >('le_min_step_property_at');
+  late final _le_min_step_property_at = _le_min_step_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeMinStepId, int)
+      >();
+
+  LeProperty le_min_step_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeMinStepId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_min_step_property_path(handle, id, path);
+  }
+
+  late final _le_min_step_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMinStepId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_min_step_property_path');
+  late final _le_min_step_property_path = _le_min_step_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeMinStepId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_influence_spacing_entry_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeInfluenceSpacingEntryId id,
+  ) {
+    return _le_influence_spacing_entry_property_count(handle, id);
+  }
+
+  late final _le_influence_spacing_entry_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeInfluenceSpacingEntryId)
+        >
+      >('le_influence_spacing_entry_property_count');
+  late final _le_influence_spacing_entry_property_count =
+      _le_influence_spacing_entry_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeInfluenceSpacingEntryId)
+          >();
+
+  LeProperty le_influence_spacing_entry_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeInfluenceSpacingEntryId id,
+    int index,
+  ) {
+    return _le_influence_spacing_entry_property_at(handle, id, index);
+  }
+
+  late final _le_influence_spacing_entry_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeInfluenceSpacingEntryId,
+            ffi.Int32,
+          )
+        >
+      >('le_influence_spacing_entry_property_at');
+  late final _le_influence_spacing_entry_property_at =
+      _le_influence_spacing_entry_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeInfluenceSpacingEntryId,
+              int,
+            )
+          >();
+
+  LeProperty le_influence_spacing_entry_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeInfluenceSpacingEntryId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_influence_spacing_entry_property_path(handle, id, path);
+  }
+
+  late final _le_influence_spacing_entry_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeInfluenceSpacingEntryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_influence_spacing_entry_property_path');
+  late final _le_influence_spacing_entry_property_path =
+      _le_influence_spacing_entry_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeInfluenceSpacingEntryId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_spacing_rule_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeSpacingRuleId id,
+  ) {
+    return _le_spacing_rule_property_count(handle, id);
+  }
+
+  late final _le_spacing_rule_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeSpacingRuleId)
+        >
+      >('le_spacing_rule_property_count');
+  late final _le_spacing_rule_property_count =
+      _le_spacing_rule_property_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeSpacingRuleId)>();
+
+  LeProperty le_spacing_rule_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeSpacingRuleId id,
+    int index,
+  ) {
+    return _le_spacing_rule_property_at(handle, id, index);
+  }
+
+  late final _le_spacing_rule_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeSpacingRuleId, ffi.Int32)
+        >
+      >('le_spacing_rule_property_at');
+  late final _le_spacing_rule_property_at = _le_spacing_rule_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeSpacingRuleId, int)
+      >();
+
+  LeProperty le_spacing_rule_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeSpacingRuleId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_spacing_rule_property_path(handle, id, path);
+  }
+
+  late final _le_spacing_rule_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeSpacingRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_spacing_rule_property_path');
+  late final _le_spacing_rule_property_path = _le_spacing_rule_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeSpacingRuleId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_via_layer_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeViaLayerId id,
+  ) {
+    return _le_via_layer_property_count(handle, id);
+  }
+
+  late final _le_via_layer_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaLayerId)
+        >
+      >('le_via_layer_property_count');
+  late final _le_via_layer_property_count = _le_via_layer_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaLayerId)>();
+
+  LeProperty le_via_layer_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaLayerId id,
+    int index,
+  ) {
+    return _le_via_layer_property_at(handle, id, index);
+  }
+
+  late final _le_via_layer_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeViaLayerId, ffi.Int32)
+        >
+      >('le_via_layer_property_at');
+  late final _le_via_layer_property_at = _le_via_layer_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeViaLayerId, int)
+      >();
+
+  LeProperty le_via_layer_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeViaLayerId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_via_layer_property_path(handle, id, path);
+  }
+
+  late final _le_via_layer_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_via_layer_property_path');
+  late final _le_via_layer_property_path = _le_via_layer_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeViaLayerId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_via_rule_reference_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleReferenceId id,
+  ) {
+    return _le_via_rule_reference_property_count(handle, id);
+  }
+
+  late final _le_via_rule_reference_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaRuleReferenceId)
+        >
+      >('le_via_rule_reference_property_count');
+  late final _le_via_rule_reference_property_count =
+      _le_via_rule_reference_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeViaRuleReferenceId)
+          >();
+
+  LeProperty le_via_rule_reference_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleReferenceId id,
+    int index,
+  ) {
+    return _le_via_rule_reference_property_at(handle, id, index);
+  }
+
+  late final _le_via_rule_reference_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleReferenceId,
+            ffi.Int32,
+          )
+        >
+      >('le_via_rule_reference_property_at');
+  late final _le_via_rule_reference_property_at =
+      _le_via_rule_reference_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeViaRuleReferenceId,
+              int,
+            )
+          >();
+
+  LeProperty le_via_rule_reference_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleReferenceId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_via_rule_reference_property_path(handle, id, path);
+  }
+
+  late final _le_via_rule_reference_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleReferenceId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_via_rule_reference_property_path');
+  late final _le_via_rule_reference_property_path =
+      _le_via_rule_reference_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeViaRuleReferenceId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_via_rule_layer_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleLayerId id,
+  ) {
+    return _le_via_rule_layer_property_count(handle, id);
+  }
+
+  late final _le_via_rule_layer_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaRuleLayerId)
+        >
+      >('le_via_rule_layer_property_count');
+  late final _le_via_rule_layer_property_count =
+      _le_via_rule_layer_property_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaRuleLayerId)>();
+
+  LeProperty le_via_rule_layer_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleLayerId id,
+    int index,
+  ) {
+    return _le_via_rule_layer_property_at(handle, id, index);
+  }
+
+  late final _le_via_rule_layer_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_via_rule_layer_property_at');
+  late final _le_via_rule_layer_property_at = _le_via_rule_layer_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeViaRuleLayerId, int)
+      >();
+
+  LeProperty le_via_rule_layer_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleLayerId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_via_rule_layer_property_path(handle, id, path);
+  }
+
+  late final _le_via_rule_layer_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_via_rule_layer_property_path');
+  late final _le_via_rule_layer_property_path =
+      _le_via_rule_layer_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeViaRuleLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_via_property_count(ffi.Pointer<LeHandle> handle, LeViaId id) {
+    return _le_via_property_count(handle, id);
+  }
+
+  late final _le_via_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaId)>
+      >('le_via_property_count');
+  late final _le_via_property_count = _le_via_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaId)>();
+
+  LeProperty le_via_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId id,
+    int index,
+  ) {
+    return _le_via_property_at(handle, id, index);
+  }
+
+  late final _le_via_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeViaId, ffi.Int32)
+        >
+      >('le_via_property_at');
+  late final _le_via_property_at = _le_via_property_atPtr
+      .asFunction<LeProperty Function(ffi.Pointer<LeHandle>, LeViaId, int)>();
+
+  LeProperty le_via_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_via_property_path(handle, id, path);
+  }
+
+  late final _le_via_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_via_property_path');
+  late final _le_via_property_path = _le_via_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_via_rule_property_count(ffi.Pointer<LeHandle> handle, LeViaRuleId id) {
+    return _le_via_rule_property_count(handle, id);
+  }
+
+  late final _le_via_rule_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaRuleId)
+        >
+      >('le_via_rule_property_count');
+  late final _le_via_rule_property_count = _le_via_rule_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaRuleId)>();
+
+  LeProperty le_via_rule_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId id,
+    int index,
+  ) {
+    return _le_via_rule_property_at(handle, id, index);
+  }
+
+  late final _le_via_rule_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeViaRuleId, ffi.Int32)
+        >
+      >('le_via_rule_property_at');
+  late final _le_via_rule_property_at = _le_via_rule_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeViaRuleId, int)
+      >();
+
+  LeProperty le_via_rule_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_via_rule_property_path(handle, id, path);
+  }
+
+  late final _le_via_rule_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_via_rule_property_path');
+  late final _le_via_rule_property_path = _le_via_rule_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeViaRuleId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_macro_density_layer_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroDensityLayerId id,
+  ) {
+    return _le_macro_density_layer_property_count(handle, id);
+  }
+
+  late final _le_macro_density_layer_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeMacroDensityLayerId)
+        >
+      >('le_macro_density_layer_property_count');
+  late final _le_macro_density_layer_property_count =
+      _le_macro_density_layer_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeMacroDensityLayerId)
+          >();
+
+  LeProperty le_macro_density_layer_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroDensityLayerId id,
+    int index,
+  ) {
+    return _le_macro_density_layer_property_at(handle, id, index);
+  }
+
+  late final _le_macro_density_layer_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroDensityLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_macro_density_layer_property_at');
+  late final _le_macro_density_layer_property_at =
+      _le_macro_density_layer_property_atPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeMacroDensityLayerId,
+              int,
+            )
+          >();
+
+  LeProperty le_macro_density_layer_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroDensityLayerId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_macro_density_layer_property_path(handle, id, path);
+  }
+
+  late final _le_macro_density_layer_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroDensityLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_macro_density_layer_property_path');
+  late final _le_macro_density_layer_property_path =
+      _le_macro_density_layer_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LeMacroDensityLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_foreign_property_count(ffi.Pointer<LeHandle> handle, LeForeignId id) {
+    return _le_foreign_property_count(handle, id);
+  }
+
+  late final _le_foreign_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeForeignId)
+        >
+      >('le_foreign_property_count');
+  late final _le_foreign_property_count = _le_foreign_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeForeignId)>();
+
+  LeProperty le_foreign_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeForeignId id,
+    int index,
+  ) {
+    return _le_foreign_property_at(handle, id, index);
+  }
+
+  late final _le_foreign_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeForeignId, ffi.Int32)
+        >
+      >('le_foreign_property_at');
+  late final _le_foreign_property_at = _le_foreign_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeForeignId, int)
+      >();
+
+  LeProperty le_foreign_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeForeignId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_foreign_property_path(handle, id, path);
+  }
+
+  late final _le_foreign_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeForeignId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_foreign_property_path');
+  late final _le_foreign_property_path = _le_foreign_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeForeignId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_pin_antenna_model_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LePinAntennaModelId id,
+  ) {
+    return _le_pin_antenna_model_property_count(handle, id);
+  }
+
+  late final _le_pin_antenna_model_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LePinAntennaModelId)
+        >
+      >('le_pin_antenna_model_property_count');
+  late final _le_pin_antenna_model_property_count =
+      _le_pin_antenna_model_property_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LePinAntennaModelId)
+          >();
+
+  LeProperty le_pin_antenna_model_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LePinAntennaModelId id,
+    int index,
+  ) {
+    return _le_pin_antenna_model_property_at(handle, id, index);
+  }
+
+  late final _le_pin_antenna_model_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePinAntennaModelId,
+            ffi.Int32,
+          )
+        >
+      >('le_pin_antenna_model_property_at');
+  late final _le_pin_antenna_model_property_at =
+      _le_pin_antenna_model_property_atPtr
+          .asFunction<
+            LeProperty Function(ffi.Pointer<LeHandle>, LePinAntennaModelId, int)
+          >();
+
+  LeProperty le_pin_antenna_model_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LePinAntennaModelId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_pin_antenna_model_property_path(handle, id, path);
+  }
+
+  late final _le_pin_antenna_model_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LePinAntennaModelId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_pin_antenna_model_property_path');
+  late final _le_pin_antenna_model_property_path =
+      _le_pin_antenna_model_property_pathPtr
+          .asFunction<
+            LeProperty Function(
+              ffi.Pointer<LeHandle>,
+              LePinAntennaModelId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  int le_schematic_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+  ) {
+    return _le_schematic_property_count(handle, id);
+  }
+
+  late final _le_schematic_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeSchematicId)
+        >
+      >('le_schematic_property_count');
+  late final _le_schematic_property_count = _le_schematic_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeSchematicId)>();
+
+  LeProperty le_schematic_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+    int index,
+  ) {
+    return _le_schematic_property_at(handle, id, index);
+  }
+
+  late final _le_schematic_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeSchematicId, ffi.Int32)
+        >
+      >('le_schematic_property_at');
+  late final _le_schematic_property_at = _le_schematic_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeSchematicId, int)
+      >();
+
+  LeProperty le_schematic_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_schematic_property_path(handle, id, path);
+  }
+
+  late final _le_schematic_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeSchematicId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_schematic_property_path');
+  late final _le_schematic_property_path = _le_schematic_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeSchematicId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_instance_property_count(
+    ffi.Pointer<LeHandle> handle,
+    LeInstanceId id,
+  ) {
+    return _le_instance_property_count(handle, id);
+  }
+
+  late final _le_instance_property_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeInstanceId)
+        >
+      >('le_instance_property_count');
+  late final _le_instance_property_count = _le_instance_property_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeInstanceId)>();
+
+  LeProperty le_instance_property_at(
+    ffi.Pointer<LeHandle> handle,
+    LeInstanceId id,
+    int index,
+  ) {
+    return _le_instance_property_at(handle, id, index);
+  }
+
+  late final _le_instance_property_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(ffi.Pointer<LeHandle>, LeInstanceId, ffi.Int32)
+        >
+      >('le_instance_property_at');
+  late final _le_instance_property_at = _le_instance_property_atPtr
+      .asFunction<
+        LeProperty Function(ffi.Pointer<LeHandle>, LeInstanceId, int)
+      >();
+
+  LeProperty le_instance_property_path(
+    ffi.Pointer<LeHandle> handle,
+    LeInstanceId id,
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _le_instance_property_path(handle, id, path);
+  }
+
+  late final _le_instance_property_pathPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeProperty Function(
+            ffi.Pointer<LeHandle>,
+            LeInstanceId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_instance_property_path');
+  late final _le_instance_property_path = _le_instance_property_pathPtr
+      .asFunction<
+        LeProperty Function(
+          ffi.Pointer<LeHandle>,
+          LeInstanceId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  /// --- is_child list field enumeration (count/at) - to_properties() never
+  /// includes these (structural, not struct fields), so a script needs a
+  /// dedicated way to reach e.g. Technology's own Layers - same shape as
+  /// the existing hand-written le_terminal_port_shape_count/_at. ---
+  int le_technology_layers_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_layers_count(handle, id);
+  }
+
+  late final _le_technology_layers_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_layers_count');
+  late final _le_technology_layers_count = _le_technology_layers_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeLayerId le_technology_layers_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_layers_at(handle, id, index);
+  }
+
+  late final _le_technology_layers_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerId Function(ffi.Pointer<LeHandle>, LeTechnologyId, ffi.Int32)
+        >
+      >('le_technology_layers_at');
+  late final _le_technology_layers_at = _le_technology_layers_atPtr
+      .asFunction<
+        LeLayerId Function(ffi.Pointer<LeHandle>, LeTechnologyId, int)
+      >();
+
+  int le_technology_vias_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_vias_count(handle, id);
+  }
+
+  late final _le_technology_vias_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_vias_count');
+  late final _le_technology_vias_count = _le_technology_vias_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeViaId le_technology_vias_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_vias_at(handle, id, index);
+  }
+
+  late final _le_technology_vias_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaId Function(ffi.Pointer<LeHandle>, LeTechnologyId, ffi.Int32)
+        >
+      >('le_technology_vias_at');
+  late final _le_technology_vias_at = _le_technology_vias_atPtr
+      .asFunction<
+        LeViaId Function(ffi.Pointer<LeHandle>, LeTechnologyId, int)
+      >();
+
+  int le_technology_via_rules_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_via_rules_count(handle, id);
+  }
+
+  late final _le_technology_via_rules_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_via_rules_count');
+  late final _le_technology_via_rules_count = _le_technology_via_rules_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeViaRuleId le_technology_via_rules_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_via_rules_at(handle, id, index);
+  }
+
+  late final _le_technology_via_rules_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleId Function(ffi.Pointer<LeHandle>, LeTechnologyId, ffi.Int32)
+        >
+      >('le_technology_via_rules_at');
+  late final _le_technology_via_rules_at = _le_technology_via_rules_atPtr
+      .asFunction<
+        LeViaRuleId Function(ffi.Pointer<LeHandle>, LeTechnologyId, int)
+      >();
+
+  int le_technology_sites_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_sites_count(handle, id);
+  }
+
+  late final _le_technology_sites_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_sites_count');
+  late final _le_technology_sites_count = _le_technology_sites_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeSiteId le_technology_sites_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_sites_at(handle, id, index);
+  }
+
+  late final _le_technology_sites_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSiteId Function(ffi.Pointer<LeHandle>, LeTechnologyId, ffi.Int32)
+        >
+      >('le_technology_sites_at');
+  late final _le_technology_sites_at = _le_technology_sites_atPtr
+      .asFunction<
+        LeSiteId Function(ffi.Pointer<LeHandle>, LeTechnologyId, int)
+      >();
+
+  int le_technology_non_default_rules_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_non_default_rules_count(handle, id);
+  }
+
+  late final _le_technology_non_default_rules_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_non_default_rules_count');
+  late final _le_technology_non_default_rules_count =
+      _le_technology_non_default_rules_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LeNonDefaultRuleId le_technology_non_default_rules_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_non_default_rules_at(handle, id, index);
+  }
+
+  late final _le_technology_non_default_rules_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Int32,
+          )
+        >
+      >('le_technology_non_default_rules_at');
+  late final _le_technology_non_default_rules_at =
+      _le_technology_non_default_rules_atPtr
+          .asFunction<
+            LeNonDefaultRuleId Function(
+              ffi.Pointer<LeHandle>,
+              LeTechnologyId,
+              int,
+            )
+          >();
+
+  int le_technology_property_definitions_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_technology_property_definitions_count(handle, id);
+  }
+
+  late final _le_technology_property_definitions_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_technology_property_definitions_count');
+  late final _le_technology_property_definitions_count =
+      _le_technology_property_definitions_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  LePropertyDefinitionId le_technology_property_definitions_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int index,
+  ) {
+    return _le_technology_property_definitions_at(handle, id, index);
+  }
+
+  late final _le_technology_property_definitions_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePropertyDefinitionId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Int32,
+          )
+        >
+      >('le_technology_property_definitions_at');
+  late final _le_technology_property_definitions_at =
+      _le_technology_property_definitions_atPtr
+          .asFunction<
+            LePropertyDefinitionId Function(
+              ffi.Pointer<LeHandle>,
+              LeTechnologyId,
+              int,
+            )
+          >();
+
+  int le_layer_spacing_rules_count(ffi.Pointer<LeHandle> handle, LeLayerId id) {
+    return _le_layer_spacing_rules_count(handle, id);
+  }
+
+  late final _le_layer_spacing_rules_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_spacing_rules_count');
+  late final _le_layer_spacing_rules_count = _le_layer_spacing_rules_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeSpacingRuleId le_layer_spacing_rules_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_spacing_rules_at(handle, id, index);
+  }
+
+  late final _le_layer_spacing_rules_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSpacingRuleId Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Int32)
+        >
+      >('le_layer_spacing_rules_at');
+  late final _le_layer_spacing_rules_at = _le_layer_spacing_rules_atPtr
+      .asFunction<
+        LeSpacingRuleId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_minimum_cuts_count(ffi.Pointer<LeHandle> handle, LeLayerId id) {
+    return _le_layer_minimum_cuts_count(handle, id);
+  }
+
+  late final _le_layer_minimum_cuts_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_minimum_cuts_count');
+  late final _le_layer_minimum_cuts_count = _le_layer_minimum_cuts_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeMinimumCutId le_layer_minimum_cuts_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_minimum_cuts_at(handle, id, index);
+  }
+
+  late final _le_layer_minimum_cuts_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinimumCutId Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Int32)
+        >
+      >('le_layer_minimum_cuts_at');
+  late final _le_layer_minimum_cuts_at = _le_layer_minimum_cuts_atPtr
+      .asFunction<
+        LeMinimumCutId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_min_steps_count(ffi.Pointer<LeHandle> handle, LeLayerId id) {
+    return _le_layer_min_steps_count(handle, id);
+  }
+
+  late final _le_layer_min_steps_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_min_steps_count');
+  late final _le_layer_min_steps_count = _le_layer_min_steps_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeMinStepId le_layer_min_steps_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_min_steps_at(handle, id, index);
+  }
+
+  late final _le_layer_min_steps_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinStepId Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Int32)
+        >
+      >('le_layer_min_steps_at');
+  late final _le_layer_min_steps_at = _le_layer_min_steps_atPtr
+      .asFunction<
+        LeMinStepId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_spacing_table_influence_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_spacing_table_influence_count(handle, id);
+  }
+
+  late final _le_layer_spacing_table_influence_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_spacing_table_influence_count');
+  late final _le_layer_spacing_table_influence_count =
+      _le_layer_spacing_table_influence_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeInfluenceSpacingEntryId le_layer_spacing_table_influence_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_spacing_table_influence_at(handle, id, index);
+  }
+
+  late final _le_layer_spacing_table_influence_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInfluenceSpacingEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_spacing_table_influence_at');
+  late final _le_layer_spacing_table_influence_at =
+      _le_layer_spacing_table_influence_atPtr
+          .asFunction<
+            LeInfluenceSpacingEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              int,
+            )
+          >();
+
+  int le_layer_antenna_models_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_antenna_models_count(handle, id);
+  }
+
+  late final _le_layer_antenna_models_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_antenna_models_count');
+  late final _le_layer_antenna_models_count = _le_layer_antenna_models_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeAntennaModelId le_layer_antenna_models_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_antenna_models_at(handle, id, index);
+  }
+
+  late final _le_layer_antenna_models_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAntennaModelId Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Int32)
+        >
+      >('le_layer_antenna_models_at');
+  late final _le_layer_antenna_models_at = _le_layer_antenna_models_atPtr
+      .asFunction<
+        LeAntennaModelId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_spacing_table_two_widths_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_spacing_table_two_widths_count(handle, id);
+  }
+
+  late final _le_layer_spacing_table_two_widths_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_spacing_table_two_widths_count');
+  late final _le_layer_spacing_table_two_widths_count =
+      _le_layer_spacing_table_two_widths_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeTwoWidthsSpacingEntryId le_layer_spacing_table_two_widths_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_spacing_table_two_widths_at(handle, id, index);
+  }
+
+  late final _le_layer_spacing_table_two_widths_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTwoWidthsSpacingEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_spacing_table_two_widths_at');
+  late final _le_layer_spacing_table_two_widths_at =
+      _le_layer_spacing_table_two_widths_atPtr
+          .asFunction<
+            LeTwoWidthsSpacingEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              int,
+            )
+          >();
+
+  int le_layer_prefer_enclosures_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_prefer_enclosures_count(handle, id);
+  }
+
+  late final _le_layer_prefer_enclosures_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_prefer_enclosures_count');
+  late final _le_layer_prefer_enclosures_count =
+      _le_layer_prefer_enclosures_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LePreferEnclosureEntryId le_layer_prefer_enclosures_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_prefer_enclosures_at(handle, id, index);
+  }
+
+  late final _le_layer_prefer_enclosures_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePreferEnclosureEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_prefer_enclosures_at');
+  late final _le_layer_prefer_enclosures_at = _le_layer_prefer_enclosures_atPtr
+      .asFunction<
+        LePreferEnclosureEntryId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_enclosures_count(ffi.Pointer<LeHandle> handle, LeLayerId id) {
+    return _le_layer_enclosures_count(handle, id);
+  }
+
+  late final _le_layer_enclosures_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_enclosures_count');
+  late final _le_layer_enclosures_count = _le_layer_enclosures_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeEnclosureEntryId le_layer_enclosures_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_enclosures_at(handle, id, index);
+  }
+
+  late final _le_layer_enclosures_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeEnclosureEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_enclosures_at');
+  late final _le_layer_enclosures_at = _le_layer_enclosures_atPtr
+      .asFunction<
+        LeEnclosureEntryId Function(ffi.Pointer<LeHandle>, LeLayerId, int)
+      >();
+
+  int le_layer_ac_current_density_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_ac_current_density_count(handle, id);
+  }
+
+  late final _le_layer_ac_current_density_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_ac_current_density_count');
+  late final _le_layer_ac_current_density_count =
+      _le_layer_ac_current_density_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeLayerDensityEntryId le_layer_ac_current_density_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_ac_current_density_at(handle, id, index);
+  }
+
+  late final _le_layer_ac_current_density_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerDensityEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_ac_current_density_at');
+  late final _le_layer_ac_current_density_at =
+      _le_layer_ac_current_density_atPtr
+          .asFunction<
+            LeLayerDensityEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              int,
+            )
+          >();
+
+  int le_layer_dc_current_density_count(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+  ) {
+    return _le_layer_dc_current_density_count(handle, id);
+  }
+
+  late final _le_layer_dc_current_density_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLayerId)>
+      >('le_layer_dc_current_density_count');
+  late final _le_layer_dc_current_density_count =
+      _le_layer_dc_current_density_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeLayerId)>();
+
+  LeLayerDensityEntryId le_layer_dc_current_density_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int index,
+  ) {
+    return _le_layer_dc_current_density_at(handle, id, index);
+  }
+
+  late final _le_layer_dc_current_density_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerDensityEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+          )
+        >
+      >('le_layer_dc_current_density_at');
+  late final _le_layer_dc_current_density_at =
+      _le_layer_dc_current_density_atPtr
+          .asFunction<
+            LeLayerDensityEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              int,
+            )
+          >();
+
+  int le_non_default_rule_via_layers_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+  ) {
+    return _le_non_default_rule_via_layers_count(handle, id);
+  }
+
+  late final _le_non_default_rule_via_layers_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleViaId)
+        >
+      >('le_non_default_rule_via_layers_count');
+  late final _le_non_default_rule_via_layers_count =
+      _le_non_default_rule_via_layers_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleViaId)
+          >();
+
+  LeViaLayerId le_non_default_rule_via_layers_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+    int index,
+  ) {
+    return _le_non_default_rule_via_layers_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_via_layers_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleViaId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_via_layers_at');
+  late final _le_non_default_rule_via_layers_at =
+      _le_non_default_rule_via_layers_atPtr
+          .asFunction<
+            LeViaLayerId Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleViaId,
+              int,
+            )
+          >();
+
+  int le_non_default_rule_layers_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+  ) {
+    return _le_non_default_rule_layers_count(handle, id);
+  }
+
+  late final _le_non_default_rule_layers_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+        >
+      >('le_non_default_rule_layers_count');
+  late final _le_non_default_rule_layers_count =
+      _le_non_default_rule_layers_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+          >();
+
+  LeNonDefaultRuleLayerId le_non_default_rule_layers_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+    int index,
+  ) {
+    return _le_non_default_rule_layers_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_layers_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_layers_at');
+  late final _le_non_default_rule_layers_at = _le_non_default_rule_layers_atPtr
+      .asFunction<
+        LeNonDefaultRuleLayerId Function(
+          ffi.Pointer<LeHandle>,
+          LeNonDefaultRuleId,
+          int,
+        )
+      >();
+
+  int le_non_default_rule_vias_count(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+  ) {
+    return _le_non_default_rule_vias_count(handle, id);
+  }
+
+  late final _le_non_default_rule_vias_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+        >
+      >('le_non_default_rule_vias_count');
+  late final _le_non_default_rule_vias_count =
+      _le_non_default_rule_vias_countPtr
+          .asFunction<
+            int Function(ffi.Pointer<LeHandle>, LeNonDefaultRuleId)
+          >();
+
+  LeNonDefaultRuleViaId le_non_default_rule_vias_at(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+    int index,
+  ) {
+    return _le_non_default_rule_vias_at(handle, id, index);
+  }
+
+  late final _le_non_default_rule_vias_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleViaId Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Int32,
+          )
+        >
+      >('le_non_default_rule_vias_at');
+  late final _le_non_default_rule_vias_at = _le_non_default_rule_vias_atPtr
+      .asFunction<
+        LeNonDefaultRuleViaId Function(
+          ffi.Pointer<LeHandle>,
+          LeNonDefaultRuleId,
+          int,
+        )
+      >();
+
+  int le_via_layers_count(ffi.Pointer<LeHandle> handle, LeViaId id) {
+    return _le_via_layers_count(handle, id);
+  }
+
+  late final _le_via_layers_countPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaId)>
+      >('le_via_layers_count');
+  late final _le_via_layers_count = _le_via_layers_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaId)>();
+
+  LeViaLayerId le_via_layers_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId id,
+    int index,
+  ) {
+    return _le_via_layers_at(handle, id, index);
+  }
+
+  late final _le_via_layers_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaLayerId Function(ffi.Pointer<LeHandle>, LeViaId, ffi.Int32)
+        >
+      >('le_via_layers_at');
+  late final _le_via_layers_at = _le_via_layers_atPtr
+      .asFunction<LeViaLayerId Function(ffi.Pointer<LeHandle>, LeViaId, int)>();
+
+  int le_via_rule_layers_count(ffi.Pointer<LeHandle> handle, LeViaRuleId id) {
+    return _le_via_rule_layers_count(handle, id);
+  }
+
+  late final _le_via_rule_layers_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeViaRuleId)
+        >
+      >('le_via_rule_layers_count');
+  late final _le_via_rule_layers_count = _le_via_rule_layers_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeViaRuleId)>();
+
+  LeViaRuleLayerId le_via_rule_layers_at(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId id,
+    int index,
+  ) {
+    return _le_via_rule_layers_at(handle, id, index);
+  }
+
+  late final _le_via_rule_layers_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleId,
+            ffi.Int32,
+          )
+        >
+      >('le_via_rule_layers_at');
+  late final _le_via_rule_layers_at = _le_via_rule_layers_atPtr
+      .asFunction<
+        LeViaRuleLayerId Function(ffi.Pointer<LeHandle>, LeViaRuleId, int)
+      >();
+
+  int le_library_designs_count(ffi.Pointer<LeHandle> handle, LeLibraryId id) {
+    return _le_library_designs_count(handle, id);
+  }
+
+  late final _le_library_designs_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeLibraryId)
+        >
+      >('le_library_designs_count');
+  late final _le_library_designs_count = _le_library_designs_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeLibraryId)>();
+
+  LeDesignId le_library_designs_at(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+    int index,
+  ) {
+    return _le_library_designs_at(handle, id, index);
+  }
+
+  late final _le_library_designs_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(ffi.Pointer<LeHandle>, LeLibraryId, ffi.Int32)
+        >
+      >('le_library_designs_at');
+  late final _le_library_designs_at = _le_library_designs_atPtr
+      .asFunction<
+        LeDesignId Function(ffi.Pointer<LeHandle>, LeLibraryId, int)
+      >();
+
+  int le_abstract_foreigns_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_foreigns_count(handle, id);
+  }
+
+  late final _le_abstract_foreigns_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_foreigns_count');
+  late final _le_abstract_foreigns_count = _le_abstract_foreigns_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  LeForeignId le_abstract_foreigns_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_foreigns_at(handle, id, index);
+  }
+
+  late final _le_abstract_foreigns_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeForeignId Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Int32)
+        >
+      >('le_abstract_foreigns_at');
+  late final _le_abstract_foreigns_at = _le_abstract_foreigns_atPtr
+      .asFunction<
+        LeForeignId Function(ffi.Pointer<LeHandle>, LeAbstractId, int)
+      >();
+
+  int le_abstract_site_placements_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_site_placements_count(handle, id);
+  }
+
+  late final _le_abstract_site_placements_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_site_placements_count');
+  late final _le_abstract_site_placements_count =
+      _le_abstract_site_placements_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  LeMacroSitePlacementId le_abstract_site_placements_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_site_placements_at(handle, id, index);
+  }
+
+  late final _le_abstract_site_placements_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroSitePlacementId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Int32,
+          )
+        >
+      >('le_abstract_site_placements_at');
+  late final _le_abstract_site_placements_at =
+      _le_abstract_site_placements_atPtr
+          .asFunction<
+            LeMacroSitePlacementId Function(
+              ffi.Pointer<LeHandle>,
+              LeAbstractId,
+              int,
+            )
+          >();
+
+  int le_abstract_terminals_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_terminals_count(handle, id);
+  }
+
+  late final _le_abstract_terminals_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_terminals_count');
+  late final _le_abstract_terminals_count = _le_abstract_terminals_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  LeTerminalId le_abstract_terminals_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_terminals_at(handle, id, index);
+  }
+
+  late final _le_abstract_terminals_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalId Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Int32)
+        >
+      >('le_abstract_terminals_at');
+  late final _le_abstract_terminals_at = _le_abstract_terminals_atPtr
+      .asFunction<
+        LeTerminalId Function(ffi.Pointer<LeHandle>, LeAbstractId, int)
+      >();
+
+  int le_abstract_obstructions_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_obstructions_count(handle, id);
+  }
+
+  late final _le_abstract_obstructions_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_obstructions_count');
+  late final _le_abstract_obstructions_count =
+      _le_abstract_obstructions_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  LeObstructionId le_abstract_obstructions_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_obstructions_at(handle, id, index);
+  }
+
+  late final _le_abstract_obstructions_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeObstructionId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Int32,
+          )
+        >
+      >('le_abstract_obstructions_at');
+  late final _le_abstract_obstructions_at = _le_abstract_obstructions_atPtr
+      .asFunction<
+        LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId, int)
+      >();
+
+  int le_abstract_densities_count(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+  ) {
+    return _le_abstract_densities_count(handle, id);
+  }
+
+  late final _le_abstract_densities_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_abstract_densities_count');
+  late final _le_abstract_densities_count = _le_abstract_densities_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  LeMacroDensityLayerId le_abstract_densities_at(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int index,
+  ) {
+    return _le_abstract_densities_at(handle, id, index);
+  }
+
+  late final _le_abstract_densities_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroDensityLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Int32,
+          )
+        >
+      >('le_abstract_densities_at');
+  late final _le_abstract_densities_at = _le_abstract_densities_atPtr
+      .asFunction<
+        LeMacroDensityLayerId Function(ffi.Pointer<LeHandle>, LeAbstractId, int)
+      >();
+
+  int le_terminal_ports_count(ffi.Pointer<LeHandle> handle, LeTerminalId id) {
+    return _le_terminal_ports_count(handle, id);
+  }
+
+  late final _le_terminal_ports_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_terminal_ports_count');
+  late final _le_terminal_ports_count = _le_terminal_ports_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId)>();
+
+  LeTerminalPortId le_terminal_ports_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    int index,
+  ) {
+    return _le_terminal_ports_at(handle, id, index);
+  }
+
+  late final _le_terminal_ports_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalPortId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Int32,
+          )
+        >
+      >('le_terminal_ports_at');
+  late final _le_terminal_ports_at = _le_terminal_ports_atPtr
+      .asFunction<
+        LeTerminalPortId Function(ffi.Pointer<LeHandle>, LeTerminalId, int)
+      >();
+
+  int le_terminal_antenna_models_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+  ) {
+    return _le_terminal_antenna_models_count(handle, id);
+  }
+
+  late final _le_terminal_antenna_models_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalId)
+        >
+      >('le_terminal_antenna_models_count');
+  late final _le_terminal_antenna_models_count =
+      _le_terminal_antenna_models_countPtr
+          .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalId)>();
+
+  LePinAntennaModelId le_terminal_antenna_models_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    int index,
+  ) {
+    return _le_terminal_antenna_models_at(handle, id, index);
+  }
+
+  late final _le_terminal_antenna_models_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePinAntennaModelId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Int32,
+          )
+        >
+      >('le_terminal_antenna_models_at');
+  late final _le_terminal_antenna_models_at = _le_terminal_antenna_models_atPtr
+      .asFunction<
+        LePinAntennaModelId Function(ffi.Pointer<LeHandle>, LeTerminalId, int)
+      >();
+
+  int le_terminal_port_shapes_count(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+  ) {
+    return _le_terminal_port_shapes_count(handle, id);
+  }
+
+  late final _le_terminal_port_shapes_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeTerminalPortId)
+        >
+      >('le_terminal_port_shapes_count');
+  late final _le_terminal_port_shapes_count = _le_terminal_port_shapes_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTerminalPortId)>();
+
+  LeShapeId le_terminal_port_shapes_at(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+    int index,
+  ) {
+    return _le_terminal_port_shapes_at(handle, id, index);
+  }
+
+  late final _le_terminal_port_shapes_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(ffi.Pointer<LeHandle>, LeTerminalPortId, ffi.Int32)
+        >
+      >('le_terminal_port_shapes_at');
+  late final _le_terminal_port_shapes_at = _le_terminal_port_shapes_atPtr
+      .asFunction<
+        LeShapeId Function(ffi.Pointer<LeHandle>, LeTerminalPortId, int)
+      >();
+
+  int le_obstruction_shapes_count(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+  ) {
+    return _le_obstruction_shapes_count(handle, id);
+  }
+
+  late final _le_obstruction_shapes_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeObstructionId)
+        >
+      >('le_obstruction_shapes_count');
+  late final _le_obstruction_shapes_count = _le_obstruction_shapes_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeObstructionId)>();
+
+  LeShapeId le_obstruction_shapes_at(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+    int index,
+  ) {
+    return _le_obstruction_shapes_at(handle, id, index);
+  }
+
+  late final _le_obstruction_shapes_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(ffi.Pointer<LeHandle>, LeObstructionId, ffi.Int32)
+        >
+      >('le_obstruction_shapes_at');
+  late final _le_obstruction_shapes_at = _le_obstruction_shapes_atPtr
+      .asFunction<
+        LeShapeId Function(ffi.Pointer<LeHandle>, LeObstructionId, int)
+      >();
+
+  int le_schematic_instances_count(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+  ) {
+    return _le_schematic_instances_count(handle, id);
+  }
+
+  late final _le_schematic_instances_countPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, LeSchematicId)
+        >
+      >('le_schematic_instances_count');
+  late final _le_schematic_instances_count = _le_schematic_instances_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeSchematicId)>();
+
+  LeInstanceId le_schematic_instances_at(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+    int index,
+  ) {
+    return _le_schematic_instances_at(handle, id, index);
+  }
+
+  late final _le_schematic_instances_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInstanceId Function(ffi.Pointer<LeHandle>, LeSchematicId, ffi.Int32)
+        >
+      >('le_schematic_instances_at');
+  late final _le_schematic_instances_at = _le_schematic_instances_atPtr
+      .asFunction<
+        LeInstanceId Function(ffi.Pointer<LeHandle>, LeSchematicId, int)
+      >();
+
+  /// @brief The current Technology (invalid id, index == UINT32_MAX, if unset).
+  LeTechnologyId le_current_technology(ffi.Pointer<LeHandle> handle) {
+    return _le_current_technology(handle);
+  }
+
+  late final _le_current_technologyPtr =
+      _lookup<
+        ffi.NativeFunction<LeTechnologyId Function(ffi.Pointer<LeHandle>)>
+      >('le_current_technology');
+  late final _le_current_technology = _le_current_technologyPtr
+      .asFunction<LeTechnologyId Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Sets the current Technology. Returns 0 on success, nonzero if
+  /// handle is null or id doesn't name a Technology on this handle (the
+  /// current value is left unchanged on failure).
+  int le_set_current_technology(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+  ) {
+    return _le_set_current_technology(handle, id);
+  }
+
+  late final _le_set_current_technologyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeTechnologyId)
+        >
+      >('le_set_current_technology');
+  late final _le_set_current_technology = _le_set_current_technologyPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeTechnologyId)>();
+
+  /// @brief The current Abstract (invalid id, index == UINT32_MAX, if unset).
+  LeAbstractId le_current_abstract(ffi.Pointer<LeHandle> handle) {
+    return _le_current_abstract(handle);
+  }
+
+  late final _le_current_abstractPtr =
+      _lookup<ffi.NativeFunction<LeAbstractId Function(ffi.Pointer<LeHandle>)>>(
+        'le_current_abstract',
+      );
+  late final _le_current_abstract = _le_current_abstractPtr
+      .asFunction<LeAbstractId Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Sets the current Abstract. Returns 0 on success, nonzero if
+  /// handle is null or id doesn't name a Abstract on this handle (the
+  /// current value is left unchanged on failure).
+  int le_set_current_abstract(ffi.Pointer<LeHandle> handle, LeAbstractId id) {
+    return _le_set_current_abstract(handle, id);
+  }
+
+  late final _le_set_current_abstractPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_set_current_abstract');
+  late final _le_set_current_abstract = _le_set_current_abstractPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeAbstractId)>();
+
+  /// @brief The current Schematic (invalid id, index == UINT32_MAX, if unset).
+  LeSchematicId le_current_schematic(ffi.Pointer<LeHandle> handle) {
+    return _le_current_schematic(handle);
+  }
+
+  late final _le_current_schematicPtr =
+      _lookup<
+        ffi.NativeFunction<LeSchematicId Function(ffi.Pointer<LeHandle>)>
+      >('le_current_schematic');
+  late final _le_current_schematic = _le_current_schematicPtr
+      .asFunction<LeSchematicId Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Sets the current Schematic. Returns 0 on success, nonzero if
+  /// handle is null or id doesn't name a Schematic on this handle (the
+  /// current value is left unchanged on failure).
+  int le_set_current_schematic(ffi.Pointer<LeHandle> handle, LeSchematicId id) {
+    return _le_set_current_schematic(handle, id);
+  }
+
+  late final _le_set_current_schematicPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<LeHandle>, LeSchematicId)
+        >
+      >('le_set_current_schematic');
+  late final _le_set_current_schematic = _le_set_current_schematicPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, LeSchematicId)>();
+
+  /// --- get_<type> search (name-glob + -of + -filter) - see
+  /// codegen/codegen/tcl_scope.py's own module docstring for how the
+  /// default (-of omitted) scope is computed. ---
+  int le_get_technologies(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_technologies(handle, filter_expression);
+  }
+
+  late final _le_get_technologiesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_get_technologies');
+  late final _le_get_technologies = _le_get_technologiesPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  LeTechnologyId le_search_result_technology_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_technology_at(handle, index);
+  }
+
+  late final _le_search_result_technology_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTechnologyId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_technology_at');
+  late final _le_search_result_technology_at =
+      _le_search_result_technology_atPtr
+          .asFunction<LeTechnologyId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_property_definitions(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_property_definitions(
+      handle,
+      of_technology,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_property_definitionsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_property_definitions');
+  late final _le_get_property_definitions = _le_get_property_definitionsPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LePropertyDefinitionId le_search_result_property_definition_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_property_definition_at(handle, index);
+  }
+
+  late final _le_search_result_property_definition_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePropertyDefinitionId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_property_definition_at');
+  late final _le_search_result_property_definition_at =
+      _le_search_result_property_definition_atPtr
+          .asFunction<
+            LePropertyDefinitionId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_layers(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_layers(
+      handle,
+      of_technology,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_layersPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_layers');
+  late final _le_get_layers = _le_get_layersPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeLayerId le_search_result_layer_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_search_result_layer_at(handle, index);
+  }
+
+  late final _le_search_result_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<LeLayerId Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_search_result_layer_at');
+  late final _le_search_result_layer_at = _le_search_result_layer_atPtr
+      .asFunction<LeLayerId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_antenna_models(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_antenna_models(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_antenna_modelsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_antenna_models');
+  late final _le_get_antenna_models = _le_get_antenna_modelsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeAntennaModelId le_search_result_antenna_model_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_antenna_model_at(handle, index);
+  }
+
+  late final _le_search_result_antenna_model_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAntennaModelId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_antenna_model_at');
+  late final _le_search_result_antenna_model_at =
+      _le_search_result_antenna_model_atPtr
+          .asFunction<LeAntennaModelId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_array_spacings(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_array_spacings(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_array_spacingsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_array_spacings');
+  late final _le_get_array_spacings = _le_get_array_spacingsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeArraySpacingId le_search_result_array_spacing_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_array_spacing_at(handle, index);
+  }
+
+  late final _le_search_result_array_spacing_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeArraySpacingId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_array_spacing_at');
+  late final _le_search_result_array_spacing_at =
+      _le_search_result_array_spacing_atPtr
+          .asFunction<LeArraySpacingId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_two_widths_spacing_entries(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_two_widths_spacing_entries(
+      handle,
+      of_layer,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_two_widths_spacing_entriesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_two_widths_spacing_entries');
+  late final _le_get_two_widths_spacing_entries =
+      _le_get_two_widths_spacing_entriesPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  LeTwoWidthsSpacingEntryId le_search_result_two_widths_spacing_entry_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_two_widths_spacing_entry_at(handle, index);
+  }
+
+  late final _le_search_result_two_widths_spacing_entry_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTwoWidthsSpacingEntryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_two_widths_spacing_entry_at');
+  late final _le_search_result_two_widths_spacing_entry_at =
+      _le_search_result_two_widths_spacing_entry_atPtr
+          .asFunction<
+            LeTwoWidthsSpacingEntryId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_prefer_enclosure_entries(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_prefer_enclosure_entries(
+      handle,
+      of_layer,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_prefer_enclosure_entriesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_prefer_enclosure_entries');
+  late final _le_get_prefer_enclosure_entries =
+      _le_get_prefer_enclosure_entriesPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  LePreferEnclosureEntryId le_search_result_prefer_enclosure_entry_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_prefer_enclosure_entry_at(handle, index);
+  }
+
+  late final _le_search_result_prefer_enclosure_entry_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePreferEnclosureEntryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_prefer_enclosure_entry_at');
+  late final _le_search_result_prefer_enclosure_entry_at =
+      _le_search_result_prefer_enclosure_entry_atPtr
+          .asFunction<
+            LePreferEnclosureEntryId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_enclosure_entries(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_enclosure_entries(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_enclosure_entriesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_enclosure_entries');
+  late final _le_get_enclosure_entries = _le_get_enclosure_entriesPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeEnclosureEntryId le_search_result_enclosure_entry_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_enclosure_entry_at(handle, index);
+  }
+
+  late final _le_search_result_enclosure_entry_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeEnclosureEntryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_enclosure_entry_at');
+  late final _le_search_result_enclosure_entry_at =
+      _le_search_result_enclosure_entry_atPtr
+          .asFunction<
+            LeEnclosureEntryId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_layer_density_entries(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_layer_density_entries(handle, filter_expression);
+  }
+
+  late final _le_get_layer_density_entriesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_get_layer_density_entries');
+  late final _le_get_layer_density_entries = _le_get_layer_density_entriesPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)>();
+
+  LeLayerDensityEntryId le_search_result_layer_density_entry_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_layer_density_entry_at(handle, index);
+  }
+
+  late final _le_search_result_layer_density_entry_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerDensityEntryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_layer_density_entry_at');
+  late final _le_search_result_layer_density_entry_at =
+      _le_search_result_layer_density_entry_atPtr
+          .asFunction<
+            LeLayerDensityEntryId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_macro_site_placements(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId of_abstract,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_macro_site_placements(
+      handle,
+      of_abstract,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_macro_site_placementsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_macro_site_placements');
+  late final _le_get_macro_site_placements = _le_get_macro_site_placementsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeMacroSitePlacementId le_search_result_macro_site_placement_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_macro_site_placement_at(handle, index);
+  }
+
+  late final _le_search_result_macro_site_placement_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroSitePlacementId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_macro_site_placement_at');
+  late final _le_search_result_macro_site_placement_at =
+      _le_search_result_macro_site_placement_atPtr
+          .asFunction<
+            LeMacroSitePlacementId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_sites(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_sites(
+      handle,
+      of_technology,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_sitesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_sites');
+  late final _le_get_sites = _le_get_sitesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeSiteId le_search_result_site_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_search_result_site_at(handle, index);
+  }
+
+  late final _le_search_result_site_atPtr =
+      _lookup<
+        ffi.NativeFunction<LeSiteId Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_search_result_site_at');
+  late final _le_search_result_site_at = _le_search_result_site_atPtr
+      .asFunction<LeSiteId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_non_default_rule_layers(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId of_non_default_rule,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_non_default_rule_layers(
+      handle,
+      of_non_default_rule,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_non_default_rule_layersPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_non_default_rule_layers');
+  late final _le_get_non_default_rule_layers =
+      _le_get_non_default_rule_layersPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  LeNonDefaultRuleLayerId le_search_result_non_default_rule_layer_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_non_default_rule_layer_at(handle, index);
+  }
+
+  late final _le_search_result_non_default_rule_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleLayerId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_non_default_rule_layer_at');
+  late final _le_search_result_non_default_rule_layer_at =
+      _le_search_result_non_default_rule_layer_atPtr
+          .asFunction<
+            LeNonDefaultRuleLayerId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_non_default_rule_vias(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId of_non_default_rule,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_non_default_rule_vias(
+      handle,
+      of_non_default_rule,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_non_default_rule_viasPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_non_default_rule_vias');
+  late final _le_get_non_default_rule_vias = _le_get_non_default_rule_viasPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeNonDefaultRuleId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeNonDefaultRuleViaId le_search_result_non_default_rule_via_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_non_default_rule_via_at(handle, index);
+  }
+
+  late final _le_search_result_non_default_rule_via_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleViaId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_non_default_rule_via_at');
+  late final _le_search_result_non_default_rule_via_at =
+      _le_search_result_non_default_rule_via_atPtr
+          .asFunction<
+            LeNonDefaultRuleViaId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_non_default_rules(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_non_default_rules(
+      handle,
+      of_technology,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_non_default_rulesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_non_default_rules');
+  late final _le_get_non_default_rules = _le_get_non_default_rulesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeNonDefaultRuleId le_search_result_non_default_rule_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_non_default_rule_at(handle, index);
+  }
+
+  late final _le_search_result_non_default_rule_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_non_default_rule_at');
+  late final _le_search_result_non_default_rule_at =
+      _le_search_result_non_default_rule_atPtr
+          .asFunction<
+            LeNonDefaultRuleId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_minimum_cuts(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_minimum_cuts(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_minimum_cutsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_minimum_cuts');
+  late final _le_get_minimum_cuts = _le_get_minimum_cutsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeMinimumCutId le_search_result_minimum_cut_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_minimum_cut_at(handle, index);
+  }
+
+  late final _le_search_result_minimum_cut_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinimumCutId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_minimum_cut_at');
+  late final _le_search_result_minimum_cut_at =
+      _le_search_result_minimum_cut_atPtr
+          .asFunction<LeMinimumCutId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_min_steps(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_min_steps(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_min_stepsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_min_steps');
+  late final _le_get_min_steps = _le_get_min_stepsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeMinStepId le_search_result_min_step_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_min_step_at(handle, index);
+  }
+
+  late final _le_search_result_min_step_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinStepId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_min_step_at');
+  late final _le_search_result_min_step_at = _le_search_result_min_step_atPtr
+      .asFunction<LeMinStepId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_influence_spacing_entries(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_influence_spacing_entries(
+      handle,
+      of_layer,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_influence_spacing_entriesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_influence_spacing_entries');
+  late final _le_get_influence_spacing_entries =
+      _le_get_influence_spacing_entriesPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              ffi.Pointer<ffi.Char>,
+            )
+          >();
+
+  LeInfluenceSpacingEntryId le_search_result_influence_spacing_entry_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_influence_spacing_entry_at(handle, index);
+  }
+
+  late final _le_search_result_influence_spacing_entry_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInfluenceSpacingEntryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_influence_spacing_entry_at');
+  late final _le_search_result_influence_spacing_entry_at =
+      _le_search_result_influence_spacing_entry_atPtr
+          .asFunction<
+            LeInfluenceSpacingEntryId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_spacing_rules(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId of_layer,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_spacing_rules(handle, of_layer, filter_expression);
+  }
+
+  late final _le_get_spacing_rulesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_spacing_rules');
+  late final _le_get_spacing_rules = _le_get_spacing_rulesPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeSpacingRuleId le_search_result_spacing_rule_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_spacing_rule_at(handle, index);
+  }
+
+  late final _le_search_result_spacing_rule_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSpacingRuleId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_spacing_rule_at');
+  late final _le_search_result_spacing_rule_at =
+      _le_search_result_spacing_rule_atPtr
+          .asFunction<LeSpacingRuleId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_via_layers(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId of_via,
+    LeNonDefaultRuleViaId of_non_default_rule_via,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_via_layers(
+      handle,
+      of_via,
+      of_non_default_rule_via,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_via_layersPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            LeNonDefaultRuleViaId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_via_layers');
+  late final _le_get_via_layers = _le_get_via_layersPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          LeNonDefaultRuleViaId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeViaLayerId le_search_result_via_layer_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_via_layer_at(handle, index);
+  }
+
+  late final _le_search_result_via_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaLayerId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_via_layer_at');
+  late final _le_search_result_via_layer_at = _le_search_result_via_layer_atPtr
+      .asFunction<LeViaLayerId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_via_rule_references(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId of_via,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_via_rule_references(handle, of_via, filter_expression);
+  }
+
+  late final _le_get_via_rule_referencesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_via_rule_references');
+  late final _le_get_via_rule_references = _le_get_via_rule_referencesPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeViaId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeViaRuleReferenceId le_search_result_via_rule_reference_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_via_rule_reference_at(handle, index);
+  }
+
+  late final _le_search_result_via_rule_reference_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleReferenceId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_via_rule_reference_at');
+  late final _le_search_result_via_rule_reference_at =
+      _le_search_result_via_rule_reference_atPtr
+          .asFunction<
+            LeViaRuleReferenceId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_via_rule_layers(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId of_via_rule,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_via_rule_layers(handle, of_via_rule, filter_expression);
+  }
+
+  late final _le_get_via_rule_layersPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_via_rule_layers');
+  late final _le_get_via_rule_layers = _le_get_via_rule_layersPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeViaRuleId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeViaRuleLayerId le_search_result_via_rule_layer_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_via_rule_layer_at(handle, index);
+  }
+
+  late final _le_search_result_via_rule_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleLayerId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_via_rule_layer_at');
+  late final _le_search_result_via_rule_layer_at =
+      _le_search_result_via_rule_layer_atPtr
+          .asFunction<LeViaRuleLayerId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_vias(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_vias(
+      handle,
+      of_technology,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_viasPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_vias');
+  late final _le_get_vias = _le_get_viasPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeViaId le_search_result_via_at(ffi.Pointer<LeHandle> handle, int index) {
+    return _le_search_result_via_at(handle, index);
+  }
+
+  late final _le_search_result_via_atPtr =
+      _lookup<
+        ffi.NativeFunction<LeViaId Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_search_result_via_at');
+  late final _le_search_result_via_at = _le_search_result_via_atPtr
+      .asFunction<LeViaId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_via_rules(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId of_technology,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_via_rules(
+      handle,
+      of_technology,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_via_rulesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_via_rules');
+  late final _le_get_via_rules = _le_get_via_rulesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeViaRuleId le_search_result_via_rule_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_via_rule_at(handle, index);
+  }
+
+  late final _le_search_result_via_rule_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_via_rule_at');
+  late final _le_search_result_via_rule_at = _le_search_result_via_rule_atPtr
+      .asFunction<LeViaRuleId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_libraries(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_libraries(handle, name_expression, filter_expression);
+  }
+
+  late final _le_get_librariesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_libraries');
+  late final _le_get_libraries = _le_get_librariesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeLibraryId le_search_result_library_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_library_at(handle, index);
+  }
+
+  late final _le_search_result_library_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_library_at');
+  late final _le_search_result_library_at = _le_search_result_library_atPtr
+      .asFunction<LeLibraryId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_designs(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId of_library,
+    ffi.Pointer<ffi.Char> name_expression,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_designs(
+      handle,
+      of_library,
+      name_expression,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_designsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_designs');
+  late final _le_get_designs = _le_get_designsPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeLibraryId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeDesignId le_search_result_design_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_design_at(handle, index);
+  }
+
+  late final _le_search_result_design_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_design_at');
+  late final _le_search_result_design_at = _le_search_result_design_atPtr
+      .asFunction<LeDesignId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_abstracts(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId of_design,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_abstracts(handle, of_design, filter_expression);
+  }
+
+  late final _le_get_abstractsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_abstracts');
+  late final _le_get_abstracts = _le_get_abstractsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeDesignId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeAbstractId le_search_result_abstract_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_abstract_at(handle, index);
+  }
+
+  late final _le_search_result_abstract_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAbstractId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_abstract_at');
+  late final _le_search_result_abstract_at = _le_search_result_abstract_atPtr
+      .asFunction<LeAbstractId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_macro_density_layers(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId of_abstract,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_macro_density_layers(handle, of_abstract, filter_expression);
+  }
+
+  late final _le_get_macro_density_layersPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_macro_density_layers');
+  late final _le_get_macro_density_layers = _le_get_macro_density_layersPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeAbstractId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeMacroDensityLayerId le_search_result_macro_density_layer_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_macro_density_layer_at(handle, index);
+  }
+
+  late final _le_search_result_macro_density_layer_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroDensityLayerId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_macro_density_layer_at');
+  late final _le_search_result_macro_density_layer_at =
+      _le_search_result_macro_density_layer_atPtr
+          .asFunction<
+            LeMacroDensityLayerId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_foreigns(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId of_via,
+    LeNonDefaultRuleViaId of_non_default_rule_via,
+    LeAbstractId of_abstract,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_foreigns(
+      handle,
+      of_via,
+      of_non_default_rule_via,
+      of_abstract,
+      filter_expression,
+    );
+  }
+
+  late final _le_get_foreignsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            LeNonDefaultRuleViaId,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_foreigns');
+  late final _le_get_foreigns = _le_get_foreignsPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          LeNonDefaultRuleViaId,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeForeignId le_search_result_foreign_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_foreign_at(handle, index);
+  }
+
+  late final _le_search_result_foreign_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeForeignId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_foreign_at');
+  late final _le_search_result_foreign_at = _le_search_result_foreign_atPtr
+      .asFunction<LeForeignId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_pin_antenna_models(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId of_terminal,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_pin_antenna_models(handle, of_terminal, filter_expression);
+  }
+
+  late final _le_get_pin_antenna_modelsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_pin_antenna_models');
+  late final _le_get_pin_antenna_models = _le_get_pin_antenna_modelsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeTerminalId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LePinAntennaModelId le_search_result_pin_antenna_model_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_pin_antenna_model_at(handle, index);
+  }
+
+  late final _le_search_result_pin_antenna_model_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePinAntennaModelId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_pin_antenna_model_at');
+  late final _le_search_result_pin_antenna_model_at =
+      _le_search_result_pin_antenna_model_atPtr
+          .asFunction<
+            LePinAntennaModelId Function(ffi.Pointer<LeHandle>, int)
+          >();
+
+  int le_get_schematics(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId of_design,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_schematics(handle, of_design, filter_expression);
+  }
+
+  late final _le_get_schematicsPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_schematics');
+  late final _le_get_schematics = _le_get_schematicsPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeDesignId, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeSchematicId le_search_result_schematic_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_schematic_at(handle, index);
+  }
+
+  late final _le_search_result_schematic_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSchematicId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_schematic_at');
+  late final _le_search_result_schematic_at = _le_search_result_schematic_atPtr
+      .asFunction<LeSchematicId Function(ffi.Pointer<LeHandle>, int)>();
+
+  int le_get_instances(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId of_schematic,
+    ffi.Pointer<ffi.Char> filter_expression,
+  ) {
+    return _le_get_instances(handle, of_schematic, filter_expression);
+  }
+
+  late final _le_get_instancesPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<LeHandle>,
+            LeSchematicId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_get_instances');
+  late final _le_get_instances = _le_get_instancesPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeSchematicId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeInstanceId le_search_result_instance_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_search_result_instance_at(handle, index);
+  }
+
+  late final _le_search_result_instance_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInstanceId Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_search_result_instance_at');
+  late final _le_search_result_instance_at = _le_search_result_instance_atPtr
+      .asFunction<LeInstanceId Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// --- create_<type> - one flag per scalar field (str/int/double/dbu/bool/
+  /// enum), required iff Field.create_required(); is_child/is_list/embedded-
+  /// struct fields are out of scope here (a future add_X/set_X round - see
+  /// TCL_EXPLORATION.md). A dbu field crosses this C boundary in microns
+  /// (`<field>_um`, converted via database_units_microns()/to_dbu(), same
+  /// convention le_add_shape_rect's own ll_x_um/.../ur_y_um already uses).
+  /// An optional numeric field (int/double/dbu) gets a companion
+  /// `has_<field>` int32_t so an omitted flag stores real std::nullopt, not
+  /// a zero value that could collide with a genuine, meaningful 0 - unlike
+  /// str/enum fields, which use nullptr for "omitted" directly (see
+  /// Field.create_needs_has_flag()'s own docstring). An enum field crosses
+  /// as `const char *` (its to_string()/from_string() spelling, e.g.
+  /// "INPUT"), not a raw numeric code. A multi-parent class (e.g. Shape's
+  /// terminal_port/obstruction) takes one Id parameter per parent field;
+  /// le_create_<type> itself rejects zero or more than one resolving. ---
+  LeTechnologyId le_create_technology(
+    ffi.Pointer<LeHandle> handle,
+    double database_units_microns,
+    int has_capacitance_units_pf,
+    double capacitance_units_pf,
+    int has_resistance_units_ohms,
+    double resistance_units_ohms,
+    int has_power_units_mw,
+    double power_units_mw,
+    int has_current_units_ma,
+    double current_units_ma,
+    int has_voltage_units_v,
+    double voltage_units_v,
+    int has_frequency_units_mhz,
+    double frequency_units_mhz,
+    ffi.Pointer<ffi.Char> bus_bit_chars,
+    ffi.Pointer<ffi.Char> divider_char,
+    int fixed_mask,
+    int use_min_spacing_obs,
+    int use_min_spacing_pin,
+    ffi.Pointer<ffi.Char> clearance_measure,
+    int has_manufacturing_grid,
+    double manufacturing_grid,
+    int has_max_via_stack,
+    int max_via_stack,
+    ffi.Pointer<ffi.Char> max_via_stack_bottom_layer,
+    ffi.Pointer<ffi.Char> max_via_stack_top_layer,
+    int has_antenna_input_gate_area,
+    double antenna_input_gate_area,
+    int has_antenna_inout_diff_area,
+    double antenna_inout_diff_area,
+    int has_antenna_output_diff_area,
+    double antenna_output_diff_area,
+  ) {
+    return _le_create_technology(
+      handle,
+      database_units_microns,
+      has_capacitance_units_pf,
+      capacitance_units_pf,
+      has_resistance_units_ohms,
+      resistance_units_ohms,
+      has_power_units_mw,
+      power_units_mw,
+      has_current_units_ma,
+      current_units_ma,
+      has_voltage_units_v,
+      voltage_units_v,
+      has_frequency_units_mhz,
+      frequency_units_mhz,
+      bus_bit_chars,
+      divider_char,
+      fixed_mask,
+      use_min_spacing_obs,
+      use_min_spacing_pin,
+      clearance_measure,
+      has_manufacturing_grid,
+      manufacturing_grid,
+      has_max_via_stack,
+      max_via_stack,
+      max_via_stack_bottom_layer,
+      max_via_stack_top_layer,
+      has_antenna_input_gate_area,
+      antenna_input_gate_area,
+      has_antenna_inout_diff_area,
+      antenna_inout_diff_area,
+      has_antenna_output_diff_area,
+      antenna_output_diff_area,
+    );
+  }
+
+  late final _le_create_technologyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTechnologyId Function(
+            ffi.Pointer<LeHandle>,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_technology');
+  late final _le_create_technology = _le_create_technologyPtr
+      .asFunction<
+        LeTechnologyId Function(
+          ffi.Pointer<LeHandle>,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LePropertyDefinitionId le_create_property_definition(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> owner_type,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> data_type,
+    int has_range_min,
+    double range_min,
+    int has_range_max,
+    double range_max,
+    int has_default_number,
+    double default_number,
+    ffi.Pointer<ffi.Char> default_string,
+  ) {
+    return _le_create_property_definition(
+      handle,
+      technology_id,
+      owner_type,
+      name,
+      data_type,
+      has_range_min,
+      range_min,
+      has_range_max,
+      range_max,
+      has_default_number,
+      default_number,
+      default_string,
+    );
+  }
+
+  late final _le_create_property_definitionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePropertyDefinitionId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_property_definition');
+  late final _le_create_property_definition = _le_create_property_definitionPtr
+      .asFunction<
+        LePropertyDefinitionId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeLayerId le_create_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> type,
+    ffi.Pointer<ffi.Char> direction,
+    int has_width,
+    double width_um,
+    int has_pitch,
+    double pitch_um,
+    int has_offset,
+    double offset_um,
+    int has_area,
+    double area_um,
+    int has_resistance,
+    double resistance,
+    int has_capacitance,
+    double capacitance,
+    int has_height,
+    double height_um,
+    int has_thickness,
+    double thickness_um,
+    int has_wire_extension,
+    double wire_extension_um,
+    int has_shrinkage,
+    double shrinkage_um,
+    int has_cap_multiplier,
+    double cap_multiplier,
+    int has_edge_cap,
+    double edge_cap,
+    int has_antenna_length,
+    double antenna_length_um,
+    int has_default_mask,
+    int default_mask,
+    int has_pitch_xy,
+    double pitch_xy_x_um,
+    double pitch_xy_y_um,
+    int has_offset_xy,
+    double offset_xy_x_um,
+    double offset_xy_y_um,
+    int has_diag_pitch,
+    double diag_pitch_um,
+    int has_diag_pitch_xy,
+    double diag_pitch_xy_x_um,
+    double diag_pitch_xy_y_um,
+    int has_diag_spacing,
+    double diag_spacing_um,
+    int has_diag_width,
+    double diag_width_um,
+    int has_diag_min_edge_length,
+    double diag_min_edge_length_um,
+    int has_max_width,
+    double max_width_um,
+    int has_min_width,
+    double min_width_um,
+    int has_protrusion_width1,
+    double protrusion_width1_um,
+    int has_protrusion_length,
+    double protrusion_length_um,
+    int has_protrusion_width2,
+    double protrusion_width2_um,
+    int has_split_wire_width,
+    double split_wire_width_um,
+    int has_minimum_density,
+    double minimum_density,
+    int has_maximum_density,
+    double maximum_density,
+    int has_density_check_step,
+    double density_check_step_um,
+    int has_density_check_window,
+    double density_check_window_length_um,
+    double density_check_window_width_um,
+    int has_fill_active_spacing,
+    double fill_active_spacing_um,
+  ) {
+    return _le_create_layer(
+      handle,
+      technology_id,
+      name,
+      type,
+      direction,
+      has_width,
+      width_um,
+      has_pitch,
+      pitch_um,
+      has_offset,
+      offset_um,
+      has_area,
+      area_um,
+      has_resistance,
+      resistance,
+      has_capacitance,
+      capacitance,
+      has_height,
+      height_um,
+      has_thickness,
+      thickness_um,
+      has_wire_extension,
+      wire_extension_um,
+      has_shrinkage,
+      shrinkage_um,
+      has_cap_multiplier,
+      cap_multiplier,
+      has_edge_cap,
+      edge_cap,
+      has_antenna_length,
+      antenna_length_um,
+      has_default_mask,
+      default_mask,
+      has_pitch_xy,
+      pitch_xy_x_um,
+      pitch_xy_y_um,
+      has_offset_xy,
+      offset_xy_x_um,
+      offset_xy_y_um,
+      has_diag_pitch,
+      diag_pitch_um,
+      has_diag_pitch_xy,
+      diag_pitch_xy_x_um,
+      diag_pitch_xy_y_um,
+      has_diag_spacing,
+      diag_spacing_um,
+      has_diag_width,
+      diag_width_um,
+      has_diag_min_edge_length,
+      diag_min_edge_length_um,
+      has_max_width,
+      max_width_um,
+      has_min_width,
+      min_width_um,
+      has_protrusion_width1,
+      protrusion_width1_um,
+      has_protrusion_length,
+      protrusion_length_um,
+      has_protrusion_width2,
+      protrusion_width2_um,
+      has_split_wire_width,
+      split_wire_width_um,
+      has_minimum_density,
+      minimum_density,
+      has_maximum_density,
+      maximum_density,
+      has_density_check_step,
+      density_check_step_um,
+      has_density_check_window,
+      density_check_window_length_um,
+      density_check_window_width_um,
+      has_fill_active_spacing,
+      fill_active_spacing_um,
+    );
+  }
+
+  late final _le_create_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_layer');
+  late final _le_create_layer = _le_create_layerPtr
+      .asFunction<
+        LeLayerId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LeAntennaModelId le_create_antenna_model(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> oxide,
+    int has_area_ratio,
+    double area_ratio,
+    int has_cum_area_ratio,
+    double cum_area_ratio,
+    int has_area_factor,
+    double area_factor,
+    int area_factor_diffuse_only,
+    int has_side_area_ratio,
+    double side_area_ratio,
+    int has_cum_side_area_ratio,
+    double cum_side_area_ratio,
+    int has_side_area_factor,
+    double side_area_factor,
+    int side_area_factor_diffuse_only,
+    int has_diff_area_ratio,
+    double diff_area_ratio,
+    int has_cum_diff_area_ratio,
+    double cum_diff_area_ratio,
+    int has_diff_side_area_ratio,
+    double diff_side_area_ratio,
+    int has_cum_diff_side_area_ratio,
+    double cum_diff_side_area_ratio,
+  ) {
+    return _le_create_antenna_model(
+      handle,
+      layer_id,
+      oxide,
+      has_area_ratio,
+      area_ratio,
+      has_cum_area_ratio,
+      cum_area_ratio,
+      has_area_factor,
+      area_factor,
+      area_factor_diffuse_only,
+      has_side_area_ratio,
+      side_area_ratio,
+      has_cum_side_area_ratio,
+      cum_side_area_ratio,
+      has_side_area_factor,
+      side_area_factor,
+      side_area_factor_diffuse_only,
+      has_diff_area_ratio,
+      diff_area_ratio,
+      has_cum_diff_area_ratio,
+      cum_diff_area_ratio,
+      has_diff_side_area_ratio,
+      diff_side_area_ratio,
+      has_cum_diff_side_area_ratio,
+      cum_diff_side_area_ratio,
+    );
+  }
+
+  late final _le_create_antenna_modelPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAntennaModelId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_antenna_model');
+  late final _le_create_antenna_model = _le_create_antenna_modelPtr
+      .asFunction<
+        LeAntennaModelId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LeArraySpacingId le_create_array_spacing(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    int long_array,
+    int has_via_width,
+    double via_width_um,
+    double cut_spacing_um,
+  ) {
+    return _le_create_array_spacing(
+      handle,
+      layer_id,
+      long_array,
+      has_via_width,
+      via_width_um,
+      cut_spacing_um,
+    );
+  }
+
+  late final _le_create_array_spacingPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeArraySpacingId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_create_array_spacing');
+  late final _le_create_array_spacing = _le_create_array_spacingPtr
+      .asFunction<
+        LeArraySpacingId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          int,
+          int,
+          double,
+          double,
+        )
+      >();
+
+  LeTwoWidthsSpacingEntryId le_create_two_widths_spacing_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    double width_um,
+    int has_prl,
+    double prl_um,
+  ) {
+    return _le_create_two_widths_spacing_entry(
+      handle,
+      layer_id,
+      width_um,
+      has_prl,
+      prl_um,
+    );
+  }
+
+  late final _le_create_two_widths_spacing_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTwoWidthsSpacingEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_two_widths_spacing_entry');
+  late final _le_create_two_widths_spacing_entry =
+      _le_create_two_widths_spacing_entryPtr
+          .asFunction<
+            LeTwoWidthsSpacingEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  LePreferEnclosureEntryId le_create_prefer_enclosure_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> location,
+    double overhang1_um,
+    double overhang2_um,
+    int has_min_width,
+    double min_width_um,
+  ) {
+    return _le_create_prefer_enclosure_entry(
+      handle,
+      layer_id,
+      location,
+      overhang1_um,
+      overhang2_um,
+      has_min_width,
+      min_width_um,
+    );
+  }
+
+  late final _le_create_prefer_enclosure_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePreferEnclosureEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_prefer_enclosure_entry');
+  late final _le_create_prefer_enclosure_entry =
+      _le_create_prefer_enclosure_entryPtr
+          .asFunction<
+            LePreferEnclosureEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              ffi.Pointer<ffi.Char>,
+              double,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  LeEnclosureEntryId le_create_enclosure_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> location,
+    double overhang1_um,
+    double overhang2_um,
+    int has_width,
+    double width_um,
+    int has_except_extra_cut,
+    double except_extra_cut_um,
+    int has_min_length,
+    double min_length_um,
+  ) {
+    return _le_create_enclosure_entry(
+      handle,
+      layer_id,
+      location,
+      overhang1_um,
+      overhang2_um,
+      has_width,
+      width_um,
+      has_except_extra_cut,
+      except_extra_cut_um,
+      has_min_length,
+      min_length_um,
+    );
+  }
+
+  late final _le_create_enclosure_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeEnclosureEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_enclosure_entry');
+  late final _le_create_enclosure_entry = _le_create_enclosure_entryPtr
+      .asFunction<
+        LeEnclosureEntryId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+          double,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LeLayerDensityEntryId le_create_layer_density_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId ac_layer_id,
+    LeLayerId dc_layer_id,
+    ffi.Pointer<ffi.Char> type,
+    int has_one_entry,
+    double one_entry,
+  ) {
+    return _le_create_layer_density_entry(
+      handle,
+      ac_layer_id,
+      dc_layer_id,
+      type,
+      has_one_entry,
+      one_entry,
+    );
+  }
+
+  late final _le_create_layer_density_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLayerDensityEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_layer_density_entry');
+  late final _le_create_layer_density_entry = _le_create_layer_density_entryPtr
+      .asFunction<
+        LeLayerDensityEntryId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+        )
+      >();
+
+  LeMacroSitePlacementId le_create_macro_site_placement(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> site_name,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    ffi.Pointer<ffi.Char> orient,
+    int has_num_x,
+    int num_x,
+    int has_num_y,
+    int num_y,
+    int has_step_x,
+    double step_x_um,
+    int has_step_y,
+    double step_y_um,
+  ) {
+    return _le_create_macro_site_placement(
+      handle,
+      abstract_id,
+      site_name,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      orient,
+      has_num_x,
+      num_x,
+      has_num_y,
+      num_y,
+      has_step_x,
+      step_x_um,
+      has_step_y,
+      step_y_um,
+    );
+  }
+
+  late final _le_create_macro_site_placementPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroSitePlacementId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_macro_site_placement');
+  late final _le_create_macro_site_placement =
+      _le_create_macro_site_placementPtr
+          .asFunction<
+            LeMacroSitePlacementId Function(
+              ffi.Pointer<LeHandle>,
+              LeAbstractId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              double,
+              double,
+              ffi.Pointer<ffi.Char>,
+              int,
+              int,
+              int,
+              int,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  LeSiteId le_create_site(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> site_class,
+    int has_size,
+    double size_x_um,
+    double size_y_um,
+    int has_symmetry,
+    int symmetry_r90,
+    int symmetry_x,
+    int symmetry_y,
+  ) {
+    return _le_create_site(
+      handle,
+      technology_id,
+      name,
+      site_class,
+      has_size,
+      size_x_um,
+      size_y_um,
+      has_symmetry,
+      symmetry_r90,
+      symmetry_x,
+      symmetry_y,
+    );
+  }
+
+  late final _le_create_sitePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSiteId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_create_site');
+  late final _le_create_site = _le_create_sitePtr
+      .asFunction<
+        LeSiteId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          int,
+          int,
+          int,
+        )
+      >();
+
+  LeNonDefaultRuleLayerId le_create_non_default_rule_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId non_default_rule_id,
+    ffi.Pointer<ffi.Char> layer_name,
+    int has_width,
+    double width_um,
+    int has_spacing,
+    double spacing_um,
+    int has_wire_extension,
+    double wire_extension_um,
+    int has_resistance,
+    double resistance,
+    int has_capacitance,
+    double capacitance,
+    int has_edge_cap,
+    double edge_cap,
+    int has_diag_width,
+    double diag_width_um,
+  ) {
+    return _le_create_non_default_rule_layer(
+      handle,
+      non_default_rule_id,
+      layer_name,
+      has_width,
+      width_um,
+      has_spacing,
+      spacing_um,
+      has_wire_extension,
+      wire_extension_um,
+      has_resistance,
+      resistance,
+      has_capacitance,
+      capacitance,
+      has_edge_cap,
+      edge_cap,
+      has_diag_width,
+      diag_width_um,
+    );
+  }
+
+  late final _le_create_non_default_rule_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_non_default_rule_layer');
+  late final _le_create_non_default_rule_layer =
+      _le_create_non_default_rule_layerPtr
+          .asFunction<
+            LeNonDefaultRuleLayerId Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  LeNonDefaultRuleViaId le_create_non_default_rule_via(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId non_default_rule_id,
+    ffi.Pointer<ffi.Char> name,
+    int is_default,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_create_non_default_rule_via(
+      handle,
+      non_default_rule_id,
+      name,
+      is_default,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_create_non_default_rule_viaPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleViaId Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_non_default_rule_via');
+  late final _le_create_non_default_rule_via =
+      _le_create_non_default_rule_viaPtr
+          .asFunction<
+            LeNonDefaultRuleViaId Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              int,
+              double,
+            )
+          >();
+
+  LeNonDefaultRuleId le_create_non_default_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int hard_spacing,
+  ) {
+    return _le_create_non_default_rule(
+      handle,
+      technology_id,
+      name,
+      hard_spacing,
+    );
+  }
+
+  late final _le_create_non_default_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeNonDefaultRuleId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+          )
+        >
+      >('le_create_non_default_rule');
+  late final _le_create_non_default_rule = _le_create_non_default_rulePtr
+      .asFunction<
+        LeNonDefaultRuleId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >();
+
+  LeMinimumCutId le_create_minimum_cut(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    int cuts,
+    double width_um,
+    int has_within,
+    double within_um,
+    ffi.Pointer<ffi.Char> connection,
+    int has_length,
+    double length_um,
+    int has_distance,
+    double distance_um,
+  ) {
+    return _le_create_minimum_cut(
+      handle,
+      layer_id,
+      cuts,
+      width_um,
+      has_within,
+      within_um,
+      connection,
+      has_length,
+      length_um,
+      has_distance,
+      distance_um,
+    );
+  }
+
+  late final _le_create_minimum_cutPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinimumCutId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_minimum_cut');
+  late final _le_create_minimum_cut = _le_create_minimum_cutPtr
+      .asFunction<
+        LeMinimumCutId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LeMinStepId le_create_min_step(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    double distance_um,
+    ffi.Pointer<ffi.Char> min_step_type,
+    int has_lengthsum,
+    double lengthsum_um,
+    int has_max_edges,
+    int max_edges,
+  ) {
+    return _le_create_min_step(
+      handle,
+      layer_id,
+      distance_um,
+      min_step_type,
+      has_lengthsum,
+      lengthsum_um,
+      has_max_edges,
+      max_edges,
+    );
+  }
+
+  late final _le_create_min_stepPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMinStepId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_create_min_step');
+  late final _le_create_min_step = _le_create_min_stepPtr
+      .asFunction<
+        LeMinStepId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          int,
+        )
+      >();
+
+  LeInfluenceSpacingEntryId le_create_influence_spacing_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    double width_um,
+    double distance_um,
+    double spacing_um,
+  ) {
+    return _le_create_influence_spacing_entry(
+      handle,
+      layer_id,
+      width_um,
+      distance_um,
+      spacing_um,
+    );
+  }
+
+  late final _le_create_influence_spacing_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInfluenceSpacingEntryId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_create_influence_spacing_entry');
+  late final _le_create_influence_spacing_entry =
+      _le_create_influence_spacing_entryPtr
+          .asFunction<
+            LeInfluenceSpacingEntryId Function(
+              ffi.Pointer<LeHandle>,
+              LeLayerId,
+              double,
+              double,
+              double,
+            )
+          >();
+
+  LeSpacingRuleId le_create_spacing_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId layer_id,
+    double distance_um,
+    int has_range_min,
+    double range_min_um,
+    int has_range_max,
+    double range_max_um,
+    int range_use_length_threshold,
+    int has_range_influence,
+    double range_influence_um,
+    int has_range_influence_range_min,
+    double range_influence_range_min_um,
+    int has_range_influence_range_max,
+    double range_influence_range_max_um,
+    int has_range_range_min,
+    double range_range_min_um,
+    int has_range_range_max,
+    double range_range_max_um,
+    int has_length_threshold,
+    double length_threshold_um,
+    int has_length_threshold_range_min,
+    double length_threshold_range_min_um,
+    int has_length_threshold_range_max,
+    double length_threshold_range_max_um,
+    int center_to_center,
+    int same_net,
+    int same_net_pg_only,
+    int parallel_overlap,
+    int has_end_of_line_width,
+    double end_of_line_width_um,
+    int has_end_of_line_within,
+    double end_of_line_within_um,
+    int has_parallel_edge_space,
+    double parallel_edge_space_um,
+    int has_parallel_edge_within,
+    double parallel_edge_within_um,
+    int two_edges,
+    int has_notch_length,
+    double notch_length_um,
+    int has_end_of_notch_width,
+    double end_of_notch_width_um,
+    int has_end_of_notch_spacing,
+    double end_of_notch_spacing_um,
+    int has_end_of_notch_length,
+    double end_of_notch_length_um,
+    ffi.Pointer<ffi.Char> second_layer_name,
+    int second_layer_stack,
+    int has_adjacent_cuts,
+    int adjacent_cuts,
+    int has_adjacent_within,
+    double adjacent_within_um,
+    int adjacent_except_same_pg_net,
+    int has_area,
+    double area_um,
+  ) {
+    return _le_create_spacing_rule(
+      handle,
+      layer_id,
+      distance_um,
+      has_range_min,
+      range_min_um,
+      has_range_max,
+      range_max_um,
+      range_use_length_threshold,
+      has_range_influence,
+      range_influence_um,
+      has_range_influence_range_min,
+      range_influence_range_min_um,
+      has_range_influence_range_max,
+      range_influence_range_max_um,
+      has_range_range_min,
+      range_range_min_um,
+      has_range_range_max,
+      range_range_max_um,
+      has_length_threshold,
+      length_threshold_um,
+      has_length_threshold_range_min,
+      length_threshold_range_min_um,
+      has_length_threshold_range_max,
+      length_threshold_range_max_um,
+      center_to_center,
+      same_net,
+      same_net_pg_only,
+      parallel_overlap,
+      has_end_of_line_width,
+      end_of_line_width_um,
+      has_end_of_line_within,
+      end_of_line_within_um,
+      has_parallel_edge_space,
+      parallel_edge_space_um,
+      has_parallel_edge_within,
+      parallel_edge_within_um,
+      two_edges,
+      has_notch_length,
+      notch_length_um,
+      has_end_of_notch_width,
+      end_of_notch_width_um,
+      has_end_of_notch_spacing,
+      end_of_notch_spacing_um,
+      has_end_of_notch_length,
+      end_of_notch_length_um,
+      second_layer_name,
+      second_layer_stack,
+      has_adjacent_cuts,
+      adjacent_cuts,
+      has_adjacent_within,
+      adjacent_within_um,
+      adjacent_except_same_pg_net,
+      has_area,
+      area_um,
+    );
+  }
+
+  late final _le_create_spacing_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSpacingRuleId Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_spacing_rule');
+  late final _le_create_spacing_rule = _le_create_spacing_rulePtr
+      .asFunction<
+        LeSpacingRuleId Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          int,
+          double,
+          int,
+          int,
+          double,
+        )
+      >();
+
+  LeViaLayerId le_create_via_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId via_id,
+    LeNonDefaultRuleViaId non_default_rule_via_id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_create_via_layer(
+      handle,
+      via_id,
+      non_default_rule_via_id,
+      layer_name,
+    );
+  }
+
+  late final _le_create_via_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            LeNonDefaultRuleViaId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_via_layer');
+  late final _le_create_via_layer = _le_create_via_layerPtr
+      .asFunction<
+        LeViaLayerId Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          LeNonDefaultRuleViaId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeViaRuleReferenceId le_create_via_rule_reference(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId via_id,
+    ffi.Pointer<ffi.Char> via_rule_name,
+    int has_cut_size,
+    double cut_size_x_um,
+    double cut_size_y_um,
+    ffi.Pointer<ffi.Char> bot_layer_name,
+    ffi.Pointer<ffi.Char> cut_layer_name,
+    ffi.Pointer<ffi.Char> top_layer_name,
+    int has_cut_spacing,
+    double cut_spacing_x_um,
+    double cut_spacing_y_um,
+    int has_bot_enclosure,
+    double bot_enclosure_x_um,
+    double bot_enclosure_y_um,
+    int has_top_enclosure,
+    double top_enclosure_x_um,
+    double top_enclosure_y_um,
+  ) {
+    return _le_create_via_rule_reference(
+      handle,
+      via_id,
+      via_rule_name,
+      has_cut_size,
+      cut_size_x_um,
+      cut_size_y_um,
+      bot_layer_name,
+      cut_layer_name,
+      top_layer_name,
+      has_cut_spacing,
+      cut_spacing_x_um,
+      cut_spacing_y_um,
+      has_bot_enclosure,
+      bot_enclosure_x_um,
+      bot_enclosure_y_um,
+      has_top_enclosure,
+      top_enclosure_x_um,
+      top_enclosure_y_um,
+    );
+  }
+
+  late final _le_create_via_rule_referencePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleReferenceId Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_create_via_rule_reference');
+  late final _le_create_via_rule_reference = _le_create_via_rule_referencePtr
+      .asFunction<
+        LeViaRuleReferenceId Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+        )
+      >();
+
+  LeViaRuleLayerId le_create_via_rule_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId via_rule_id,
+    ffi.Pointer<ffi.Char> layer_name,
+    ffi.Pointer<ffi.Char> direction,
+    int has_width_min,
+    double width_min_um,
+    int has_width_max,
+    double width_max_um,
+    int has_overhang,
+    double overhang_um,
+    int has_metal_overhang,
+    double metal_overhang_um,
+    int has_enclosure_overhang1,
+    double enclosure_overhang1_um,
+    int has_enclosure_overhang2,
+    double enclosure_overhang2_um,
+    int has_spacing_step_x,
+    double spacing_step_x_um,
+    int has_spacing_step_y,
+    double spacing_step_y_um,
+    int has_rect,
+    double rect_ll_x_um,
+    double rect_ll_y_um,
+    double rect_ur_x_um,
+    double rect_ur_y_um,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_create_via_rule_layer(
+      handle,
+      via_rule_id,
+      layer_name,
+      direction,
+      has_width_min,
+      width_min_um,
+      has_width_max,
+      width_max_um,
+      has_overhang,
+      overhang_um,
+      has_metal_overhang,
+      metal_overhang_um,
+      has_enclosure_overhang1,
+      enclosure_overhang1_um,
+      has_enclosure_overhang2,
+      enclosure_overhang2_um,
+      has_spacing_step_x,
+      spacing_step_x_um,
+      has_spacing_step_y,
+      spacing_step_y_um,
+      has_rect,
+      rect_ll_x_um,
+      rect_ll_y_um,
+      rect_ur_x_um,
+      rect_ur_y_um,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_create_via_rule_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_via_rule_layer');
+  late final _le_create_via_rule_layer = _le_create_via_rule_layerPtr
+      .asFunction<
+        LeViaRuleLayerId Function(
+          ffi.Pointer<LeHandle>,
+          LeViaRuleId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          double,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LeViaId le_create_via(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int is_default,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_create_via(
+      handle,
+      technology_id,
+      name,
+      is_default,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_create_viaPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_via');
+  late final _le_create_via = _le_create_viaPtr
+      .asFunction<
+        LeViaId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          double,
+        )
+      >();
+
+  LeViaRuleId le_create_via_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int is_generate,
+    int is_default,
+  ) {
+    return _le_create_via_rule(
+      handle,
+      technology_id,
+      name,
+      is_generate,
+      is_default,
+    );
+  }
+
+  late final _le_create_via_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeViaRuleId Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_create_via_rule');
+  late final _le_create_via_rule = _le_create_via_rulePtr
+      .asFunction<
+        LeViaRuleId Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+        )
+      >();
+
+  LeShapeId le_create_shape(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId terminal_port_id,
+    LeObstructionId obstruction_id,
+    ffi.Pointer<ffi.Char> layer_name,
+    int has_spacing,
+    double spacing_um,
+    int has_design_rule_width,
+    double design_rule_width_um,
+    int except_pg_net,
+  ) {
+    return _le_create_shape(
+      handle,
+      terminal_port_id,
+      obstruction_id,
+      layer_name,
+      has_spacing,
+      spacing_um,
+      has_design_rule_width,
+      design_rule_width_um,
+      except_pg_net,
+    );
+  }
+
+  late final _le_create_shapePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeShapeId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            LeObstructionId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+          )
+        >
+      >('le_create_shape');
+  late final _le_create_shape = _le_create_shapePtr
+      .asFunction<
+        LeShapeId Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalPortId,
+          LeObstructionId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+        )
+      >();
+
+  LeLibraryId le_create_library(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_create_library(handle, name);
+  }
+
+  late final _le_create_libraryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_create_library');
+  late final _le_create_library = _le_create_libraryPtr
+      .asFunction<
+        LeLibraryId Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  LeDesignId le_create_design(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId library_id,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_create_design(handle, library_id, name);
+  }
+
+  late final _le_create_designPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeDesignId Function(
+            ffi.Pointer<LeHandle>,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_design');
+  late final _le_create_design = _le_create_designPtr
+      .asFunction<
+        LeDesignId Function(
+          ffi.Pointer<LeHandle>,
+          LeLibraryId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeAbstractId le_create_abstract(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId design_id,
+    ffi.Pointer<ffi.Char> type,
+    int has_size,
+    double size_x_um,
+    double size_y_um,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    int has_bbox,
+    double bbox_ll_x_um,
+    double bbox_ll_y_um,
+    double bbox_ur_x_um,
+    double bbox_ur_y_um,
+    int has_symmetry,
+    int symmetry_r90,
+    int symmetry_x,
+    int symmetry_y,
+    ffi.Pointer<ffi.Char> site,
+    ffi.Pointer<ffi.Char> eeq,
+    ffi.Pointer<ffi.Char> leq,
+    int has_power,
+    double power,
+    ffi.Pointer<ffi.Char> source,
+    int is_fixed_mask,
+  ) {
+    return _le_create_abstract(
+      handle,
+      design_id,
+      type,
+      has_size,
+      size_x_um,
+      size_y_um,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      has_bbox,
+      bbox_ll_x_um,
+      bbox_ll_y_um,
+      bbox_ur_x_um,
+      bbox_ur_y_um,
+      has_symmetry,
+      symmetry_r90,
+      symmetry_x,
+      symmetry_y,
+      site,
+      eeq,
+      leq,
+      has_power,
+      power,
+      source,
+      is_fixed_mask,
+    );
+  }
+
+  late final _le_create_abstractPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeAbstractId Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+          )
+        >
+      >('le_create_abstract');
+  late final _le_create_abstract = _le_create_abstractPtr
+      .asFunction<
+        LeAbstractId Function(
+          ffi.Pointer<LeHandle>,
+          LeDesignId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          double,
+          double,
+          int,
+          int,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+        )
+      >();
+
+  LeMacroDensityLayerId le_create_macro_density_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_create_macro_density_layer(handle, abstract_id, layer_name);
+  }
+
+  late final _le_create_macro_density_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeMacroDensityLayerId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_macro_density_layer');
+  late final _le_create_macro_density_layer = _le_create_macro_density_layerPtr
+      .asFunction<
+        LeMacroDensityLayerId Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeForeignId le_create_foreign(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId via_id,
+    LeNonDefaultRuleViaId non_default_rule_via_id,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> name,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    ffi.Pointer<ffi.Char> orient,
+  ) {
+    return _le_create_foreign(
+      handle,
+      via_id,
+      non_default_rule_via_id,
+      abstract_id,
+      name,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      orient,
+    );
+  }
+
+  late final _le_create_foreignPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeForeignId Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            LeNonDefaultRuleViaId,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_foreign');
+  late final _le_create_foreign = _le_create_foreignPtr
+      .asFunction<
+        LeForeignId Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          LeNonDefaultRuleViaId,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeTerminalId le_create_terminal(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> direction,
+    ffi.Pointer<ffi.Char> shape,
+    ffi.Pointer<ffi.Char> use,
+    ffi.Pointer<ffi.Char> must_join,
+    ffi.Pointer<ffi.Char> net_expr,
+    ffi.Pointer<ffi.Char> leq,
+    ffi.Pointer<ffi.Char> taper_rule,
+    ffi.Pointer<ffi.Char> supply_sensitivity,
+    ffi.Pointer<ffi.Char> ground_sensitivity,
+    int has_rise_slew_limit,
+    double rise_slew_limit,
+    int has_fall_slew_limit,
+    double fall_slew_limit,
+    int has_max_load,
+    double max_load,
+    int has_max_delay,
+    double max_delay,
+  ) {
+    return _le_create_terminal(
+      handle,
+      abstract_id,
+      name,
+      direction,
+      shape,
+      use,
+      must_join,
+      net_expr,
+      leq,
+      taper_rule,
+      supply_sensitivity,
+      ground_sensitivity,
+      has_rise_slew_limit,
+      rise_slew_limit,
+      has_fall_slew_limit,
+      fall_slew_limit,
+      has_max_load,
+      max_load,
+      has_max_delay,
+      max_delay,
+    );
+  }
+
+  late final _le_create_terminalPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalId Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_create_terminal');
+  late final _le_create_terminal = _le_create_terminalPtr
+      .asFunction<
+        LeTerminalId Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  LePinAntennaModelId le_create_pin_antenna_model(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId terminal_id,
+    ffi.Pointer<ffi.Char> oxide,
+  ) {
+    return _le_create_pin_antenna_model(handle, terminal_id, oxide);
+  }
+
+  late final _le_create_pin_antenna_modelPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LePinAntennaModelId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_pin_antenna_model');
+  late final _le_create_pin_antenna_model = _le_create_pin_antenna_modelPtr
+      .asFunction<
+        LePinAntennaModelId Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeTerminalPortId le_create_terminal_port(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId terminal_id,
+    ffi.Pointer<ffi.Char> port_class,
+  ) {
+    return _le_create_terminal_port(handle, terminal_id, port_class);
+  }
+
+  late final _le_create_terminal_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeTerminalPortId Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_create_terminal_port');
+  late final _le_create_terminal_port = _le_create_terminal_portPtr
+      .asFunction<
+        LeTerminalPortId Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  LeObstructionId le_create_obstruction(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId abstract_id,
+  ) {
+    return _le_create_obstruction(handle, abstract_id);
+  }
+
+  late final _le_create_obstructionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
+        >
+      >('le_create_obstruction');
+  late final _le_create_obstruction = _le_create_obstructionPtr
+      .asFunction<
+        LeObstructionId Function(ffi.Pointer<LeHandle>, LeAbstractId)
+      >();
+
+  LeSchematicId le_create_schematic(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId design_id,
+  ) {
+    return _le_create_schematic(handle, design_id);
+  }
+
+  late final _le_create_schematicPtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeSchematicId Function(ffi.Pointer<LeHandle>, LeDesignId)
+        >
+      >('le_create_schematic');
+  late final _le_create_schematic = _le_create_schematicPtr
+      .asFunction<LeSchematicId Function(ffi.Pointer<LeHandle>, LeDesignId)>();
+
+  LeInstanceId le_create_instance(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId schematic_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> reference_name,
+    int has_location,
+    double location_x_um,
+    double location_y_um,
+  ) {
+    return _le_create_instance(
+      handle,
+      schematic_id,
+      name,
+      reference_name,
+      has_location,
+      location_x_um,
+      location_y_um,
+    );
+  }
+
+  late final _le_create_instancePtr =
+      _lookup<
+        ffi.NativeFunction<
+          LeInstanceId Function(
+            ffi.Pointer<LeHandle>,
+            LeSchematicId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_create_instance');
+  late final _le_create_instance = _le_create_instancePtr
+      .asFunction<
+        LeInstanceId Function(
+          ffi.Pointer<LeHandle>,
+          LeSchematicId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+        )
+      >();
+
+  /// --- update_<type> - the *only* way any TCL-readable class's fields are
+  /// ever mutated after creation (no per-field setter, generated or hand-
+  /// written, exists anymore - see this round's own plan/commit message).
+  /// Same flag set as create_<type> (same compound/enum/dbu conventions),
+  /// but every field's own has_<field>/nullptr signal here means "leave
+  /// unchanged" when omitted, the opposite of create_<type>'s "omitted
+  /// means unset". A single-parent class also takes a has_<parent>/
+  /// Le<Parent>Id pair to optionally reassign its parent; a multi-parent
+  /// class (Shape/ViaLayer/Foreign/LayerDensityEntry) gets no parent
+  /// parameter at all - reassigning one parent field alone would violate
+  /// the "exactly one parent set" invariant create_<type> itself enforces,
+  /// and there's no atomic "swap parent, clear siblings" primitive
+  /// designed. Returns 0 on success, nonzero (with a message pushed to
+  /// handle->messages) if id/the resolved parent doesn't exist, an enum
+  /// flag is unrecognized, or Root::update_<klass>() itself failed (a
+  /// rename/reparent collision - see Root::update_<klass>()'s own
+  /// docstring in root.hpp). ---
+  int le_update_technology(
+    ffi.Pointer<LeHandle> handle,
+    LeTechnologyId id,
+    int has_database_units_microns,
+    double database_units_microns,
+    int has_capacitance_units_pf,
+    double capacitance_units_pf,
+    int has_resistance_units_ohms,
+    double resistance_units_ohms,
+    int has_power_units_mw,
+    double power_units_mw,
+    int has_current_units_ma,
+    double current_units_ma,
+    int has_voltage_units_v,
+    double voltage_units_v,
+    int has_frequency_units_mhz,
+    double frequency_units_mhz,
+    ffi.Pointer<ffi.Char> bus_bit_chars,
+    ffi.Pointer<ffi.Char> divider_char,
+    int has_fixed_mask,
+    int fixed_mask,
+    int has_use_min_spacing_obs,
+    int use_min_spacing_obs,
+    int has_use_min_spacing_pin,
+    int use_min_spacing_pin,
+    ffi.Pointer<ffi.Char> clearance_measure,
+    int has_manufacturing_grid,
+    double manufacturing_grid,
+    int has_max_via_stack,
+    int max_via_stack,
+    ffi.Pointer<ffi.Char> max_via_stack_bottom_layer,
+    ffi.Pointer<ffi.Char> max_via_stack_top_layer,
+    int has_antenna_input_gate_area,
+    double antenna_input_gate_area,
+    int has_antenna_inout_diff_area,
+    double antenna_inout_diff_area,
+    int has_antenna_output_diff_area,
+    double antenna_output_diff_area,
+  ) {
+    return _le_update_technology(
+      handle,
+      id,
+      has_database_units_microns,
+      database_units_microns,
+      has_capacitance_units_pf,
+      capacitance_units_pf,
+      has_resistance_units_ohms,
+      resistance_units_ohms,
+      has_power_units_mw,
+      power_units_mw,
+      has_current_units_ma,
+      current_units_ma,
+      has_voltage_units_v,
+      voltage_units_v,
+      has_frequency_units_mhz,
+      frequency_units_mhz,
+      bus_bit_chars,
+      divider_char,
+      has_fixed_mask,
+      fixed_mask,
+      has_use_min_spacing_obs,
+      use_min_spacing_obs,
+      has_use_min_spacing_pin,
+      use_min_spacing_pin,
+      clearance_measure,
+      has_manufacturing_grid,
+      manufacturing_grid,
+      has_max_via_stack,
+      max_via_stack,
+      max_via_stack_bottom_layer,
+      max_via_stack_top_layer,
+      has_antenna_input_gate_area,
+      antenna_input_gate_area,
+      has_antenna_inout_diff_area,
+      antenna_inout_diff_area,
+      has_antenna_output_diff_area,
+      antenna_output_diff_area,
+    );
+  }
+
+  late final _le_update_technologyPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeTechnologyId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_technology');
+  late final _le_update_technology = _le_update_technologyPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTechnologyId,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          int,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_property_definition(
+    ffi.Pointer<LeHandle> handle,
+    LePropertyDefinitionId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> owner_type,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> data_type,
+    int has_range_min,
+    double range_min,
+    int has_range_max,
+    double range_max,
+    int has_default_number,
+    double default_number,
+    ffi.Pointer<ffi.Char> default_string,
+  ) {
+    return _le_update_property_definition(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      owner_type,
+      name,
+      data_type,
+      has_range_min,
+      range_min,
+      has_range_max,
+      range_max,
+      has_default_number,
+      default_number,
+      default_string,
+    );
+  }
+
+  late final _le_update_property_definitionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LePropertyDefinitionId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_property_definition');
+  late final _le_update_property_definition = _le_update_property_definitionPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LePropertyDefinitionId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> type,
+    ffi.Pointer<ffi.Char> direction,
+    int has_width,
+    double width_um,
+    int has_pitch,
+    double pitch_um,
+    int has_offset,
+    double offset_um,
+    int has_area,
+    double area_um,
+    int has_resistance,
+    double resistance,
+    int has_capacitance,
+    double capacitance,
+    int has_height,
+    double height_um,
+    int has_thickness,
+    double thickness_um,
+    int has_wire_extension,
+    double wire_extension_um,
+    int has_shrinkage,
+    double shrinkage_um,
+    int has_cap_multiplier,
+    double cap_multiplier,
+    int has_edge_cap,
+    double edge_cap,
+    int has_antenna_length,
+    double antenna_length_um,
+    int has_default_mask,
+    int default_mask,
+    int has_pitch_xy,
+    double pitch_xy_x_um,
+    double pitch_xy_y_um,
+    int has_offset_xy,
+    double offset_xy_x_um,
+    double offset_xy_y_um,
+    int has_diag_pitch,
+    double diag_pitch_um,
+    int has_diag_pitch_xy,
+    double diag_pitch_xy_x_um,
+    double diag_pitch_xy_y_um,
+    int has_diag_spacing,
+    double diag_spacing_um,
+    int has_diag_width,
+    double diag_width_um,
+    int has_diag_min_edge_length,
+    double diag_min_edge_length_um,
+    int has_max_width,
+    double max_width_um,
+    int has_min_width,
+    double min_width_um,
+    int has_protrusion_width1,
+    double protrusion_width1_um,
+    int has_protrusion_length,
+    double protrusion_length_um,
+    int has_protrusion_width2,
+    double protrusion_width2_um,
+    int has_split_wire_width,
+    double split_wire_width_um,
+    int has_minimum_density,
+    double minimum_density,
+    int has_maximum_density,
+    double maximum_density,
+    int has_density_check_step,
+    double density_check_step_um,
+    int has_density_check_window,
+    double density_check_window_length_um,
+    double density_check_window_width_um,
+    int has_fill_active_spacing,
+    double fill_active_spacing_um,
+  ) {
+    return _le_update_layer(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      name,
+      type,
+      direction,
+      has_width,
+      width_um,
+      has_pitch,
+      pitch_um,
+      has_offset,
+      offset_um,
+      has_area,
+      area_um,
+      has_resistance,
+      resistance,
+      has_capacitance,
+      capacitance,
+      has_height,
+      height_um,
+      has_thickness,
+      thickness_um,
+      has_wire_extension,
+      wire_extension_um,
+      has_shrinkage,
+      shrinkage_um,
+      has_cap_multiplier,
+      cap_multiplier,
+      has_edge_cap,
+      edge_cap,
+      has_antenna_length,
+      antenna_length_um,
+      has_default_mask,
+      default_mask,
+      has_pitch_xy,
+      pitch_xy_x_um,
+      pitch_xy_y_um,
+      has_offset_xy,
+      offset_xy_x_um,
+      offset_xy_y_um,
+      has_diag_pitch,
+      diag_pitch_um,
+      has_diag_pitch_xy,
+      diag_pitch_xy_x_um,
+      diag_pitch_xy_y_um,
+      has_diag_spacing,
+      diag_spacing_um,
+      has_diag_width,
+      diag_width_um,
+      has_diag_min_edge_length,
+      diag_min_edge_length_um,
+      has_max_width,
+      max_width_um,
+      has_min_width,
+      min_width_um,
+      has_protrusion_width1,
+      protrusion_width1_um,
+      has_protrusion_length,
+      protrusion_length_um,
+      has_protrusion_width2,
+      protrusion_width2_um,
+      has_split_wire_width,
+      split_wire_width_um,
+      has_minimum_density,
+      minimum_density,
+      has_maximum_density,
+      maximum_density,
+      has_density_check_step,
+      density_check_step_um,
+      has_density_check_window,
+      density_check_window_length_um,
+      density_check_window_width_um,
+      has_fill_active_spacing,
+      fill_active_spacing_um,
+    );
+  }
+
+  late final _le_update_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_layer');
+  late final _le_update_layer = _le_update_layerPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_antenna_model(
+    ffi.Pointer<LeHandle> handle,
+    LeAntennaModelId id,
+    int has_layer,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> oxide,
+    int has_area_ratio,
+    double area_ratio,
+    int has_cum_area_ratio,
+    double cum_area_ratio,
+    int has_area_factor,
+    double area_factor,
+    int has_area_factor_diffuse_only,
+    int area_factor_diffuse_only,
+    int has_side_area_ratio,
+    double side_area_ratio,
+    int has_cum_side_area_ratio,
+    double cum_side_area_ratio,
+    int has_side_area_factor,
+    double side_area_factor,
+    int has_side_area_factor_diffuse_only,
+    int side_area_factor_diffuse_only,
+    int has_diff_area_ratio,
+    double diff_area_ratio,
+    int has_cum_diff_area_ratio,
+    double cum_diff_area_ratio,
+    int has_diff_side_area_ratio,
+    double diff_side_area_ratio,
+    int has_cum_diff_side_area_ratio,
+    double cum_diff_side_area_ratio,
+  ) {
+    return _le_update_antenna_model(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      oxide,
+      has_area_ratio,
+      area_ratio,
+      has_cum_area_ratio,
+      cum_area_ratio,
+      has_area_factor,
+      area_factor,
+      has_area_factor_diffuse_only,
+      area_factor_diffuse_only,
+      has_side_area_ratio,
+      side_area_ratio,
+      has_cum_side_area_ratio,
+      cum_side_area_ratio,
+      has_side_area_factor,
+      side_area_factor,
+      has_side_area_factor_diffuse_only,
+      side_area_factor_diffuse_only,
+      has_diff_area_ratio,
+      diff_area_ratio,
+      has_cum_diff_area_ratio,
+      cum_diff_area_ratio,
+      has_diff_side_area_ratio,
+      diff_side_area_ratio,
+      has_cum_diff_side_area_ratio,
+      cum_diff_side_area_ratio,
+    );
+  }
+
+  late final _le_update_antenna_modelPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeAntennaModelId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_antenna_model');
+  late final _le_update_antenna_model = _le_update_antenna_modelPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeAntennaModelId,
+          int,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_array_spacing(
+    ffi.Pointer<LeHandle> handle,
+    LeArraySpacingId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_long_array,
+    int long_array,
+    int has_via_width,
+    double via_width_um,
+    int has_cut_spacing,
+    double cut_spacing_um,
+  ) {
+    return _le_update_array_spacing(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_long_array,
+      long_array,
+      has_via_width,
+      via_width_um,
+      has_cut_spacing,
+      cut_spacing_um,
+    );
+  }
+
+  late final _le_update_array_spacingPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeArraySpacingId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_array_spacing');
+  late final _le_update_array_spacing = _le_update_array_spacingPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeArraySpacingId,
+          int,
+          LeLayerId,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_two_widths_spacing_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeTwoWidthsSpacingEntryId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_width,
+    double width_um,
+    int has_prl,
+    double prl_um,
+  ) {
+    return _le_update_two_widths_spacing_entry(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_width,
+      width_um,
+      has_prl,
+      prl_um,
+    );
+  }
+
+  late final _le_update_two_widths_spacing_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeTwoWidthsSpacingEntryId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_two_widths_spacing_entry');
+  late final _le_update_two_widths_spacing_entry =
+      _le_update_two_widths_spacing_entryPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeTwoWidthsSpacingEntryId,
+              int,
+              LeLayerId,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_prefer_enclosure_entry(
+    ffi.Pointer<LeHandle> handle,
+    LePreferEnclosureEntryId id,
+    int has_layer,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> location,
+    int has_overhang1,
+    double overhang1_um,
+    int has_overhang2,
+    double overhang2_um,
+    int has_min_width,
+    double min_width_um,
+  ) {
+    return _le_update_prefer_enclosure_entry(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      location,
+      has_overhang1,
+      overhang1_um,
+      has_overhang2,
+      overhang2_um,
+      has_min_width,
+      min_width_um,
+    );
+  }
+
+  late final _le_update_prefer_enclosure_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LePreferEnclosureEntryId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_prefer_enclosure_entry');
+  late final _le_update_prefer_enclosure_entry =
+      _le_update_prefer_enclosure_entryPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LePreferEnclosureEntryId,
+              int,
+              LeLayerId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_enclosure_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeEnclosureEntryId id,
+    int has_layer,
+    LeLayerId layer_id,
+    ffi.Pointer<ffi.Char> location,
+    int has_overhang1,
+    double overhang1_um,
+    int has_overhang2,
+    double overhang2_um,
+    int has_width,
+    double width_um,
+    int has_except_extra_cut,
+    double except_extra_cut_um,
+    int has_min_length,
+    double min_length_um,
+  ) {
+    return _le_update_enclosure_entry(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      location,
+      has_overhang1,
+      overhang1_um,
+      has_overhang2,
+      overhang2_um,
+      has_width,
+      width_um,
+      has_except_extra_cut,
+      except_extra_cut_um,
+      has_min_length,
+      min_length_um,
+    );
+  }
+
+  late final _le_update_enclosure_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeEnclosureEntryId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_enclosure_entry');
+  late final _le_update_enclosure_entry = _le_update_enclosure_entryPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeEnclosureEntryId,
+          int,
+          LeLayerId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_layer_density_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeLayerDensityEntryId id,
+    ffi.Pointer<ffi.Char> type,
+    int has_one_entry,
+    double one_entry,
+  ) {
+    return _le_update_layer_density_entry(
+      handle,
+      id,
+      type,
+      has_one_entry,
+      one_entry,
+    );
+  }
+
+  late final _le_update_layer_density_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeLayerDensityEntryId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_layer_density_entry');
+  late final _le_update_layer_density_entry = _le_update_layer_density_entryPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeLayerDensityEntryId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_macro_site_placement(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroSitePlacementId id,
+    int has_abstract,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> site_name,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    ffi.Pointer<ffi.Char> orient,
+    int has_num_x,
+    int num_x,
+    int has_num_y,
+    int num_y,
+    int has_step_x,
+    double step_x_um,
+    int has_step_y,
+    double step_y_um,
+  ) {
+    return _le_update_macro_site_placement(
+      handle,
+      id,
+      has_abstract,
+      abstract_id,
+      site_name,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      orient,
+      has_num_x,
+      num_x,
+      has_num_y,
+      num_y,
+      has_step_x,
+      step_x_um,
+      has_step_y,
+      step_y_um,
+    );
+  }
+
+  late final _le_update_macro_site_placementPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroSitePlacementId,
+            ffi.Int32,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_macro_site_placement');
+  late final _le_update_macro_site_placement =
+      _le_update_macro_site_placementPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeMacroSitePlacementId,
+              int,
+              LeAbstractId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              double,
+              double,
+              ffi.Pointer<ffi.Char>,
+              int,
+              int,
+              int,
+              int,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_site(
+    ffi.Pointer<LeHandle> handle,
+    LeSiteId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> site_class,
+    int has_size,
+    double size_x_um,
+    double size_y_um,
+    int has_symmetry,
+    int symmetry_r90,
+    int symmetry_x,
+    int symmetry_y,
+  ) {
+    return _le_update_site(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      name,
+      site_class,
+      has_size,
+      size_x_um,
+      size_y_um,
+      has_symmetry,
+      symmetry_r90,
+      symmetry_x,
+      symmetry_y,
+    );
+  }
+
+  late final _le_update_sitePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeSiteId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_site');
+  late final _le_update_site = _le_update_sitePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeSiteId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          int,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_non_default_rule_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleLayerId id,
+    int has_non_default_rule,
+    LeNonDefaultRuleId non_default_rule_id,
+    ffi.Pointer<ffi.Char> layer_name,
+    int has_width,
+    double width_um,
+    int has_spacing,
+    double spacing_um,
+    int has_wire_extension,
+    double wire_extension_um,
+    int has_resistance,
+    double resistance,
+    int has_capacitance,
+    double capacitance,
+    int has_edge_cap,
+    double edge_cap,
+    int has_diag_width,
+    double diag_width_um,
+  ) {
+    return _le_update_non_default_rule_layer(
+      handle,
+      id,
+      has_non_default_rule,
+      non_default_rule_id,
+      layer_name,
+      has_width,
+      width_um,
+      has_spacing,
+      spacing_um,
+      has_wire_extension,
+      wire_extension_um,
+      has_resistance,
+      resistance,
+      has_capacitance,
+      capacitance,
+      has_edge_cap,
+      edge_cap,
+      has_diag_width,
+      diag_width_um,
+    );
+  }
+
+  late final _le_update_non_default_rule_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleLayerId,
+            ffi.Int32,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_non_default_rule_layer');
+  late final _le_update_non_default_rule_layer =
+      _le_update_non_default_rule_layerPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleLayerId,
+              int,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_non_default_rule_via(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleViaId id,
+    int has_non_default_rule,
+    LeNonDefaultRuleId non_default_rule_id,
+    ffi.Pointer<ffi.Char> name,
+    int has_is_default,
+    int is_default,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_update_non_default_rule_via(
+      handle,
+      id,
+      has_non_default_rule,
+      non_default_rule_id,
+      name,
+      has_is_default,
+      is_default,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_update_non_default_rule_viaPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleViaId,
+            ffi.Int32,
+            LeNonDefaultRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_non_default_rule_via');
+  late final _le_update_non_default_rule_via =
+      _le_update_non_default_rule_viaPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeNonDefaultRuleViaId,
+              int,
+              LeNonDefaultRuleId,
+              ffi.Pointer<ffi.Char>,
+              int,
+              int,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_non_default_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeNonDefaultRuleId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int has_hard_spacing,
+    int hard_spacing,
+  ) {
+    return _le_update_non_default_rule(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      name,
+      has_hard_spacing,
+      hard_spacing,
+    );
+  }
+
+  late final _le_update_non_default_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeNonDefaultRuleId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_non_default_rule');
+  late final _le_update_non_default_rule = _le_update_non_default_rulePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeNonDefaultRuleId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_minimum_cut(
+    ffi.Pointer<LeHandle> handle,
+    LeMinimumCutId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_cuts,
+    int cuts,
+    int has_width,
+    double width_um,
+    int has_within,
+    double within_um,
+    ffi.Pointer<ffi.Char> connection,
+    int has_length,
+    double length_um,
+    int has_distance,
+    double distance_um,
+  ) {
+    return _le_update_minimum_cut(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_cuts,
+      cuts,
+      has_width,
+      width_um,
+      has_within,
+      within_um,
+      connection,
+      has_length,
+      length_um,
+      has_distance,
+      distance_um,
+    );
+  }
+
+  late final _le_update_minimum_cutPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeMinimumCutId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_minimum_cut');
+  late final _le_update_minimum_cut = _le_update_minimum_cutPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeMinimumCutId,
+          int,
+          LeLayerId,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_min_step(
+    ffi.Pointer<LeHandle> handle,
+    LeMinStepId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_distance,
+    double distance_um,
+    ffi.Pointer<ffi.Char> min_step_type,
+    int has_lengthsum,
+    double lengthsum_um,
+    int has_max_edges,
+    int max_edges,
+  ) {
+    return _le_update_min_step(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_distance,
+      distance_um,
+      min_step_type,
+      has_lengthsum,
+      lengthsum_um,
+      has_max_edges,
+      max_edges,
+    );
+  }
+
+  late final _le_update_min_stepPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeMinStepId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_min_step');
+  late final _le_update_min_step = _le_update_min_stepPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeMinStepId,
+          int,
+          LeLayerId,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_influence_spacing_entry(
+    ffi.Pointer<LeHandle> handle,
+    LeInfluenceSpacingEntryId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_width,
+    double width_um,
+    int has_distance,
+    double distance_um,
+    int has_spacing,
+    double spacing_um,
+  ) {
+    return _le_update_influence_spacing_entry(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_width,
+      width_um,
+      has_distance,
+      distance_um,
+      has_spacing,
+      spacing_um,
+    );
+  }
+
+  late final _le_update_influence_spacing_entryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeInfluenceSpacingEntryId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_influence_spacing_entry');
+  late final _le_update_influence_spacing_entry =
+      _le_update_influence_spacing_entryPtr
+          .asFunction<
+            int Function(
+              ffi.Pointer<LeHandle>,
+              LeInfluenceSpacingEntryId,
+              int,
+              LeLayerId,
+              int,
+              double,
+              int,
+              double,
+              int,
+              double,
+            )
+          >();
+
+  int le_update_spacing_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeSpacingRuleId id,
+    int has_layer,
+    LeLayerId layer_id,
+    int has_distance,
+    double distance_um,
+    int has_range_min,
+    double range_min_um,
+    int has_range_max,
+    double range_max_um,
+    int has_range_use_length_threshold,
+    int range_use_length_threshold,
+    int has_range_influence,
+    double range_influence_um,
+    int has_range_influence_range_min,
+    double range_influence_range_min_um,
+    int has_range_influence_range_max,
+    double range_influence_range_max_um,
+    int has_range_range_min,
+    double range_range_min_um,
+    int has_range_range_max,
+    double range_range_max_um,
+    int has_length_threshold,
+    double length_threshold_um,
+    int has_length_threshold_range_min,
+    double length_threshold_range_min_um,
+    int has_length_threshold_range_max,
+    double length_threshold_range_max_um,
+    int has_center_to_center,
+    int center_to_center,
+    int has_same_net,
+    int same_net,
+    int has_same_net_pg_only,
+    int same_net_pg_only,
+    int has_parallel_overlap,
+    int parallel_overlap,
+    int has_end_of_line_width,
+    double end_of_line_width_um,
+    int has_end_of_line_within,
+    double end_of_line_within_um,
+    int has_parallel_edge_space,
+    double parallel_edge_space_um,
+    int has_parallel_edge_within,
+    double parallel_edge_within_um,
+    int has_two_edges,
+    int two_edges,
+    int has_notch_length,
+    double notch_length_um,
+    int has_end_of_notch_width,
+    double end_of_notch_width_um,
+    int has_end_of_notch_spacing,
+    double end_of_notch_spacing_um,
+    int has_end_of_notch_length,
+    double end_of_notch_length_um,
+    ffi.Pointer<ffi.Char> second_layer_name,
+    int has_second_layer_stack,
+    int second_layer_stack,
+    int has_adjacent_cuts,
+    int adjacent_cuts,
+    int has_adjacent_within,
+    double adjacent_within_um,
+    int has_adjacent_except_same_pg_net,
+    int adjacent_except_same_pg_net,
+    int has_area,
+    double area_um,
+  ) {
+    return _le_update_spacing_rule(
+      handle,
+      id,
+      has_layer,
+      layer_id,
+      has_distance,
+      distance_um,
+      has_range_min,
+      range_min_um,
+      has_range_max,
+      range_max_um,
+      has_range_use_length_threshold,
+      range_use_length_threshold,
+      has_range_influence,
+      range_influence_um,
+      has_range_influence_range_min,
+      range_influence_range_min_um,
+      has_range_influence_range_max,
+      range_influence_range_max_um,
+      has_range_range_min,
+      range_range_min_um,
+      has_range_range_max,
+      range_range_max_um,
+      has_length_threshold,
+      length_threshold_um,
+      has_length_threshold_range_min,
+      length_threshold_range_min_um,
+      has_length_threshold_range_max,
+      length_threshold_range_max_um,
+      has_center_to_center,
+      center_to_center,
+      has_same_net,
+      same_net,
+      has_same_net_pg_only,
+      same_net_pg_only,
+      has_parallel_overlap,
+      parallel_overlap,
+      has_end_of_line_width,
+      end_of_line_width_um,
+      has_end_of_line_within,
+      end_of_line_within_um,
+      has_parallel_edge_space,
+      parallel_edge_space_um,
+      has_parallel_edge_within,
+      parallel_edge_within_um,
+      has_two_edges,
+      two_edges,
+      has_notch_length,
+      notch_length_um,
+      has_end_of_notch_width,
+      end_of_notch_width_um,
+      has_end_of_notch_spacing,
+      end_of_notch_spacing_um,
+      has_end_of_notch_length,
+      end_of_notch_length_um,
+      second_layer_name,
+      has_second_layer_stack,
+      second_layer_stack,
+      has_adjacent_cuts,
+      adjacent_cuts,
+      has_adjacent_within,
+      adjacent_within_um,
+      has_adjacent_except_same_pg_net,
+      adjacent_except_same_pg_net,
+      has_area,
+      area_um,
+    );
+  }
+
+  late final _le_update_spacing_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeSpacingRuleId,
+            ffi.Int32,
+            LeLayerId,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_spacing_rule');
+  late final _le_update_spacing_rule = _le_update_spacing_rulePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeSpacingRuleId,
+          int,
+          LeLayerId,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          int,
+          int,
+          int,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          int,
+          int,
+          double,
+          int,
+          int,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_via_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeViaLayerId id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_update_via_layer(handle, id, layer_name);
+  }
+
+  late final _le_update_via_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeViaLayerId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_via_layer');
+  late final _le_update_via_layer = _le_update_via_layerPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeViaLayerId, ffi.Pointer<ffi.Char>)
+      >();
+
+  int le_update_via_rule_reference(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleReferenceId id,
+    int has_via,
+    LeViaId via_id,
+    ffi.Pointer<ffi.Char> via_rule_name,
+    int has_cut_size,
+    double cut_size_x_um,
+    double cut_size_y_um,
+    ffi.Pointer<ffi.Char> bot_layer_name,
+    ffi.Pointer<ffi.Char> cut_layer_name,
+    ffi.Pointer<ffi.Char> top_layer_name,
+    int has_cut_spacing,
+    double cut_spacing_x_um,
+    double cut_spacing_y_um,
+    int has_bot_enclosure,
+    double bot_enclosure_x_um,
+    double bot_enclosure_y_um,
+    int has_top_enclosure,
+    double top_enclosure_x_um,
+    double top_enclosure_y_um,
+  ) {
+    return _le_update_via_rule_reference(
+      handle,
+      id,
+      has_via,
+      via_id,
+      via_rule_name,
+      has_cut_size,
+      cut_size_x_um,
+      cut_size_y_um,
+      bot_layer_name,
+      cut_layer_name,
+      top_layer_name,
+      has_cut_spacing,
+      cut_spacing_x_um,
+      cut_spacing_y_um,
+      has_bot_enclosure,
+      bot_enclosure_x_um,
+      bot_enclosure_y_um,
+      has_top_enclosure,
+      top_enclosure_x_um,
+      top_enclosure_y_um,
+    );
+  }
+
+  late final _le_update_via_rule_referencePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleReferenceId,
+            ffi.Int32,
+            LeViaId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_update_via_rule_reference');
+  late final _le_update_via_rule_reference = _le_update_via_rule_referencePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaRuleReferenceId,
+          int,
+          LeViaId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+        )
+      >();
+
+  int le_update_via_rule_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleLayerId id,
+    int has_via_rule,
+    LeViaRuleId via_rule_id,
+    ffi.Pointer<ffi.Char> layer_name,
+    ffi.Pointer<ffi.Char> direction,
+    int has_width_min,
+    double width_min_um,
+    int has_width_max,
+    double width_max_um,
+    int has_overhang,
+    double overhang_um,
+    int has_metal_overhang,
+    double metal_overhang_um,
+    int has_enclosure_overhang1,
+    double enclosure_overhang1_um,
+    int has_enclosure_overhang2,
+    double enclosure_overhang2_um,
+    int has_spacing_step_x,
+    double spacing_step_x_um,
+    int has_spacing_step_y,
+    double spacing_step_y_um,
+    int has_rect,
+    double rect_ll_x_um,
+    double rect_ll_y_um,
+    double rect_ur_x_um,
+    double rect_ur_y_um,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_update_via_rule_layer(
+      handle,
+      id,
+      has_via_rule,
+      via_rule_id,
+      layer_name,
+      direction,
+      has_width_min,
+      width_min_um,
+      has_width_max,
+      width_max_um,
+      has_overhang,
+      overhang_um,
+      has_metal_overhang,
+      metal_overhang_um,
+      has_enclosure_overhang1,
+      enclosure_overhang1_um,
+      has_enclosure_overhang2,
+      enclosure_overhang2_um,
+      has_spacing_step_x,
+      spacing_step_x_um,
+      has_spacing_step_y,
+      spacing_step_y_um,
+      has_rect,
+      rect_ll_x_um,
+      rect_ll_y_um,
+      rect_ur_x_um,
+      rect_ur_y_um,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_update_via_rule_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleLayerId,
+            ffi.Int32,
+            LeViaRuleId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_via_rule_layer');
+  late final _le_update_via_rule_layer = _le_update_via_rule_layerPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaRuleLayerId,
+          int,
+          LeViaRuleId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          double,
+          double,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_via(
+    ffi.Pointer<LeHandle> handle,
+    LeViaId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int has_is_default,
+    int is_default,
+    int has_resistance,
+    double resistance,
+  ) {
+    return _le_update_via(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      name,
+      has_is_default,
+      is_default,
+      has_resistance,
+      resistance,
+    );
+  }
+
+  late final _le_update_viaPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeViaId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_via');
+  late final _le_update_via = _le_update_viaPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_via_rule(
+    ffi.Pointer<LeHandle> handle,
+    LeViaRuleId id,
+    int has_technology,
+    LeTechnologyId technology_id,
+    ffi.Pointer<ffi.Char> name,
+    int has_is_generate,
+    int is_generate,
+    int has_is_default,
+    int is_default,
+  ) {
+    return _le_update_via_rule(
+      handle,
+      id,
+      has_technology,
+      technology_id,
+      name,
+      has_is_generate,
+      is_generate,
+      has_is_default,
+      is_default,
+    );
+  }
+
+  late final _le_update_via_rulePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeViaRuleId,
+            ffi.Int32,
+            LeTechnologyId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_via_rule');
+  late final _le_update_via_rule = _le_update_via_rulePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeViaRuleId,
+          int,
+          LeTechnologyId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_shape(
+    ffi.Pointer<LeHandle> handle,
+    LeShapeId id,
+    ffi.Pointer<ffi.Char> layer_name,
+    int has_spacing,
+    double spacing_um,
+    int has_design_rule_width,
+    double design_rule_width_um,
+    int has_except_pg_net,
+    int except_pg_net,
+  ) {
+    return _le_update_shape(
+      handle,
+      id,
+      layer_name,
+      has_spacing,
+      spacing_um,
+      has_design_rule_width,
+      design_rule_width_um,
+      has_except_pg_net,
+      except_pg_net,
+    );
+  }
+
+  late final _le_update_shapePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeShapeId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_shape');
+  late final _le_update_shape = _le_update_shapePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeShapeId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_library(
+    ffi.Pointer<LeHandle> handle,
+    LeLibraryId id,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_update_library(handle, id, name);
+  }
+
+  late final _le_update_libraryPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_library');
+  late final _le_update_library = _le_update_libraryPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeLibraryId, ffi.Pointer<ffi.Char>)
+      >();
+
+  int le_update_design(
+    ffi.Pointer<LeHandle> handle,
+    LeDesignId id,
+    int has_library,
+    LeLibraryId library_id,
+    ffi.Pointer<ffi.Char> name,
+  ) {
+    return _le_update_design(handle, id, has_library, library_id, name);
+  }
+
+  late final _le_update_designPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeDesignId,
+            ffi.Int32,
+            LeLibraryId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_design');
+  late final _le_update_design = _le_update_designPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeDesignId,
+          int,
+          LeLibraryId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_abstract(
+    ffi.Pointer<LeHandle> handle,
+    LeAbstractId id,
+    int has_design,
+    LeDesignId design_id,
+    ffi.Pointer<ffi.Char> type,
+    int has_size,
+    double size_x_um,
+    double size_y_um,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    int has_bbox,
+    double bbox_ll_x_um,
+    double bbox_ll_y_um,
+    double bbox_ur_x_um,
+    double bbox_ur_y_um,
+    int has_symmetry,
+    int symmetry_r90,
+    int symmetry_x,
+    int symmetry_y,
+    ffi.Pointer<ffi.Char> site,
+    ffi.Pointer<ffi.Char> eeq,
+    ffi.Pointer<ffi.Char> leq,
+    int has_power,
+    double power,
+    ffi.Pointer<ffi.Char> source,
+    int has_is_fixed_mask,
+    int is_fixed_mask,
+  ) {
+    return _le_update_abstract(
+      handle,
+      id,
+      has_design,
+      design_id,
+      type,
+      has_size,
+      size_x_um,
+      size_y_um,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      has_bbox,
+      bbox_ll_x_um,
+      bbox_ll_y_um,
+      bbox_ur_x_um,
+      bbox_ur_y_um,
+      has_symmetry,
+      symmetry_r90,
+      symmetry_x,
+      symmetry_y,
+      site,
+      eeq,
+      leq,
+      has_power,
+      power,
+      source,
+      has_is_fixed_mask,
+      is_fixed_mask,
+    );
+  }
+
+  late final _le_update_abstractPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeAbstractId,
+            ffi.Int32,
+            LeDesignId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Int32,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Int32,
+          )
+        >
+      >('le_update_abstract');
+  late final _le_update_abstract = _le_update_abstractPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeAbstractId,
+          int,
+          LeDesignId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          int,
+          double,
+          double,
+          double,
+          double,
+          int,
+          int,
+          int,
+          int,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          ffi.Pointer<ffi.Char>,
+          int,
+          int,
+        )
+      >();
+
+  int le_update_macro_density_layer(
+    ffi.Pointer<LeHandle> handle,
+    LeMacroDensityLayerId id,
+    int has_abstract,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> layer_name,
+  ) {
+    return _le_update_macro_density_layer(
+      handle,
+      id,
+      has_abstract,
+      abstract_id,
+      layer_name,
+    );
+  }
+
+  late final _le_update_macro_density_layerPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeMacroDensityLayerId,
+            ffi.Int32,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_macro_density_layer');
+  late final _le_update_macro_density_layer = _le_update_macro_density_layerPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeMacroDensityLayerId,
+          int,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_foreign(
+    ffi.Pointer<LeHandle> handle,
+    LeForeignId id,
+    ffi.Pointer<ffi.Char> name,
+    int has_origin,
+    double origin_x_um,
+    double origin_y_um,
+    ffi.Pointer<ffi.Char> orient,
+  ) {
+    return _le_update_foreign(
+      handle,
+      id,
+      name,
+      has_origin,
+      origin_x_um,
+      origin_y_um,
+      orient,
+    );
+  }
+
+  late final _le_update_foreignPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeForeignId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_foreign');
+  late final _le_update_foreign = _le_update_foreignPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeForeignId,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_terminal(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalId id,
+    int has_abstract,
+    LeAbstractId abstract_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> direction,
+    ffi.Pointer<ffi.Char> shape,
+    ffi.Pointer<ffi.Char> use,
+    ffi.Pointer<ffi.Char> must_join,
+    ffi.Pointer<ffi.Char> net_expr,
+    ffi.Pointer<ffi.Char> leq,
+    ffi.Pointer<ffi.Char> taper_rule,
+    ffi.Pointer<ffi.Char> supply_sensitivity,
+    ffi.Pointer<ffi.Char> ground_sensitivity,
+    int has_rise_slew_limit,
+    double rise_slew_limit,
+    int has_fall_slew_limit,
+    double fall_slew_limit,
+    int has_max_load,
+    double max_load,
+    int has_max_delay,
+    double max_delay,
+  ) {
+    return _le_update_terminal(
+      handle,
+      id,
+      has_abstract,
+      abstract_id,
+      name,
+      direction,
+      shape,
+      use,
+      must_join,
+      net_expr,
+      leq,
+      taper_rule,
+      supply_sensitivity,
+      ground_sensitivity,
+      has_rise_slew_limit,
+      rise_slew_limit,
+      has_fall_slew_limit,
+      fall_slew_limit,
+      has_max_load,
+      max_load,
+      has_max_delay,
+      max_delay,
+    );
+  }
+
+  late final _le_update_terminalPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalId,
+            ffi.Int32,
+            LeAbstractId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Int32,
+            ffi.Double,
+          )
+        >
+      >('le_update_terminal');
+  late final _le_update_terminal = _le_update_terminalPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalId,
+          int,
+          LeAbstractId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+          int,
+          double,
+        )
+      >();
+
+  int le_update_pin_antenna_model(
+    ffi.Pointer<LeHandle> handle,
+    LePinAntennaModelId id,
+    int has_terminal,
+    LeTerminalId terminal_id,
+    ffi.Pointer<ffi.Char> oxide,
+  ) {
+    return _le_update_pin_antenna_model(
+      handle,
+      id,
+      has_terminal,
+      terminal_id,
+      oxide,
+    );
+  }
+
+  late final _le_update_pin_antenna_modelPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LePinAntennaModelId,
+            ffi.Int32,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_pin_antenna_model');
+  late final _le_update_pin_antenna_model = _le_update_pin_antenna_modelPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LePinAntennaModelId,
+          int,
+          LeTerminalId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_terminal_port(
+    ffi.Pointer<LeHandle> handle,
+    LeTerminalPortId id,
+    int has_terminal,
+    LeTerminalId terminal_id,
+    ffi.Pointer<ffi.Char> port_class,
+  ) {
+    return _le_update_terminal_port(
+      handle,
+      id,
+      has_terminal,
+      terminal_id,
+      port_class,
+    );
+  }
+
+  late final _le_update_terminal_portPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeTerminalPortId,
+            ffi.Int32,
+            LeTerminalId,
+            ffi.Pointer<ffi.Char>,
+          )
+        >
+      >('le_update_terminal_port');
+  late final _le_update_terminal_port = _le_update_terminal_portPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeTerminalPortId,
+          int,
+          LeTerminalId,
+          ffi.Pointer<ffi.Char>,
+        )
+      >();
+
+  int le_update_obstruction(
+    ffi.Pointer<LeHandle> handle,
+    LeObstructionId id,
+    int has_abstract,
+    LeAbstractId abstract_id,
+  ) {
+    return _le_update_obstruction(handle, id, has_abstract, abstract_id);
+  }
+
+  late final _le_update_obstructionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeObstructionId,
+            ffi.Int32,
+            LeAbstractId,
+          )
+        >
+      >('le_update_obstruction');
+  late final _le_update_obstruction = _le_update_obstructionPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeObstructionId, int, LeAbstractId)
+      >();
+
+  int le_update_schematic(
+    ffi.Pointer<LeHandle> handle,
+    LeSchematicId id,
+    int has_design,
+    LeDesignId design_id,
+  ) {
+    return _le_update_schematic(handle, id, has_design, design_id);
+  }
+
+  late final _le_update_schematicPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeSchematicId,
+            ffi.Int32,
+            LeDesignId,
+          )
+        >
+      >('le_update_schematic');
+  late final _le_update_schematic = _le_update_schematicPtr
+      .asFunction<
+        int Function(ffi.Pointer<LeHandle>, LeSchematicId, int, LeDesignId)
+      >();
+
+  int le_update_instance(
+    ffi.Pointer<LeHandle> handle,
+    LeInstanceId id,
+    int has_schematic,
+    LeSchematicId schematic_id,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Char> reference_name,
+    int has_location,
+    double location_x_um,
+    double location_y_um,
+  ) {
+    return _le_update_instance(
+      handle,
+      id,
+      has_schematic,
+      schematic_id,
+      name,
+      reference_name,
+      has_location,
+      location_x_um,
+      location_y_um,
+    );
+  }
+
+  late final _le_update_instancePtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            ffi.Pointer<LeHandle>,
+            LeInstanceId,
+            ffi.Int32,
+            LeSchematicId,
+            ffi.Pointer<ffi.Char>,
+            ffi.Pointer<ffi.Char>,
+            ffi.Int32,
+            ffi.Double,
+            ffi.Double,
+          )
+        >
+      >('le_update_instance');
+  late final _le_update_instance = _le_update_instancePtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<LeHandle>,
+          LeInstanceId,
+          int,
+          LeSchematicId,
+          ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Char>,
+          int,
+          double,
+          double,
+        )
+      >();
+
+  /// @brief The singleton Technology's friendly id (see
+  /// le_tcl_shim.hpp's own "IDs" comment for the friendly-id
+  /// convention this feeds) - Technology is a single shared per-
+  /// session instance, same assumption database_units_microns() (api.cpp)
+  /// already makes. Returns an invalid id (index == UINT32_MAX) if no
+  /// Technology has been read yet.
+  LeTechnologyId le_technology_id(ffi.Pointer<LeHandle> handle) {
+    return _le_technology_id(handle);
+  }
+
+  late final _le_technology_idPtr =
+      _lookup<
+        ffi.NativeFunction<LeTechnologyId Function(ffi.Pointer<LeHandle>)>
+      >('le_technology_id');
+  late final _le_technology_id = _le_technology_idPtr
+      .asFunction<LeTechnologyId Function(ffi.Pointer<LeHandle>)>();
 }
 
 /// 7.18.1.2 Minimum-width integer types
@@ -3524,6 +13224,426 @@ typedef Dartuintmax_t = int;
 
 final class LeHandle extends ffi.Opaque {}
 
+/// @brief Mirrors the database's TechnologyId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeTechnologyId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's PropertyDefinitionId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LePropertyDefinitionId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's LayerId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeLayerId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's AntennaModelId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeAntennaModelId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ArraySpacingId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeArraySpacingId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's TwoWidthsSpacingEntryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeTwoWidthsSpacingEntryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's PreferEnclosureEntryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LePreferEnclosureEntryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's EnclosureEntryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeEnclosureEntryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's LayerDensityEntryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeLayerDensityEntryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's MacroSitePlacementId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeMacroSitePlacementId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's SiteId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeSiteId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's NonDefaultRuleLayerId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeNonDefaultRuleLayerId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's NonDefaultRuleViaId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeNonDefaultRuleViaId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's NonDefaultRuleId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeNonDefaultRuleId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's MinimumCutId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeMinimumCutId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's MinStepId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeMinStepId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's InfluenceSpacingEntryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeInfluenceSpacingEntryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's SpacingRuleId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeSpacingRuleId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ViaLayerId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeViaLayerId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ViaRuleReferenceId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeViaRuleReferenceId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ViaRuleLayerId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeViaRuleLayerId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ViaId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeViaId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ViaRuleId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeViaRuleId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ShapeId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeShapeId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's LibraryId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeLibraryId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's DesignId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeDesignId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's AbstractId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeAbstractId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's MacroDensityLayerId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeMacroDensityLayerId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ForeignId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeForeignId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's TerminalId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeTerminalId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's PinAntennaModelId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LePinAntennaModelId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's TerminalPortId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeTerminalPortId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's ObstructionId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeObstructionId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's SchematicId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeSchematicId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
+/// @brief Mirrors the database's InstanceId handle - a stable identity,
+/// safe to hold onto and pass back into a later call without re-deriving
+/// it. `index == UINT32_MAX` marks it invalid - never construct one by
+/// hand, only copy one returned by this API.
+final class LeInstanceId extends ffi.Struct {
+  @ffi.Uint32()
+  external int index;
+
+  @ffi.Uint32()
+  external int generation;
+}
+
 /// @brief Raw RGBA8888 pixel buffer, mirroring render::PixelBuffer but
 /// using explicit fixed-width types (not `int`/`size_t`, whose width
 /// isn't guaranteed identical across toolchains) for a stable FFI ABI.
@@ -3544,41 +13664,6 @@ final class LePixelBuffer extends ffi.Struct {
 
   @ffi.Int64()
   external int row_bytes;
-}
-
-/// @brief Mirrors the database's LibraryId handle (generated/ids.hpp's
-/// `Id<LibraryTag>`) for the FFI boundary: a stable identity for one
-/// Library, safe to hold onto and pass back into e.g.
-/// le_set_current_design_by_id() later without re-deriving it from a
-/// position in le_library_at()'s enumeration. `index ==
-/// UINT32_MAX` (matching `Id<Tag>::valid()`) marks it invalid - never
-/// construct one by hand, only copy one returned by this API.
-final class LeLibraryId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
-}
-
-/// @brief Mirrors the database's DesignId handle - see LeLibraryId's
-/// comment for the general contract.
-final class LeDesignId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
-}
-
-/// @brief Mirrors the database's AbstractId handle - see LeLibraryId's
-/// comment for the general contract.
-final class LeAbstractId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
 }
 
 /// @brief One row of le_library_at(): a Library's identity and name.
@@ -3942,36 +14027,6 @@ final class LeObjectRef extends ffi.Struct {
   external int generation;
 }
 
-/// @brief Mirrors the database's TerminalId handle - see LeLibraryId's
-/// comment for the general contract.
-final class LeTerminalId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
-}
-
-/// @brief Mirrors the database's TerminalPortId handle - see
-/// LeLibraryId's comment for the general contract.
-final class LeTerminalPortId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
-}
-
-/// @brief Mirrors the database's ObstructionId handle - see
-/// LeLibraryId's comment for the general contract.
-final class LeObstructionId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
-}
-
 /// @brief Mirrors le::SignalDirection (generated/signal_direction.hpp)
 /// field-for-field - kept as an explicit enum (not a bare int) so a
 /// future reordering of either fails to compile instead of silently
@@ -3996,16 +14051,6 @@ enum LeSignalDirection {
     5 => LE_SIGNAL_DIRECTION_FEEDTHRU,
     _ => throw ArgumentError('Unknown value for LeSignalDirection: $value'),
   };
-}
-
-/// @brief Mirrors the database's ShapeId handle - see LeLibraryId's
-/// comment for the general contract.
-final class LeShapeId extends ffi.Struct {
-  @ffi.Uint32()
-  external int index;
-
-  @ffi.Uint32()
-  external int generation;
 }
 
 /// @brief One point, in microns - `le_shape_polygon_point_at`'s and

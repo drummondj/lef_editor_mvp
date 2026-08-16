@@ -30,9 +30,9 @@
 // later moved every CRUD-flag parent id onto this same token convention
 // too, so it's now the uniform rule, not an exception) ---
 // AbstractId/DesignId's own session-selection uses (design_abstract_id,
-// design_by_name, set_current_design_cmd, update_abstract_boundary_cmd's
-// abstract_id argument - none of these are create_<type> CRUD flags) are
-// still a plain {uint32_t index, generation} struct in api.hpp, packed
+// design_by_name, set_current_design_cmd - none of these are
+// create_<type>/update_<type> CRUD flags) are still a plain {uint32_t
+// index, generation} struct in api.hpp, packed
 // into one int64_t (generation in the high 32 bits, index in the low 32
 // bits, via pack<IdT>/unpack<IdT> in le_tcl_shim.cpp) - int64_t is a
 // fundamental type SWIG's stdint.i already marshals to/from a plain Tcl
@@ -131,11 +131,11 @@ int viewport_width();
 int viewport_height();
 
 /// @brief The AbstractId of the design at `design_index` (0..design_count()-1,
-/// same flat indexing as design_name) - the way a script gets a raw
-/// packed id to pass as `abstract_id` to update_abstract_boundary below
-/// (create_terminal/create_obstruction take an `"abstract:N"` friendly-id
-/// token instead - see get_abstracts/get_abstracts_at, or just format
-/// "abstract:" + this call's own result). Scoped to the first Library only
+/// same flat indexing as design_name) - a raw packed id, unlike
+/// create_terminal/create_obstruction/update_abstract, which all take an
+/// `"abstract:N"` friendly-id token instead (see get_abstracts/
+/// get_abstracts_at, or just format "abstract:" + this call's own
+/// result). Scoped to the first Library only
 /// (le_library_design_at's library_index=0) - correct as long as only
 /// one LEF file/library is in play, same assumption this project's
 /// single-shared-Technology convention already makes elsewhere. Superseded
@@ -192,23 +192,9 @@ constexpr long long kInvalidId = 0xFFFFFFFFLL;
 /// is never revisited afterward, injected or not.
 void set_session_handle(long long handle_address);
 
-// --- Terminal CRUD (create_terminal_cmd is generated - see
-// le_tcl_shim_generated.hpp - not hand-written here) ---
+// --- Terminal CRUD (create_terminal_cmd/update_terminal_cmd are
+// generated - see le_tcl_shim_generated.hpp - not hand-written here) ---
 
-/// @brief Rename the Terminal `id` refers to - note that `id` itself
-/// (`"terminal:OLDNAME"`) becomes stale/dangling the moment this
-/// succeeds, since the friendly id *is* the name; a script needs to
-/// re-derive `"terminal:NEWNAME"` (it already has NEWNAME literally) to
-/// keep addressing the same Terminal afterward. Returns nonzero on a
-/// NAME collision with a different Terminal on the same Abstract - see
-/// le_set_terminal_name's own comment in api.hpp.
-int set_terminal_name(const char *id, const char *name);
-
-/// @brief Positional form behind `set_terminal_direction $id DIRECTION`
-/// (see le_tcl_procs.tcl - DIRECTION is a name, same mapping the
-/// generated create_terminal_cmd's own direction argument uses, not a
-/// raw int).
-int set_terminal_direction_cmd(const char *id, int direction);
 int delete_terminal(const char *id);
 
 // --- TerminalPort CRUD (create_terminal_port_cmd is generated) ---
@@ -219,25 +205,15 @@ int delete_terminal_port(const char *id);
 
 int delete_obstruction(const char *id);
 
-// --- Abstract boundary ---
-
-/// @brief Positional form behind `update_abstract_boundary -abstract ID
-/// -points {x y x y ...}` (see le_tcl_procs.tcl) - `points_um` is the
-/// coordinate-list typemap this phase exists to write (see le_api.i),
-/// not a raw double*/count pair a Tcl caller would have to build by
-/// hand.
-int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count);
-
 // --- Shape CRUD (rects/polygons/paths - texts deliberately excluded,
 // see TCL_EXPLORATION.md's round-7 finding: they're a Pipeline-computed
-// render-time label, never LEF-authored data; create_shape_cmd is
-// generated - see le_tcl_shim_generated.hpp - takes both a
-// terminal_port_id and an obstruction_id token, exactly one of which
-// must resolve, replacing this header's former create_terminal_port_shape_cmd/
+// render-time label, never LEF-authored data; create_shape_cmd/
+// update_shape_cmd are generated - see le_tcl_shim_generated.hpp - takes
+// both a terminal_port_id and an obstruction_id token, exactly one of
+// which must resolve, replacing this header's former create_terminal_port_shape_cmd/
 // create_obstruction_shape_cmd split) ---
 
 const char *shape_layer_name(const char *id);
-int set_shape_layer_name(const char *id, const char *layer_name);
 int delete_shape(const char *id);
 
 int shape_rect_count(const char *id);

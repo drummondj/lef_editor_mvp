@@ -168,8 +168,7 @@ namespace
     // fields and hops, cross-checked directly against each class's own
     // generated get_field()/match_hop() (src/database/generated/*.hpp).
     // Hand-duplicated from schema.py rather than adding a cmg-generated
-    // runtime enumeration - same precedent as le_tcl_procs.tcl's
-    // direction_codes array, a short static list not worth a cross-repo
+    // runtime enumeration - a short static list not worth a cross-repo
     // codegen change for. Deliberately narrower than what get_field/
     // match_hop actually dispatch: excludes hops into non-pooled
     // value-list/embedded types (Abstract's bbox/boundary/densities/
@@ -1619,46 +1618,6 @@ extern "C"
         return terminal ? terminal->name.c_str() : nullptr;
     }
 
-    int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name)
-    {
-        if (!handle || !name)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalId terminal_id = from_c(id);
-        if (!handle->root.get_terminal(terminal_id))
-            return 1;
-
-        // Root::set_terminal_name keeps the unique_per_parent index in
-        // sync (unlike mutating TerminalData::name directly through a
-        // get_terminal() pointer, which would leave a stale index entry
-        // behind) and is itself fallible on a same-Abstract name
-        // collision - already confirmed to exist above, so false here
-        // means the new name collides with a sibling Terminal.
-        if (!handle->root.set_terminal_name(terminal_id, name))
-        {
-            handle->messages.push_back(fmt::format("ERROR: le_set_terminal_name: a Terminal named '{}' already exists on this Abstract", name));
-            return 1;
-        }
-
-        handle->root.bump_mutation_version();
-        return 0;
-    }
-
-    int le_set_terminal_direction(LeHandle *handle, LeTerminalId id, int32_t direction)
-    {
-        if (!handle)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        le::TerminalData *terminal = handle->root.get_terminal(from_c(id));
-        if (!terminal)
-            return 1;
-        terminal->direction = static_cast<le::SignalDirection>(direction);
-        handle->root.bump_mutation_version();
-        return 0;
-    }
-
     int le_delete_terminal(LeHandle *handle, LeTerminalId id)
     {
         if (!handle)
@@ -1782,29 +1741,6 @@ extern "C"
         return static_cast<int32_t>(handle->obstruction_search_results.size());
     }
 
-    int le_update_abstract_boundary(LeHandle *handle, LeAbstractId id, const double *coords_um, int32_t coord_count)
-    {
-        if (!handle || !coords_um || coord_count < 6 || coord_count % 2 != 0)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        le::AbstractData *abstract = handle->root.get_abstract(from_c(id));
-        if (!abstract)
-            return 1;
-
-        const std::optional<double> dbu_per_um = database_units_microns(handle->root);
-        if (!dbu_per_um)
-            return 1;
-
-        le::Polygon polygon;
-        for (int32_t i = 0; i < coord_count; i += 2)
-            polygon.points.push_back(le::Point{.x = to_dbu(coords_um[i], *dbu_per_um), .y = to_dbu(coords_um[i + 1], *dbu_per_um)});
-
-        abstract->boundary = {std::move(polygon)};
-        handle->root.bump_mutation_version();
-        return 0;
-    }
-
     int32_t le_terminal_port_shape_count(LeHandle *handle, LeTerminalPortId id)
     {
         if (!handle)
@@ -1855,20 +1791,6 @@ extern "C"
 
         const le::ShapeData *shape = handle->root.get_shape(from_c(id));
         return shape ? shape->layer_name.c_str() : nullptr;
-    }
-
-    int le_set_shape_layer_name(LeHandle *handle, LeShapeId id, const char *layer_name)
-    {
-        if (!handle || !layer_name)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        le::ShapeData *shape = handle->root.get_shape(from_c(id));
-        if (!shape)
-            return 1;
-        shape->layer_name = layer_name;
-        handle->root.bump_mutation_version();
-        return 0;
     }
 
     int le_delete_shape(LeHandle *handle, LeShapeId id)

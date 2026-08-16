@@ -188,4 +188,17 @@ Le{{klass.name}}Id le_create_{{klass.to_snake_case()}}(LeHandle *handle{% if kla
 {{klass.create_api_body()}}
 }
 {% endfor %}
+
+// --- update_<type> - see api_declarations_inc_j2's own comment for the
+// "omitted means leave unchanged" convention and the single-parent-only
+// reparent flag every one of these follows uniformly (see
+// Klass.update_api_body() for how this body is actually built). Ends
+// with exactly one call into Root::update_<klass>(), the only place
+// this class's fields are ever mutated (root.hpp). ---
+{% for klass in classes %}
+int le_update_{{klass.to_snake_case()}}(LeHandle *handle, {{klass.update_api_params()}})
+{
+{{klass.update_api_body()}}
+}
+{% endfor %}
 """

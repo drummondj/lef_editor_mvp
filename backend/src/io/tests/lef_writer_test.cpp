@@ -460,8 +460,10 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsSiteDefinitions)
     ASSERT_TRUE(written_core->size.has_value());
     EXPECT_EQ(original_core->size->x, written_core->size->x);
     EXPECT_EQ(original_core->size->y, written_core->size->y);
-    EXPECT_EQ(original_core->symmetry.x, written_core->symmetry.x);
-    EXPECT_EQ(original_core->symmetry.y, written_core->symmetry.y);
+    ASSERT_TRUE(original_core->symmetry.has_value());
+    ASSERT_TRUE(written_core->symmetry.has_value());
+    EXPECT_EQ(original_core->symmetry->x, written_core->symmetry->x);
+    EXPECT_EQ(original_core->symmetry->y, written_core->symmetry->y);
 
     const SiteData *original_dblcore = original_root.get_site(original_root.get_site_by_name("DBLCORE"));
     const SiteData *written_dblcore = written_root.get_site(written_root.get_site_by_name("DBLCORE"));
@@ -1015,13 +1017,19 @@ TEST_F(LEFWriterRoundtripFixture, RoundTripsMacroClassOriginSizeSymmetryAndSite)
     ASSERT_TRUE(written != nullptr);
 
     EXPECT_EQ(original->type, written->type);
-    EXPECT_EQ(original->origin.x, written->origin.x);
-    EXPECT_EQ(original->origin.y, written->origin.y);
-    EXPECT_EQ(original->size.x, written->size.x);
-    EXPECT_EQ(original->size.y, written->size.y);
-    EXPECT_EQ(original->symmetry.x, written->symmetry.x);
-    EXPECT_EQ(original->symmetry.y, written->symmetry.y);
-    EXPECT_EQ(original->symmetry.r90, written->symmetry.r90);
+    ASSERT_TRUE(original->origin.has_value());
+    ASSERT_TRUE(written->origin.has_value());
+    EXPECT_EQ(original->origin->x, written->origin->x);
+    EXPECT_EQ(original->origin->y, written->origin->y);
+    ASSERT_TRUE(original->size.has_value());
+    ASSERT_TRUE(written->size.has_value());
+    EXPECT_EQ(original->size->x, written->size->x);
+    EXPECT_EQ(original->size->y, written->size->y);
+    ASSERT_TRUE(original->symmetry.has_value());
+    ASSERT_TRUE(written->symmetry.has_value());
+    EXPECT_EQ(original->symmetry->x, written->symmetry->x);
+    EXPECT_EQ(original->symmetry->y, written->symmetry->y);
+    EXPECT_EQ(original->symmetry->r90, written->symmetry->r90);
     EXPECT_EQ(original->site, written->site);
     EXPECT_EQ(original->eeq, written->eeq);
     EXPECT_EQ(original->is_fixed_mask, written->is_fixed_mask);

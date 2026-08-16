@@ -48,4 +48,17 @@ const char *get_{{klass.tcl_plural_snake_case()}}_at(int index);
 {% for klass in classes %}
 const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}});
 {% endfor %}
+
+// --- update_<type> - positional forms behind `update_<type> <id>
+// [-flag value...]` (le_tcl_procs.tcl's own generated update_<type>
+// proc parses the flags then calls this). `id` and (for a single-
+// parent class) the parent are friendly-id tokens, resolved the same
+// way create_<type>_cmd's own parent tokens are - see
+// api_declarations_inc_j2's own comment for the "omitted means leave
+// unchanged" convention every other field follows uniformly. Returns
+// the (possibly-changed, e.g. after a rename) friendly id token on
+// success, "" on failure. ---
+{% for klass in classes %}
+const char *update_{{klass.to_snake_case()}}_cmd({{klass.update_shim_params()}});
+{% endfor %}
 """

@@ -96,6 +96,120 @@ TEST(Database, DeleteLayerRemovesItFromEveryIndex)
     EXPECT_FALSE(root.delete_layer(LayerId{}));
 }
 
+// Root::update_terminal is generated (root_hpp_j2.py's own update_<klass>
+// block, codegen/codegen/schema.py's Klass.update_root_body()) - the
+// *only* place a Terminal's fields are ever mutated after creation (no
+// per-field setter exists for this class anymore - see this round's own
+// plan/commit message). Exercises what the pre-existing, narrower
+// set_terminal_name/set_terminal_abstract setters (still generated,
+// still untouched by this round, but no longer reachable from any
+// generated or hand-written caller) could not: reparenting and renaming
+// together in one call, including moving Terminal.name's own
+// unique_per_parent by-name bucket to the new parent - a gap that setter
+// pair has always had (see its own generated doc comment in root.hpp).
+
+TEST(Database, UpdateTerminalRenameKeepsByNameIndexInSyncScopedToItsParentAbstract)
+{
+    Root root;
+    LibraryId library_id = root.create_library(LibraryData{.name = "LIB"});
+    DesignId design_id = root.create_design(DesignData{.library = library_id, .name = "CELL"});
+    AbstractId abstract_id = root.create_abstract(AbstractData{.design = design_id});
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "IN0", .direction = SignalDirection::INPUT});
+
+    ASSERT_TRUE(root.update_terminal(terminal_id, AbstractId{}, std::string("IN0_RENAMED"), std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt, std::nullopt));
+
+    EXPECT_EQ(root.get_terminal_by_name(abstract_id, "IN0"), TerminalId{});
+    EXPECT_EQ(root.get_terminal_by_name(abstract_id, "IN0_RENAMED"), terminal_id);
+    EXPECT_EQ(root.get_terminal(terminal_id)->name, "IN0_RENAMED");
+    EXPECT_EQ(root.get_terminal(terminal_id)->direction, SignalDirection::INPUT); // untouched
+}
+
+TEST(Database, UpdateTerminalReparentMovesItBetweenAbstractsAndKeepsNameIndexInSync)
+{
+    Root root;
+    LibraryId library_id = root.create_library(LibraryData{.name = "LIB"});
+    DesignId design_a = root.create_design(DesignData{.library = library_id, .name = "CELL_A"});
+    DesignId design_b = root.create_design(DesignData{.library = library_id, .name = "CELL_B"});
+    AbstractId abstract_a = root.create_abstract(AbstractData{.design = design_a});
+    AbstractId abstract_b = root.create_abstract(AbstractData{.design = design_b});
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_a, .name = "IN0", .direction = SignalDirection::INPUT});
+
+    ASSERT_TRUE(root.update_terminal(terminal_id, abstract_b, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt));
+
+    EXPECT_EQ(root.get_terminal(terminal_id)->abstract, abstract_b);
+    EXPECT_TRUE(root.get_abstract_terminals(abstract_a).empty());
+    EXPECT_EQ(root.get_abstract_terminals(abstract_b), std::vector<TerminalId>{terminal_id});
+    // The unique_per_parent by-name bucket moved with it - findable under
+    // the new parent, gone from the old one (the gap the pre-existing
+    // set_terminal_abstract setter alone has always had - see its own
+    // generated doc comment).
+    EXPECT_EQ(root.get_terminal_by_name(abstract_a, "IN0"), TerminalId{});
+    EXPECT_EQ(root.get_terminal_by_name(abstract_b, "IN0"), terminal_id);
+}
+
+TEST(Database, UpdateTerminalReparentCollisionLeavesTerminalUnderOriginalAbstractUnmodified)
+{
+    Root root;
+    LibraryId library_id = root.create_library(LibraryData{.name = "LIB"});
+    DesignId design_a = root.create_design(DesignData{.library = library_id, .name = "CELL_A"});
+    DesignId design_b = root.create_design(DesignData{.library = library_id, .name = "CELL_B"});
+    AbstractId abstract_a = root.create_abstract(AbstractData{.design = design_a});
+    AbstractId abstract_b = root.create_abstract(AbstractData{.design = design_b});
+    TerminalId moving = root.create_terminal(TerminalData{.abstract = abstract_a, .name = "IN0", .direction = SignalDirection::INPUT});
+    TerminalId already_there = root.create_terminal(TerminalData{.abstract = abstract_b, .name = "IN0", .direction = SignalDirection::OUTPUT});
+
+    // Reparenting onto abstract_b must fail - it already has a sibling
+    // Terminal named "IN0" - and leave `moving` completely untouched,
+    // including its own by-name index entry under abstract_a (checked
+    // *before* any mutation happens, per Root::update_terminal's own
+    // reparent-then-rename ordering).
+    EXPECT_FALSE(root.update_terminal(moving, abstract_b, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                       std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                       std::nullopt, std::nullopt, std::nullopt));
+
+    EXPECT_EQ(root.get_terminal(moving)->abstract, abstract_a);
+    EXPECT_EQ(root.get_terminal_by_name(abstract_a, "IN0"), moving);
+    EXPECT_EQ(root.get_abstract_terminals(abstract_a), std::vector<TerminalId>{moving});
+    EXPECT_EQ(root.get_abstract_terminals(abstract_b), std::vector<TerminalId>{already_there});
+    EXPECT_EQ(root.get_terminal_by_name(abstract_b, "IN0"), already_there);
+}
+
+TEST(Database, UpdateTerminalReparentOntoItsOwnCurrentAbstractIsANoOpThatStillSucceeds)
+{
+    Root root;
+    LibraryId library_id = root.create_library(LibraryData{.name = "LIB"});
+    DesignId design_id = root.create_design(DesignData{.library = library_id, .name = "CELL"});
+    AbstractId abstract_id = root.create_abstract(AbstractData{.design = design_id});
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "IN0", .direction = SignalDirection::INPUT});
+
+    // Reparenting onto the Terminal's own current Abstract must not be
+    // treated as a self-collision against its own existing by-name entry.
+    EXPECT_TRUE(root.update_terminal(terminal_id, abstract_id, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                      std::nullopt, std::nullopt));
+
+    EXPECT_EQ(root.get_terminal(terminal_id)->abstract, abstract_id);
+    EXPECT_EQ(root.get_terminal_by_name(abstract_id, "IN0"), terminal_id);
+}
+
+TEST(Database, UpdateTerminalOnNonExistentIdReturnsFalse)
+{
+    Root root;
+    LibraryId library_id = root.create_library(LibraryData{.name = "LIB"});
+    DesignId design_id = root.create_design(DesignData{.library = library_id, .name = "CELL"});
+    AbstractId abstract_id = root.create_abstract(AbstractData{.design = design_id});
+    TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id, .name = "IN0", .direction = SignalDirection::INPUT});
+    ASSERT_TRUE(root.delete_terminal(terminal_id));
+
+    EXPECT_FALSE(root.update_terminal(terminal_id, AbstractId{}, std::string("X"), std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                       std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                                       std::nullopt, std::nullopt));
+}
+
 // get_field()/match_hop() (cmg's generic filter-expression metadata,
 // TCL_EXPLORATION.md Phase 1) are Jinja-templated C++ function templates,
 // overloaded once per generated class so a generic caller can invoke

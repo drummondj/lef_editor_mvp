@@ -3,9 +3,9 @@
 // Phase 4 CRUD/search surface and adds the one genuinely new SWIG
 // mechanism this phase needs: a custom typemap converting a Tcl list of
 // doubles into the flat `(const double*, int32_t count)` pairs
-// le_add_shape_polygon/le_add_shape_path/le_update_abstract_boundary all
-// take, so a Tcl caller passes `{0 0 10 0 10 10}` rather than
-// pre-flattening into a raw C array by hand.
+// le_add_shape_polygon/le_add_shape_path take, so a Tcl caller passes
+// `{0 0 10 0 10 10}` rather than pre-flattening into a raw C array by
+// hand.
 //
 // Wraps le_tcl_shim.hpp, not api.hpp directly - see this file's own
 // Phase 0 header comment (still accurate) for why: api.hpp's
@@ -25,7 +25,7 @@
 // already handles plain `const char*` params/returns, so this needs no
 // typemap of its own either - only the coordinate-list one below.
 //
-// `-flag value` commands (create_terminal, update_abstract_boundary,
+// `-flag value` commands (create_terminal, update_terminal,
 // add_shape_rect, ...) are declared here under their internal `*_cmd`
 // name, taking plain positional arguments - SWIG-wrapped C++ functions
 // are always positional. le_tcl_procs.tcl supplies the real, flag-
@@ -73,12 +73,8 @@
 }
 
 // Applied to every real (const double*, int32_t count) parameter pair
-// this module wraps: add_shape_polygon_cmd/add_shape_path_cmd's and
-// update_abstract_boundary_cmd's `points_um`/`point_coord_count` (see
-// le_tcl_shim.hpp - api.hpp's own `coords_um`/`coord_count` wording for
-// the boundary case was normalized to the same points_um/
-// point_coord_count names in the shim, so one %apply covers every
-// caller).
+// this module wraps: add_shape_polygon_cmd/add_shape_path_cmd's own
+// `points_um`/`point_coord_count` (see le_tcl_shim.hpp).
 %apply (const double *POINTS_ARRAY_UM, int32_t POINTS_COORD_COUNT) { (const double *points_um, int32_t point_coord_count) };
 
 int read_lef(const char *path);
@@ -96,9 +92,8 @@ const char *technology_id();
 int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
-// --- Terminal (create_terminal_cmd is generated - le_api_generated.i) ---
-int set_terminal_name(const char *id, const char *name);
-int set_terminal_direction_cmd(const char *id, int direction);
+// --- Terminal (create_terminal_cmd/update_terminal_cmd are generated -
+// le_api_generated.i) ---
 int delete_terminal(const char *id);
 
 // --- TerminalPort (create_terminal_port_cmd is generated) ---
@@ -107,13 +102,10 @@ int delete_terminal_port(const char *id);
 // --- Obstruction (create_obstruction_cmd is generated) ---
 int delete_obstruction(const char *id);
 
-// --- Abstract boundary ---
-int update_abstract_boundary_cmd(long long abstract_id, const double *points_um, int32_t point_coord_count);
-
-// --- Shape (create_shape_cmd is generated - unifies the former
-// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split) ---
+// --- Shape (create_shape_cmd/update_shape_cmd are generated - unify the
+// former create_terminal_port_shape_cmd/create_obstruction_shape_cmd
+// split) ---
 const char *shape_layer_name(const char *id);
-int set_shape_layer_name(const char *id, const char *layer_name);
 int delete_shape(const char *id);
 
 int shape_rect_count(const char *id);

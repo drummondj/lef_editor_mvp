@@ -2787,7 +2787,7 @@ TEST_F(ApiFixture, CreateTerminalWithADuplicateNameOnTheSameAbstractFailsButDiff
     EXPECT_NE(other_abstract.index, UINT32_MAX);
 }
 
-TEST_F(ApiFixture, SetTerminalNameToADuplicateOnTheSameAbstractFailsButRenamingToItsOwnCurrentNameSucceeds)
+TEST_F(ApiFixture, UpdateTerminalNameToADuplicateOnTheSameAbstractFailsButRenamingToItsOwnCurrentNameSucceeds)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
@@ -2797,8 +2797,8 @@ TEST_F(ApiFixture, SetTerminalNameToADuplicateOnTheSameAbstractFailsButRenamingT
     ASSERT_NE(first.index, UINT32_MAX);
     ASSERT_NE(second.index, UINT32_MAX);
 
-    EXPECT_NE(le_set_terminal_name(handle, second, "FIRST"), 0);
-    EXPECT_EQ(le_set_terminal_name(handle, second, "SECOND"), 0);
+    EXPECT_NE(le_update_terminal(handle, second, 0, LeAbstractId{}, "FIRST", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
+    EXPECT_EQ(le_update_terminal(handle, second, 0, LeAbstractId{}, "SECOND", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
 }
 
 TEST_F(ApiFixture, TerminalPropertyCountAndAtForUnknownIdDegradeGracefully)
@@ -2812,15 +2812,14 @@ TEST_F(ApiFixture, TerminalPropertyCountAndAtForUnknownIdDegradeGracefully)
     EXPECT_EQ(le_terminal_property_count(nullptr, bogus), 0);
 }
 
-TEST_F(ApiFixture, SetTerminalNameAndDirectionUpdateTheirProperties)
+TEST_F(ApiFixture, UpdateTerminalNameAndDirectionUpdateTheirProperties)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
     const LeTerminalId id = le_create_terminal(handle, abstract_id, "IN0", "INPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0);
     ASSERT_NE(id.index, UINT32_MAX);
 
-    EXPECT_EQ(le_set_terminal_name(handle, id, "IN0_RENAMED"), 0);
-    EXPECT_EQ(le_set_terminal_direction(handle, id, LE_SIGNAL_DIRECTION_OUTPUT), 0);
+    EXPECT_EQ(le_update_terminal(handle, id, 0, LeAbstractId{}, "IN0_RENAMED", "OUTPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
 
     const int32_t count = le_terminal_property_count(handle, id);
     bool checked_name = false, checked_direction = false;
@@ -2842,14 +2841,17 @@ TEST_F(ApiFixture, SetTerminalNameAndDirectionUpdateTheirProperties)
     EXPECT_TRUE(checked_direction);
 }
 
-TEST_F(ApiFixture, SetTerminalNameAndDirectionWithNullHandleOrUnknownIdReturnNonzero)
+TEST_F(ApiFixture, UpdateTerminalWithNullHandleOrUnknownIdReturnsNonzero)
 {
     const LeTerminalId bogus{.index = UINT32_MAX, .generation = 0};
-    EXPECT_NE(le_set_terminal_name(nullptr, bogus, "X"), 0);
-    EXPECT_NE(le_set_terminal_name(handle, bogus, nullptr), 0);
-    EXPECT_NE(le_set_terminal_name(handle, bogus, "X"), 0);
-    EXPECT_NE(le_set_terminal_direction(nullptr, bogus, LE_SIGNAL_DIRECTION_OUTPUT), 0);
-    EXPECT_NE(le_set_terminal_direction(handle, bogus, LE_SIGNAL_DIRECTION_OUTPUT), 0);
+    // le_update_terminal(handle, id, has_abstract, abstract_id, name,
+    // direction, shape, use, must_join, net_expr, leq, taper_rule,
+    // supply_sensitivity, ground_sensitivity, has_rise_slew_limit,
+    // rise_slew_limit, has_fall_slew_limit, fall_slew_limit, has_max_load,
+    // max_load, has_max_delay, max_delay) - see declarations.inc.
+    EXPECT_NE(le_update_terminal(nullptr, bogus, 0, LeAbstractId{}, "X", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
+    EXPECT_NE(le_update_terminal(handle, bogus, 0, LeAbstractId{}, "X", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
+    EXPECT_NE(le_update_terminal(handle, bogus, 0, LeAbstractId{}, nullptr, "OUTPUT", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0.0, 0, 0.0, 0, 0.0, 0, 0.0), 0);
 }
 
 TEST_F(ApiFixture, DeleteTerminalRemovesItAndIsIdempotentlySafeAfterwards)
@@ -3078,28 +3080,6 @@ TEST_F(ApiFixture, SearchObstructionFindsMatchesByLayerName)
     EXPECT_EQ(le_search_result_obstruction_at(handle, 0).index, matching.index);
 }
 
-TEST_F(ApiFixture, UpdateAbstractBoundaryWithNullHandleOrCoordsOrTooFewOrOddPointsReturnsNonzero)
-{
-    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
-    const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    constexpr double triangle[] = {0.0, 0.0, 1.0, 0.0, 0.5, 1.0};
-
-    EXPECT_NE(le_update_abstract_boundary(nullptr, abstract_id, triangle, 6), 0);
-    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, nullptr, 6), 0);
-    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, triangle, 4), 0);  // fewer than 3 points
-    EXPECT_NE(le_update_abstract_boundary(handle, abstract_id, triangle, 5), 0);  // odd (not x/y pairs)
-    EXPECT_NE(le_update_abstract_boundary(handle, LeAbstractId{.index = UINT32_MAX, .generation = 0}, triangle, 6), 0);
-}
-
-TEST_F(ApiFixture, UpdateAbstractBoundaryWithAValidPolygonSucceeds)
-{
-    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
-    const LeAbstractId abstract_id = testcell_abstract_id(handle);
-    constexpr double square[] = {0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0};
-
-    EXPECT_EQ(le_update_abstract_boundary(handle, abstract_id, square, 8), 0);
-}
-
 // --- Shape CRUD, addressed by a stable id (Phase 4, continued). Rects,
 // polygons, and paths are all created/read/removed via their own
 // symmetric set of calls - none baked into creation, matching the design
@@ -3158,7 +3138,7 @@ TEST_F(ApiFixture, ObstructionShapeCountAndAtEnumerateAndReadBackWhatWasCreated)
     EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M5");
 }
 
-TEST_F(ApiFixture, SetShapeLayerNameRenamesWithoutTouchingGeometryOrParent)
+TEST_F(ApiFixture, UpdateShapeLayerNameRenamesWithoutTouchingGeometryOrParent)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
@@ -3166,7 +3146,7 @@ TEST_F(ApiFixture, SetShapeLayerNameRenamesWithoutTouchingGeometryOrParent)
     const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
     ASSERT_NE(shape_id.index, UINT32_MAX);
 
-    EXPECT_EQ(le_set_shape_layer_name(handle, shape_id, "M6"), 0);
+    EXPECT_EQ(le_update_shape(handle, shape_id, "M6", 0, 0.0, 0, 0.0, 0, 0), 0);
 
     EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M6");
     ASSERT_EQ(le_shape_rect_count(handle, shape_id), 1); // untouched
@@ -3178,7 +3158,7 @@ TEST_F(ApiFixture, SetShapeLayerNameRenamesWithoutTouchingGeometryOrParent)
     EXPECT_EQ(le_obstruction_shape_at(handle, obstruction_id, 0).index, shape_id.index);
 }
 
-TEST_F(ApiFixture, SetShapeLayerNameWithNullHandleOrLayerNameOrUnknownIdReturnsNonzero)
+TEST_F(ApiFixture, UpdateShapeLayerNameWithNullHandleOrUnknownIdReturnsNonzero)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
@@ -3186,9 +3166,8 @@ TEST_F(ApiFixture, SetShapeLayerNameWithNullHandleOrLayerNameOrUnknownIdReturnsN
     const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
     ASSERT_NE(shape_id.index, UINT32_MAX);
 
-    EXPECT_NE(le_set_shape_layer_name(nullptr, shape_id, "M6"), 0);
-    EXPECT_NE(le_set_shape_layer_name(handle, shape_id, nullptr), 0);
-    EXPECT_NE(le_set_shape_layer_name(handle, LeShapeId{.index = UINT32_MAX, .generation = 0}, "M6"), 0);
+    EXPECT_NE(le_update_shape(nullptr, shape_id, "M6", 0, 0.0, 0, 0.0, 0, 0), 0);
+    EXPECT_NE(le_update_shape(handle, LeShapeId{.index = UINT32_MAX, .generation = 0}, "M6", 0, 0.0, 0, 0.0, 0, 0), 0);
 
     EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M4"); // untouched
 }

@@ -175,15 +175,24 @@ none of these are duplicated here.
   see `le_tcl_shim.hpp`'s own "IDs" comment) instead of raw `Le*Id` structs.
   `le_shell` (Tcl_Main-based) and any `tclsh` can both load `le_tcl.so` and
   source `le_tcl_procs.tcl`. Property *reading* (property tables,
-  friendly-id resolution, `is_child` enumeration), `get_<type>` search, and
-  `create_<type>` are all generated uniformly for every TCL-readable class —
-  see "TCL codegen" below; only `delete_X`/`set_X_<field>` stay hand-written,
-  currently for `Terminal`/`TerminalPort`/`Obstruction`/`Shape` (+
-  `Abstract`'s boundary) — the classes this MVP actually edits at all beyond
+  friendly-id resolution, `is_child` enumeration), `get_<type>` search,
+  `create_<type>`, and `update_<type>` are all generated uniformly for every
+  TCL-readable class — see "TCL codegen" below. `update_<type>` is the
+  *only* way any field is ever mutated after creation — there is no
+  generated or hand-written per-field setter reachable from TCL (a
+  narrower, pre-existing generated `Root::set_<klass>_<field>()` still
+  exists at the C++ `Root` layer for fields with `.parent`/`.index` set,
+  but nothing calls it — see "Database codegen" below). Only `delete_X`
+  stays hand-written, currently for `Terminal`/`TerminalPort`/
+  `Obstruction`/`Shape` — the classes this MVP actually edits at all beyond
   creation, not read-only LEF technology reference data (`Technology`/
-  `Layer`/`Via`/...), which nonetheless still gets a generated `create_<type>`
-  like every other class (nothing calls it today, but it costs nothing extra
-  to generate uniformly). Fully covered by
+  `Layer`/`Via`/...), which nonetheless still gets a generated
+  `create_<type>`/`update_<type>` pair like every other class (nothing calls
+  either today, but it costs nothing extra to generate uniformly).
+  `Abstract.boundary` (a list field) has no update path — list-field
+  mutation is a future round's scope, same as `Shape`'s own rects/
+  polygons/paths, which keep their own separate hand-written CRUD instead.
+  Fully covered by
   `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl` (run via
   `tclsh8.6`, not the generic `tclsh` — see the `build-test` skill).
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
@@ -211,7 +220,21 @@ formatting — see `codegen/codegen/schema.py`'s `TYPEMAP` and
   slot array, so erased objects can't alias a reused slot.
 - `Root` (`generated/root.hpp`) owns every pool plus an `index_` for
   parent→children and lookup-by-field indices, and exposes
-  `create_x`/`get_x`/`get_x_ids`/`for_each_x_id`/`clear_x`/`get_x_size` per class.
+  `create_x`/`get_x`/`get_x_ids`/`for_each_x_id`/`clear_x`/`get_x_size` per
+  class, plus `update_x` (see `Klass.update_root_body()`,
+  `codegen/codegen/schema.py`) — the *only* place a pool-backed class's
+  fields are ever mutated after creation. Every parameter beyond the id
+  (and, for a single-parent class, the parent) is `std::optional<T>`;
+  `has_value()` means "apply this field", omitted means "leave unchanged" —
+  the opposite of `create_x`'s own "omitted means unset" `XxxData`
+  convention. A single-parent class's `update_x` can also reassign the
+  parent (with correct index maintenance, including moving a
+  `unique_per_parent` field's own sibling bucket to the new parent — a gap
+  the older, narrower `set_x_<field>` below has always had); a
+  multi-parent class (`Shape`, `ViaLayer`, `Foreign`,
+  `LayerDensityEntry`) gets no parent parameter at all, since reassigning
+  one parent field alone would violate its "exactly one parent set"
+  invariant.
 
 A field's `has_pool` defaults `True` — a `Klass` is embedded (a plain value
 type inline in its owner's `XxxData`, e.g. `Point`/`Rect`/`Symmetry`) only by
@@ -235,7 +258,14 @@ not globally — real LEF libraries reuse pin names like VDD/IN0 across
 different Abstracts) — see `Field.unique_per_parent`'s own docstring in
 `codegen/codegen/schema.py` for the full mechanism (nested index shape,
 `create_x`/`set_x_<field>`/`delete_x` bookkeeping, the `get_x_by_<field>`
-accessor's parent-scoped signature).
+accessor's parent-scoped signature). `set_x_<field>` here is the older,
+narrower per-field setter still generated for any field with `.parent`/
+`.index` set (`root_hpp_j2.py`'s own `{%- if field.parent or field.index
+%}` gate) — nothing calls it anymore (superseded by `update_x` above,
+which alone handles reparenting *and* a `unique_per_parent` rename
+correctly together in one call); it stays generated, untouched, purely as
+a documented characteristic of this codegen fork, not a mutation path
+this project's own code still uses.
 
 To change the schema: edit `src/database/schema.py`, bump `Schema.version`
 (only needed for a real field/class shape change, not a pure codegen-side
@@ -260,11 +290,10 @@ skill, not `regen-database`) — covers `src/tcl/`'s property-*reading*,
 `create_<type>` command by default (`Klass.tcl_readable`/`Klass.tcl_id_field`
 in `codegen/codegen/schema.py` — see the `regen-tcl` skill for the opt-out/
 override mechanics and the full list of injection points) — uniformly
-across all ~35 classes today (including `Terminal`/`TerminalPort`/
-`Obstruction`/`Shape`, whose `create_X` used to be hand-written —
-`codegen/codegen/tcl_generator.py`'s `HAND_WRITTEN_CRUD_CLASSES` now only
-documents which classes *also* have hand-written `delete_X`/`set_X_<field>`,
-not `create_X` anymore, and not an exclusion set for this target in general).
+across all ~35 classes today, including `Terminal`/`TerminalPort`/
+`Obstruction`/`Shape`, the only four classes that still have any
+hand-written CRUD elsewhere (`delete_X` — their `create_X`/per-field
+setters are gone too, superseded by `update_<type>`, see above).
 `Klass.has_current_access = True` (`Technology`/`Abstract`/`Schematic`) marks
 a class with a generated "current instance" concept (`current_X`/
 `set_current_X` — independent of any other "current view" state elsewhere,
@@ -275,24 +304,42 @@ from automatically, purely from schema graph structure — see
 the `regen-tcl` skill for the full injection-point list.
 
 `create_<type>` covers one flag per scalar field (`str`/`int`/`double`/
-`dbu`/`bool`/enum) — `is_child`/`is_list` fields and embedded-struct-typed
-fields stay out of scope (a future `add_X`/`set_X` round, matching how
-`Shape`'s own rect/polygon/path CRUD is already separate from
-`create_shape`). A flag is required iff `Field.create_required()` (mirrors
-`is_optional`, except `bool` is always optional — `false` is already a
-zero-cost "not specified" default, so requiring every boolean flag on every
-call would be pure noise); an *omitted* optional flag ends up genuinely
+`dbu`/`bool`/enum) plus one flag per *flattenable* embedded-struct field
+(`Point`/`Rect`/`Symmetry`/`DensityCheckWindow`/... — see
+`Klass.embedded_scalar_leaves()`; the one embedded struct that isn't
+flattenable, `ParallelRunLengthSpacingTable`, a genuine variable-size
+table, stays out of scope). `is_child`/`is_list` fields stay out of scope
+entirely (a future `add_X`/`set_X` round, matching how `Shape`'s own
+rect/polygon/path CRUD is already separate from `create_shape`/
+`update_shape`). A flag is required iff `Field.create_required()` (mirrors
+`is_optional`, except `bool` and compound fields are always optional —
+`false` is already a zero-cost "not specified" default for `bool`, and a
+compound field's own `is_optional` is frequently just a scoping accident
+from an earlier round, not a deliberate LEF-syntax judgment; requiring
+either would be pure noise); an *omitted* optional flag ends up genuinely
 unset (`std::nullopt`), not a zero-value default — a `str`/enum field passes
 `nullptr` through the C layer (Tcl can't produce a null `const char*`
 directly, so an empty string is treated as "omitted", the same convention
 this codebase's hand-written `-flag` parsing already used before this
-generator existed), a numeric field gets a companion `has_<field>` int32.
-`dbu` fields cross the C boundary in microns (`<field>_um`, converted via
+generator existed), a numeric or compound field gets a companion
+`has_<field>` int32. `dbu` fields (plain or nested inside a compound one)
+cross the C boundary in microns (`<field>_um`, converted via
 `database_units_microns()`/`to_dbu()`), and an enum field crosses as its
 `to_string()`/`from_string()` spelling (e.g. `"INPUT"`, parsed via the
 matching generated `<enum>_from_string()` — see `enum_hpp_j2.py` — not a raw
-numeric code). A multi-parent class (`Shape.terminal_port`/`.obstruction`,
-`ViaLayer`, `Foreign`, `LayerDensityEntry`'s `ac_layer`/`dc_layer`) takes one
+numeric code). A compound field explodes into one C slot per scalar leaf
+(`Point` → 2 doubles, `Rect` → 4, `Symmetry` → 3 `int32_t` flags) rather
+than reusing the existing `POINTS_ARRAY_UM` variable-length coordinate-list
+typemap (`le_api.i`) — a wrong-arity flag (`-size {1 2 3}`) then fails with
+a real, flag-naming Tcl error instead of deep inside C++ with no context; a
+`Symmetry`-shaped field instead takes a case-insensitive keyword set
+(`-symmetry {X Y R90}`, mirroring LEF's own `SYMMETRY X Y R90 ;` grammar).
+`Klass.cmd_tcl_preamble(mode)` generates the Tcl-side arity/keyword-set
+parsing (shared between `create_<type>` and `update_<type>`); `Field.
+cmd_param_slots(mode)` is the single place "one field → one or more C
+slots" is defined, so a signature can't drift from a call site. A
+multi-parent class (`Shape.terminal_port`/`.obstruction`, `ViaLayer`,
+`Foreign`, `LayerDensityEntry`'s `ac_layer`/`dc_layer`) takes one
 `Le<Parent>Id`/token flag per parent field, generically validated to require
 *exactly one* resolving (not zero, not both) — this is what unified the
 formerly hand-written `create_terminal_port_shape`/`create_obstruction_shape`
@@ -301,8 +348,23 @@ this construction logic (per-field validation, the exactly-one-parent check,
 the `<Klass>Data{...}` initializer) is built as one Python string in
 `Klass.create_api_body()` (`codegen/codegen/schema.py`), not deeply nested
 Jinja — the per-field-type/optionality branching reads far more clearly as
-real Python control flow. `delete_X`/`set_X_<field>` stay a separate,
-not-yet-built effort.
+real Python control flow.
+
+`update_<type>` mirrors `create_<type>`'s own flag set field-for-field
+(`Klass.update_api_body()`/`update_root_body()`), but every flag's own
+meaning flips: omitted means *leave unchanged*, not *unset* — so every
+field gets a `has_<field>`-shaped "was this provided" signal here (even
+`bool`, which doesn't need one in `create_<type>`), and nothing is ever
+required. A single-parent class also accepts an optional parent flag to
+reassign it (a multi-parent class gets none at all — see "Database
+codegen" above for why); a `unique_per_parent` field can be renamed and
+reparented in the same call, with the reparent applied first so the
+rename's own sibling-collision check already reflects the new parent.
+`update_<type>` is the *only* way any field is ever mutated after
+creation — see the `src/tcl/` bullet above for the "no per-field setters
+anywhere" constraint this enforces. `delete_X` stays a separate,
+hand-written concern; list-field mutation (`Abstract.boundary`, `Shape`'s
+own rects/polygons/paths) stays a separate, not-yet-built effort.
 
 ## Open gaps (tracked in README's Plan checklist)
 

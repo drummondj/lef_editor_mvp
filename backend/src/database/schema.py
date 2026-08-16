@@ -4,7 +4,7 @@ schema = Schema(
     name="layout_engine",
     description="Layout Engine Database Schema",
     namespace="le",
-    version="0.30.0",
+    version="0.31.0",
     classes=[
         Klass(
             name="Technology",
@@ -653,7 +653,7 @@ schema = Schema(
             fields=[
                 Field(name="abstract", description="Parent abstract", type="Abstract", parent="site_placements"),
                 Field(name="site_name", description="The name of the site", type="str", example="CORE"),
-                Field(name="origin", description="In database units", type="Point"),
+                Field(name="origin", description="In database units - always set when a placement exists (is_optional=True only so create_macro_site_placement's -origin flag can be genuinely omittable at creation, per this schema's compound-field convention - see Field.is_compound_create_field())", type="Point", is_optional=True),
                 Field(name="orient", description="The orientation of this placement", type="Orientation"),
                 Field(name="num_x", description="Optional LEF DO n", type="int", example=2, is_optional=True),
                 Field(name="num_y", description="Optional LEF BY m", type="int", example=2, is_optional=True),
@@ -674,7 +674,7 @@ schema = Schema(
                 Field(name="name", description="The name of the site", type="str", example="CORE", index=True),
                 Field(name="site_class", description="PAD, CORE, VIRTUAL, or unset (LEF CLASS)", type="str", example="CORE", is_optional=True),
                 Field(name="size", description="The site size, in database units (LEF SIZE)", type="Point", is_optional=True),
-                Field(name="symmetry", description="Which flips/rotations this site allows (LEF SYMMETRY)", type="Symmetry"),
+                Field(name="symmetry", description="Which flips/rotations this site allows (LEF SYMMETRY) - is_optional=True only so create_site's -symmetry flag can be genuinely omittable, per this schema's compound-field convention (Field.is_compound_create_field()); a real SYMMETRY statement with no flags set is indistinguishable from an omitted one either way", type="Symmetry", is_optional=True),
                 Field(name="row_pattern", description="An ordered list of other-site references this site is built from (LEF ROWPATTERN, 5.6)", type="RowPatternEntry", is_list=True),
                 Field(name="properties", description="PROPERTY attachments (LEF PROPERTY) - readable, but never written: the vendored writer's generic property functions don't accept SITE's own write-state (see write_sites's own comment)", type="LefProperty", is_list=True),
             ],
@@ -897,8 +897,9 @@ schema = Schema(
                 ),
                 Field(
                     name="cut_size",
-                    description="The cut size, in database units (LEF CUTSIZE)",
+                    description="The cut size, in database units (LEF CUTSIZE) - always set when a ViaRuleReference exists (is_optional=True only so create_via_rule_reference's flag can be genuinely omittable, per this schema's compound-field convention)",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="bot_layer_name",
@@ -920,18 +921,21 @@ schema = Schema(
                 ),
                 Field(
                     name="cut_spacing",
-                    description="The cut spacing, in database units (LEF CUTSPACING)",
+                    description="The cut spacing, in database units (LEF CUTSPACING) - is_optional=True per cut_size's own note",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="bot_enclosure",
-                    description="The bottom layer enclosure, in database units (LEF ENCLOSURE, bottom pair)",
+                    description="The bottom layer enclosure, in database units (LEF ENCLOSURE, bottom pair) - is_optional=True per cut_size's own note",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="top_enclosure",
-                    description="The top layer enclosure, in database units (LEF ENCLOSURE, top pair)",
+                    description="The top layer enclosure, in database units (LEF ENCLOSURE, top pair) - is_optional=True per cut_size's own note",
                     type="Point",
+                    is_optional=True,
                 ),
             ],
         ),
@@ -1660,18 +1664,21 @@ schema = Schema(
                 ),
                 Field(
                     name="size",
-                    description="The width and height of the block",
+                    description="The width and height of the block - is_optional=True only so create_abstract's -size flag can be genuinely omittable at creation, per this schema's compound-field convention (Field.is_compound_create_field()) - a real Abstract's size is still expected to be meaningfully set, just not necessarily known at creation time (e.g. before its geometry exists)",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="origin",
-                    description="The original of the block",
+                    description="The original of the block - is_optional=True per size's own note",
                     type="Point",
+                    is_optional=True,
                 ),
                 Field(
                     name="bbox",
-                    description="The bbox of the boundary",
+                    description="The bbox of the boundary - is_optional=True per size's own note",
                     type="Rect",
+                    is_optional=True,
                 ),
                 Field(
                     name="boundary",
@@ -1681,8 +1688,9 @@ schema = Schema(
                 ),
                 Field(
                     name="symmetry",
-                    description="The symmetry of the abstract",
+                    description="The symmetry of the abstract - is_optional=True per size's own note",
                     type="Symmetry",
+                    is_optional=True,
                 ),
                 Field(
                     name="site",

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 import os
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 """
 Define the type map for C++ types: https://en.cppreference.com/w/cpp/language/types
@@ -50,6 +50,49 @@ TYPEMAP = {
     # count/int without guessing from the C++ type name.
     "dbu": ("int64_t", int),
 }
+
+
+def _leaf_c_type(leaf: "Field") -> str:
+    """
+    The TCL/API-layer C type of one flattened scalar leaf of a compound
+    (embedded-struct) create field - see Klass.embedded_scalar_leaves().
+    Leaves are always dbu/int/double/bool (embedded_scalar_leaves()
+    already rejects str/enum/reference leaves), so this is a narrow
+    subset of Field.create_c_type()'s own mapping, not a duplicate of it.
+    """
+    if leaf.type == "dbu":
+        return "double"
+    if leaf.type in ("int", "bool"):
+        return "int32_t"
+    if leaf.type == "double":
+        return "double"
+    raise ValueError(f"_leaf_c_type: unsupported compound-leaf type {leaf.type!r} on field {leaf.name!r}")
+
+
+def _leaf_param_name(field_name: str, flat: str, leaf: "Field") -> str:
+    """
+    The C-level parameter name for one flattened scalar leaf of a compound
+    create field, e.g. Abstract.bbox's ur_y leaf -> "bbox_ur_y_um" (dbu
+    leaves get the same _um suffix Field.create_c_param_name() already
+    uses for a plain dbu field, matching le_add_shape_rect's own
+    ll_x_um/.../ur_y_um convention).
+    """
+    return f"{field_name}_{flat}_um" if leaf.type == "dbu" else f"{field_name}_{flat}"
+
+
+def _leaf_value_expr(leaf: "Field", param: str) -> str:
+    """
+    The api.cpp-layer expression converting one flattened scalar leaf's
+    raw C-API parameter into its final typed C++ value - to_dbu(...) for
+    a dbu leaf (assumes a local `dbu_per_um` already exists, same
+    assumption Field.create_struct_init_expr()'s own dbu branch makes),
+    a != 0 bool coercion, or identity.
+    """
+    if leaf.type == "dbu":
+        return f"to_dbu({param}, *dbu_per_um)"
+    if leaf.type == "bool":
+        return f"{param} != 0"
+    return param
 
 
 def to_snake_case(name: str) -> str:
@@ -309,6 +352,12 @@ class Klass:
     has_current_access: bool = False
 
     _schema: Optional[Schema] = field(default=None, repr=False, init=False)
+    # Memoizes embedded_scalar_leaves() - False (not None) means "computed,
+    # and this Klass is not flattenable" (None means "not computed yet"),
+    # since None is also embedded_scalar_leaves()'s own "not flattenable"
+    # return value and can't double as the unpopulated-cache sentinel too.
+    _leaves_cache: Any = field(default=None, repr=False, init=False, compare=False)
+    _leaves_cache_set: bool = field(default=False, repr=False, init=False, compare=False)
 
     def is_tcl_readable(self) -> bool:
         """
@@ -411,6 +460,67 @@ class Klass:
         """
         return [f for f in self.fields if f.has_parent()]
 
+    def embedded_scalar_leaves(self) -> Optional[List[Tuple[str, "Field"]]]:
+        """
+        Every recursively-reached scalar leaf of this embedded
+        (has_pool=False, non-enum) Klass, as (flat_name, leaf_field) pairs
+        in declaration order - Point -> [("x", x), ("y", y)]; Rect ->
+        [("ll_x", Point.x), ("ll_y", Point.y), ("ur_x", ...), ("ur_y",
+        ...)]; Symmetry -> [("r90", r90), ("x", x), ("y", y)].
+
+        Returns None (= "not flattenable, out of create_<type>/
+        update_<type>'s compound-field scope") if any field, at any depth,
+        is is_list/is_optional/is_child/has_parent()/references a pooled
+        Klass/is an enum. The only embedded struct reachable singularly
+        from a pool-backed Klass that this currently rejects is
+        ParallelRunLengthSpacingTable (three dbu *lists* - a genuine
+        variable-size table, not a fixed record).
+        """
+        if self._leaves_cache_set:
+            return self._leaves_cache
+
+        def compute() -> Optional[List[Tuple[str, "Field"]]]:
+            leaves: List[Tuple[str, "Field"]] = []
+            for f in self.fields:
+                if f.is_list or f.is_optional or f.is_child or f.has_parent():
+                    return None
+                tk = f._type_klass
+                if tk is not None and tk.is_enum:
+                    return None
+                if tk is not None:
+                    if tk.has_pool:
+                        return None
+                    sub = tk.embedded_scalar_leaves()
+                    if sub is None:
+                        return None
+                    leaves.extend((f"{f.name}_{flat}", leaf) for flat, leaf in sub)
+                    continue
+                leaves.append((f.name, f))
+            return leaves
+
+        result = compute()
+        self._leaves_cache = result
+        self._leaves_cache_set = True
+        return result
+
+    def compound_leaf_kind(self) -> str:
+        """
+        "numeric" if every leaf of embedded_scalar_leaves() is
+        dbu/int/double (Point/Rect/DensityCheckWindow), "flags" if every
+        leaf is bool (Symmetry). Raises if the leaves are mixed - no flag
+        spelling is designed for a struct that's part coordinates and
+        part switches, and none exists in the schema today.
+        """
+        leaves = self.embedded_scalar_leaves()
+        if not leaves:
+            raise ValueError(f"compound_leaf_kind: {self.name} has no flattenable leaves")
+        types = {leaf.type for _, leaf in leaves}
+        if types <= {"dbu", "int", "double"}:
+            return "numeric"
+        if types == {"bool"}:
+            return "flags"
+        raise ValueError(f"compound_leaf_kind: {self.name} has mixed leaf types {types!r} - no flag convention designed for this")
+
     def get_create_fields(self) -> List["Field"]:
         """
         Every field that gets its own flag on this class's generated
@@ -428,21 +538,41 @@ class Klass:
         """
         return [f for f in self.fields if f.unique_per_parent]
 
+    def _create_field_param_parts(self, mode: str) -> List[str]:
+        """
+        "<type> <name>" declaration fragments for every create field's own
+        slot(s) (Field.cmd_param_slots(mode)), in order - shared by
+        create_api_params/create_shim_params (mode="create") and
+        update_api_params/update_shim_params (mode="update"). Parent-field
+        parts are each aggregator's own concern (the shape differs too
+        much between create's "always every parent, required" and
+        update's "at most one, optional" to share here).
+        """
+        parts = []
+        for f in self.get_create_fields():
+            for ctype, pname in f.cmd_param_slots(mode):
+                parts.append(f"{ctype}{pname}" if ctype.endswith("*") else f"{ctype} {pname}")
+        return parts
+
+    def _create_field_forward_parts(self, mode: str) -> List[str]:
+        """Forwarding-argument counterpart of _create_field_param_parts()."""
+        parts = []
+        for f in self.get_create_fields():
+            parts.extend(f.cmd_forward_exprs(mode))
+        return parts
+
     def create_api_params(self) -> str:
         """
         Full comma-joined parameter list (excluding the leading
         LeHandle*) for this class's generated le_create_<type> - one
         Le<Parent>Id per parent field (get_parent_fields(), usually one,
         more for a multi-parent class like Shape/ViaLayer/Foreign/
-        LayerDensityEntry), then each create field's own value-slot
-        parameter (plus a has_<field> companion for the optional numeric
-        ones - see Field.create_needs_has_flag()).
+        LayerDensityEntry), then each create field's own slot(s) (plus a
+        has_<field> companion for the ones that need one - see
+        Field.create_needs_has_flag()).
         """
         parts = [f"Le{pf.type}Id {pf.name}_id" for pf in self.get_parent_fields()]
-        for f in self.get_create_fields():
-            if f.create_needs_has_flag():
-                parts.append(f"int32_t has_{f.name}")
-            parts.append(f.create_c_param_decl())
+        parts += self._create_field_param_parts("create")
         return ", ".join(parts)
 
     def create_shim_params(self) -> str:
@@ -460,10 +590,7 @@ class Klass:
         are being replaced, not extended).
         """
         parts = [f"const char *{pf.name}_id" for pf in self.get_parent_fields()]
-        for f in self.get_create_fields():
-            if f.create_needs_has_flag():
-                parts.append(f"int32_t has_{f.name}")
-            parts.append(f.create_c_param_decl())
+        parts += self._create_field_param_parts("create")
         return ", ".join(parts)
 
     def create_shim_forward_args(self) -> str:
@@ -472,14 +599,11 @@ class Klass:
         (create_shim_params()'s own parameter names) to le_create_<type>
         (create_api_params()) - each parent token resolved via
         resolve_<parent_klass>_id(), each create field forwarded via its
-        own Field.create_forward_expr() (identity for numeric fields,
-        empty-to-nullptr for an optional str/enum field).
+        own Field.cmd_forward_exprs() (identity for numeric/compound-leaf
+        slots, empty-to-nullptr for an optional str/enum field).
         """
         parts = [f"resolve_{pf._parent_klass.to_snake_case()}_id({pf.name}_id)" for pf in self.get_parent_fields()]
-        for f in self.get_create_fields():
-            if f.create_needs_has_flag():
-                parts.append(f"has_{f.name}")
-            parts.append(f.create_forward_expr())
+        parts += self._create_field_forward_parts("create")
         return ", ".join(parts)
 
     def create_api_body(self) -> str:
@@ -507,7 +631,7 @@ class Klass:
         parent_fields = self.get_parent_fields()
         create_fields = self.get_create_fields()
         enum_fields = [f for f in create_fields if f.is_enum_type()]
-        dbu_fields = [f for f in create_fields if f.type == "dbu"]
+        dbu_fields = [f for f in create_fields if f.cmd_uses_dbu()]
         unique_fields = self.get_unique_per_parent_fields()
 
         add(f"const Le{self.name}Id invalid{{.index = UINT32_MAX, .generation = 0}};")
@@ -516,7 +640,10 @@ class Klass:
         for f in create_fields:
             if (f.type == "str" or f.is_enum_type()) and f.create_required():
                 add(f"if (!{f.create_c_param_name()})")
+                add("{")
+                add(f'    handle->messages.push_back(fmt::format("ERROR: le_create_{snake}: {f.name} is required"));')
                 add("    return invalid;")
+                add("}")
         add("std::lock_guard<std::mutex> lock(handle->mutex_);")
 
         if parent_fields:
@@ -526,7 +653,10 @@ class Klass:
             if len(parent_fields) == 1:
                 pf = parent_fields[0]
                 add(f"if (!handle->root.get_{pf._parent_klass.to_snake_case()}({pf.name}))")
+                add("{")
+                add(f'    handle->messages.push_back(fmt::format("ERROR: le_create_{snake}: unknown {pf.name} - no such {pf.type} exists"));')
                 add("    return invalid;")
+                add("}")
             else:
                 add("// Exactly one parent must resolve - a {} belongs to exactly one of these, never zero or several (see its own schema.py comment).".format(self.name))
                 add("int32_t provided_parent_count = 0;")
@@ -534,7 +664,14 @@ class Klass:
                     add(f"if (handle->root.get_{pf._parent_klass.to_snake_case()}({pf.name}))")
                     add("    ++provided_parent_count;")
                 add("if (provided_parent_count != 1)")
+                add("{")
+                add(
+                    f'    handle->messages.push_back(fmt::format("ERROR: le_create_{snake}: exactly one of '
+                    f'{"/".join(p.name for p in parent_fields)} must resolve to a valid parent, got {{}}", '
+                    f'provided_parent_count));'
+                )
                 add("    return invalid;")
+                add("}")
 
         if enum_fields:
             add()
@@ -559,7 +696,10 @@ class Klass:
             add()
             add("const std::optional<double> dbu_per_um = database_units_microns(handle->root);")
             add("if (!dbu_per_um)")
+            add("{")
+            add(f'    handle->messages.push_back(fmt::format("ERROR: le_create_{snake}: no Technology has been read yet (needed for micron-to-dbu conversion)"));')
             add("    return invalid;")
+            add("}")
 
         add()
         add(f"const le::{self.name}Id created = handle->root.create_{snake}(le::{self.name}Data{{")
@@ -611,17 +751,451 @@ class Klass:
         parts += [f"-{f.name}" for f in self.get_create_fields() if f.create_required()]
         return " ".join(parts)
 
+    def create_tcl_current_defaults(self) -> str:
+        """
+        Generated Tcl statements for the create_<type> {args} proc,
+        emitted after flag parsing and before the required-flags/
+        exactly-one-parent checks - default an omitted parent flag to
+        current_<parent_klass> (an already-generated, no-arg Tcl command,
+        e.g. `current_abstract`) whenever that parent Klass has
+        has_current_access=True, so e.g. create_terminal's own -abstract
+        flag needs no explicit value once set_current_abstract has been
+        called, the same way get_terminals' own default (-of omitted)
+        scope already derives from current_abstract (see tcl_scope.py's
+        own module docstring). Still just a *default* - an explicitly
+        passed flag always wins (only substituted when the flag is
+        empty), and create_<type>'s own required-flag check still fires
+        afterward if current_<parent_klass> is itself unset, so a
+        genuinely missing parent is still a clear error, not a silent
+        invalid-parent create.
+
+        For a multi-parent class (Shape/ViaLayer/Foreign/
+        LayerDensityEntry), the default only applies when every *other*
+        parent flag was also left empty - an explicitly-provided sibling
+        parent flag (e.g. -via) must never be silently overridden by a
+        current-access default for a *different* parent (e.g. -abstract
+        on Foreign), which would otherwise turn a call that only ever
+        meant to provide one parent into a spurious "exactly one parent
+        must resolve, got 2" failure.
+        """
+        parent_fields = self.get_parent_fields()
+        lines = []
+        for pf in parent_fields:
+            if not pf._parent_klass.has_current_access:
+                continue
+            others = [p for p in parent_fields if p is not pf]
+            condition = " && ".join([f"$opts(-{pf.name}) eq {{}}"] + [f"$opts(-{o.name}) eq {{}}" for o in others])
+            lines.append(f"    if {{{condition}}} {{")
+            lines.append(f"        set opts(-{pf.name}) [current_{pf._parent_klass.to_snake_case()}]")
+            lines.append("    }")
+        return "\n".join(lines)
+
     def create_tcl_call_args(self) -> str:
         """
         Space-joined Tcl argument list for calling create_<type>_cmd from
         this class's own create_<type> {args} proc, in create_shim_params()
         order - `$opts(-<parent_field>)` per parent token, then each
-        create field's own Field.create_tcl_call_args().
+        create field's own Field.cmd_tcl_call_args("create").
         """
         parts = [f"$opts(-{pf.name})" for pf in self.get_parent_fields()]
         for f in self.get_create_fields():
-            parts.extend(f.create_tcl_call_args())
+            parts.extend(f.cmd_tcl_call_args("create"))
         return " ".join(parts)
+
+    def cmd_tcl_preamble(self, mode: str) -> str:
+        """
+        Generated Tcl statements, emitted after flag parsing and before
+        the _cmd call, that turn every compound create field's own Tcl
+        list flag value into its has-flag + leaf-parameter locals (see
+        Field.cmd_tcl_preamble()) - shared verbatim between create_<type>
+        and update_<type> generation. Empty string if this class has no
+        compound create fields.
+        """
+        cmd_name = f"{mode}_{self.to_snake_case()}"
+        lines = [f.cmd_tcl_preamble(mode, cmd_name) for f in self.get_create_fields() if f.compound_klass() is not None]
+        return "\n".join(line for line in lines if line)
+
+    def update_api_params(self) -> str:
+        """
+        Full comma-joined parameter list (excluding the leading
+        LeHandle*) for this class's generated le_update_<type> -
+        Le<Klass>Id id, then (iff this class has exactly one parent
+        field) a has_<parent>/Le<Parent>Id pair letting the caller
+        reassign it, then every create field's own slot(s) via
+        Field.cmd_param_slots("update") - every field gets a has-flag
+        (or, for str/enum, relies on the same nullptr-means-omitted
+        signal create_<type> already uses) here, since an omitted update
+        flag means "leave unchanged", not "unset"/"apply the zero value"
+        (see update_api_body()). Multi-parent classes (Shape/ViaLayer/
+        Foreign/LayerDensityEntry) get no parent flag at all -
+        reassigning one parent field alone would violate their "exactly
+        one parent set" invariant, and there's no atomic "swap parent,
+        clear siblings" primitive designed (decision 5 - see the plan).
+        Generated for every pool class unconditionally, same as
+        create_<type> - even a class with zero non-parent create fields
+        (Obstruction, Schematic) still has a real, useful reparent-only
+        update_<type> (every pool class has at least a parent field or a
+        create field, confirmed by inspection - never neither).
+        """
+        parts = [f"Le{self.name}Id id"]
+        parent_fields = self.get_parent_fields()
+        if len(parent_fields) == 1:
+            pf = parent_fields[0]
+            parts.append(f"int32_t has_{pf.name}")
+            parts.append(f"Le{pf.type}Id {pf.name}_id")
+        parts += self._create_field_param_parts("update")
+        return ", ".join(parts)
+
+    def update_shim_params(self) -> str:
+        """
+        Same shape as update_api_params(), but `id` and (for a single-
+        parent class) the parent are `const char *` friendly-id tokens
+        instead of real Ids - the signature update_<type>_cmd (the
+        SWIG/Tcl-facing shim) actually takes, resolving each token via
+        resolve_<klass>_id()/resolve_<parent_klass>_id() in its own body
+        before forwarding to le_update_<type> (mirrors
+        create_shim_params() vs. create_api_params()'s existing split).
+        """
+        parts = ["const char *id"]
+        parent_fields = self.get_parent_fields()
+        if len(parent_fields) == 1:
+            pf = parent_fields[0]
+            parts.append(f"int32_t has_{pf.name}")
+            parts.append(f"const char *{pf.name}_id")
+        parts += self._create_field_param_parts("update")
+        return ", ".join(parts)
+
+    def update_shim_forward_args(self) -> str:
+        """
+        Comma-joined argument list forwarding an update_<type>_cmd call's
+        own parameters (update_shim_params(), *excluding* `id` - the
+        caller resolves that once into its own `typed_id` local, since
+        it's needed twice: as le_update_<type>'s own first argument
+        *and*, unlike create_<type>_cmd (which formats the id le_create_
+        <type> itself returns), to format the *return* value too, from
+        the id resolved *before* the update call ran - re-resolving the
+        caller's original friendly-id string afterward would break for
+        a class whose friendly id can change as a result of the update
+        itself, e.g. Terminal's own name-based one after a rename) to
+        le_update_<type> (update_api_params(), also id-less from this
+        method's point of view) - the parent token (if single-parent)
+        forwarded alongside its own has-flag unchanged and resolved via
+        resolve_<parent_klass>_id(), each create field forwarded via its
+        own Field.cmd_forward_exprs("update").
+        """
+        parts = []
+        parent_fields = self.get_parent_fields()
+        if len(parent_fields) == 1:
+            pf = parent_fields[0]
+            parts.append(f"has_{pf.name}")
+            parts.append(f"resolve_{pf._parent_klass.to_snake_case()}_id({pf.name}_id)")
+        parts += self._create_field_forward_parts("update")
+        return ", ".join(parts)
+
+    def update_tcl_flag_defaults(self) -> str:
+        """
+        The `array set opts {...}` initializer body for this class's
+        generated `update_<type> {args}` proc - one entry per parent
+        field (only for a single-parent class), then per create field,
+        in update_shim_params() order.
+        """
+        parent_fields = self.get_parent_fields()
+        parts = [f"-{parent_fields[0].name} {{}}"] if len(parent_fields) == 1 else []
+        parts += [f"-{f.name} {{}}" for f in self.get_create_fields()]
+        return " ".join(parts)
+
+    def update_tcl_call_args(self) -> str:
+        """
+        Space-joined Tcl argument list for calling update_<type>_cmd
+        from this class's own update_<type> {args} proc, in
+        update_shim_params() order - no required-flag list (nothing is
+        ever required to update - update_<type> has no counterpart of
+        create_tcl_required_flags()). The optional parent flag (single-
+        parent classes only) passes a has-flag/value pair the same way
+        an optional numeric create field does; every create field
+        follows via its own Field.cmd_tcl_call_args("update").
+        """
+        parts = []
+        parent_fields = self.get_parent_fields()
+        if len(parent_fields) == 1:
+            opt = f"$opts(-{parent_fields[0].name})"
+            parts.append(f"[expr {{{opt} ne {{}} ? 1 : 0}}]")
+            parts.append(opt)
+        for f in self.get_create_fields():
+            parts.extend(f.cmd_tcl_call_args("update"))
+        return " ".join(parts)
+
+    def update_api_body(self) -> str:
+        """
+        The full statement-list body of le_update_<type>(LeHandle
+        *handle, <update_api_params()>) - built the same "Python
+        string" way create_api_body() is, for the same reason. Unlike
+        create_api_body(), every enum field is parsed the way create's
+        *optional* branch already does (create_required("update") is
+        always False, so there's only one branch here, not two);
+        dbu_per_um is fetched unconditionally whenever this class has
+        any dbu-using create field (cmd_uses_dbu()), matching
+        create_api_body()'s own unconditional fetch - safe because
+        Field.update_root_arg_expr()'s `has_<field> ? std::optional<T>
+        (cmd_value_expr()) : std::nullopt` is a ternary, which only
+        evaluates the branch it selects, so a `*dbu_per_um` dereference
+        inside a field's own value expression never runs unless that
+        field's own has-flag is true (this is the same reasoning that
+        already makes create_api_body()'s identical unconditional fetch
+        safe for an *optional* dbu create field today).
+
+        Ends with exactly one call into Root::update_<klass>(), passing
+        every field as an always-std::optional<T> argument (see Field.
+        update_root_arg_expr()) - Root itself decides per field whether
+        "provided" (has_value()) means apply it, mirroring how
+        Root::create_<klass>() is the only place that ever touches
+        index_ for creation.
+        """
+        indent = "        "
+        lines: List[str] = []
+
+        def add(text: str = "") -> None:
+            lines.append(f"{indent}{text}" if text else "")
+
+        snake = self.to_snake_case()
+        parent_fields = self.get_parent_fields()
+        create_fields = self.get_create_fields()
+        enum_fields = [f for f in create_fields if f.is_enum_type()]
+        dbu_fields = [f for f in create_fields if f.cmd_uses_dbu()]
+        unique_fields = self.get_unique_per_parent_fields()
+        single_parent = parent_fields[0] if len(parent_fields) == 1 else None
+
+        add("if (!handle)")
+        add("    return 1;")
+        add("std::lock_guard<std::mutex> lock(handle->mutex_);")
+        add()
+        add(f"const le::{self.name}Id typed_id = from_c(id);")
+        add(f"if (!handle->root.get_{snake}(typed_id))")
+        add("{")
+        add(f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: unknown id"));')
+        add("    return 1;")
+        add("}")
+
+        if single_parent is not None:
+            add()
+            add(f"le::{single_parent.type}Id {single_parent.name} = le::{single_parent.type}Id{{}};")
+            add(f"if (has_{single_parent.name})")
+            add("{")
+            add(f"    {single_parent.name} = from_c({single_parent.name}_id);")
+            add(f"    if (!handle->root.get_{single_parent._parent_klass.to_snake_case()}({single_parent.name}))")
+            add("    {")
+            add(
+                f'        handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: unknown '
+                f'{single_parent.name} - no such {single_parent.type} exists"));'
+            )
+            add("        return 1;")
+            add("    }")
+            add("}")
+
+        if enum_fields:
+            add()
+            for f in enum_fields:
+                enum_snake = f._type_klass.to_snake_case()
+                add(
+                    f"const std::optional<le::{f.type}> parsed_{f.name} = ({f.name} && {f.name}[0]) "
+                    f"? le::{enum_snake}_from_string({f.name}) : std::nullopt;"
+                )
+                add(f"if ({f.name} && {f.name}[0] && !parsed_{f.name})")
+                add("{")
+                add(
+                    f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: unrecognized '
+                    f"{f.name} '{{}}'\", {f.name}));"
+                )
+                add("    return 1;")
+                add("}")
+
+        if dbu_fields:
+            add()
+            add("const std::optional<double> dbu_per_um = database_units_microns(handle->root);")
+            add("if (!dbu_per_um)")
+            add("{")
+            add(f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: no Technology has been read yet (needed for micron-to-dbu conversion)"));')
+            add("    return 1;")
+            add("}")
+
+        add()
+        call_args = ["typed_id"]
+        if single_parent is not None:
+            call_args.append(single_parent.name)
+        for f in create_fields:
+            call_args.append(f.update_root_arg_expr())
+        add(f"const bool ok = handle->root.update_{snake}({', '.join(call_args)});")
+
+        if unique_fields:
+            add("if (!ok)")
+            add("{")
+            add(
+                f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: a sibling {self.name} '
+                f'with this {unique_fields[0].name} already exists"));'
+            )
+            add("    return 1;")
+            add("}")
+        else:
+            add("if (!ok)")
+            add("{")
+            add(f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: update failed"));')
+            add("    return 1;")
+            add("}")
+
+        add("handle->root.bump_mutation_version();")
+        add("return 0;")
+
+        return "\n".join(lines)
+
+    def update_root_params(self) -> str:
+        """
+        Full comma-joined parameter list for this class's generated
+        Root::update_<klass>(...) (root_hpp_j2.py) - <Klass>Id id, then
+        (iff single-parent) a bare <Parent>Id <parent_field> whose own
+        .valid() *is* the "reassign?" signal (mirrors create_x's own
+        convention for an optional/absent parent - see the pre-existing
+        create_<klass> template's `if (d.<field>.valid()) index_...`
+        pattern), then one std::optional<T> per create field (T =
+        Field.root_value_cpp_type(qualified=False) - bare, no "le::"
+        prefix, since this is emitted inside `namespace le` already) -
+        has_value() is Root's own "was this field provided" signal, no
+        separate has_<field> bool needed at this layer (unlike
+        update_api_params(), which still needs explicit has-flags/
+        nullptr-style raw C-API slots, since that's the boundary where
+        the "was it provided" signal first has to be materialized out of
+        raw Tcl/C input).
+        """
+        parts = [f"{self.name}Id id"]
+        parent_fields = self.get_parent_fields()
+        if len(parent_fields) == 1:
+            pf = parent_fields[0]
+            parts.append(f"{pf.type}Id {pf.name}")
+        for f in self.get_create_fields():
+            parts.append(f"std::optional<{f.root_value_cpp_type(qualified=False)}> {f.name}")
+        return ", ".join(parts)
+
+    def update_root_body(self) -> str:
+        """
+        The full statement-list body of Root::update_<klass>
+        (update_root_params()) - the *only* place this class's fields
+        are ever mutated after creation (the user's explicit "no per-
+        field setters, generated or hand-written" constraint - see the
+        plan's Context section). Built the same "Python string" way
+        create_api_body()/update_api_body() are; reuses the exact
+        index_ member names/shapes the pre-existing (and untouched)
+        generated set_<klass>_<field>() already established for a
+        parent field (root_hpp_j2.py's own `{%- if field.parent or
+        field.index %}` block) and a unique_per_parent field, but -
+        unlike that pre-existing per-field setter, which reassigns a
+        parent without moving a unique_per_parent field's sibling-index
+        bucket (a documented, previously-unreachable gap, since nothing
+        called it with both present) - this method does both in one
+        call, in the order decision 6 requires: reparent (with its own
+        new-parent collision check) fully applied *before* the
+        unique_per_parent rename, so `existing-><parent_field>` already
+        reflects the new parent by the time the rename's own sibling
+        bucket is computed.
+
+        Every ordinary field: `if (<field>) existing-><field> =
+        *<field>;` - trivial, no index to maintain. Returns true unless
+        the reparent's new-parent collision check or the
+        unique_per_parent rename's own collision check fails (checked,
+        and can return false, before any mutation happens in that block
+        - matches create_x's own "nothing inserted on failure" atomicity
+        for the common single-change case; see decision 6 for the one
+        documented two-change exception).
+        """
+        indent = "            "
+        lines: List[str] = []
+
+        def add(text: str = "") -> None:
+            lines.append(f"{indent}{text}" if text else "")
+
+        snake = self.to_snake_case()
+        parent_fields = self.get_parent_fields()
+        create_fields = self.get_create_fields()
+        unique_fields = self.get_unique_per_parent_fields()
+        single_parent = parent_fields[0] if len(parent_fields) == 1 else None
+
+        add(f"auto* existing = {snake}_.get(id);")
+        add("if (!existing) return false;")
+
+        if single_parent is not None:
+            pf = single_parent
+            parent_index = f"index_.{pf._parent_klass.to_snake_case()}_{pf.parent}"
+            is_list = pf._parent_field.is_list
+            add()
+            # `&& {pf.name} != existing->{pf.name}` - reparenting onto the
+            # object's own current parent is a no-op, not a collision: with
+            # a unique_per_parent field, the new-parent bucket lookup below
+            # would otherwise find the object's own existing entry (itself,
+            # not a real sibling) and spuriously report a collision.
+            add(f"if ({pf.name}.valid() && {pf.name} != existing->{pf.name})")
+            add("{")
+            if unique_fields:
+                uf = unique_fields[0]
+                add(f"    auto new_bucket_it = index_.{snake}_by_{uf.name}.find({pf.name});")
+                add(
+                    f"    if (new_bucket_it != index_.{snake}_by_{uf.name}.end() && "
+                    f"new_bucket_it->second.find(existing->{uf.name}) != new_bucket_it->second.end())"
+                )
+                add("        return false;")
+                add()
+            if is_list:
+                add("    {")
+                add(f"        auto& old_siblings = {parent_index}[existing->{pf.name}];")
+                add(
+                    "        old_siblings.erase(std::remove(old_siblings.begin(), old_siblings.end(), id), "
+                    "old_siblings.end());"
+                )
+                add("    }")
+            else:
+                add(f"    {parent_index}.erase(existing->{pf.name});")
+            if unique_fields:
+                uf = unique_fields[0]
+                add("    {")
+                add(f"        auto old_bucket_it = index_.{snake}_by_{uf.name}.find(existing->{pf.name});")
+                add(f"        if (old_bucket_it != index_.{snake}_by_{uf.name}.end())")
+                add(f"            old_bucket_it->second.erase(existing->{uf.name});")
+                add("    }")
+            add(f"    existing->{pf.name} = {pf.name};")
+            if is_list:
+                add("    {")
+                add(f"        auto& new_siblings = {parent_index}[{pf.name}];")
+                add("        if (std::find(new_siblings.begin(), new_siblings.end(), id) == new_siblings.end())")
+                add("            new_siblings.push_back(id);")
+                add("    }")
+            else:
+                add(f"    {parent_index}[{pf.name}] = id;")
+            if unique_fields:
+                uf = unique_fields[0]
+                add(f"    index_.{snake}_by_{uf.name}[{pf.name}][existing->{uf.name}] = id;")
+            add("}")
+
+        for f in create_fields:
+            if f.unique_per_parent:
+                add()
+                # `&& *{f.name} != existing->{f.name}` - renaming to the
+                # object's own current value is a no-op, not a collision:
+                # the sibling-bucket lookup below would otherwise find the
+                # object's own existing entry (itself) and spuriously
+                # report a collision (same reasoning as the reparent guard
+                # above).
+                add(f"if ({f.name} && *{f.name} != existing->{f.name})")
+                add("{")
+                add(f"    auto& siblings = index_.{snake}_by_{f.name}[existing->{single_parent.name}];")
+                add(f"    if (siblings.find(*{f.name}) != siblings.end())")
+                add("        return false;")
+                add(f"    siblings.erase(existing->{f.name});")
+                add(f"    existing->{f.name} = *{f.name};")
+                add(f"    siblings[*{f.name}] = id;")
+                add("}")
+            else:
+                add(f"if ({f.name}) existing->{f.name} = *{f.name};")
+
+        add()
+        add("return true;")
+        return "\n".join(lines)
 
     def get_include_define(self) -> str:
         """
@@ -1076,49 +1650,109 @@ class Field:
         """
         return self._type_klass is not None and self._type_klass.is_enum
 
-    def is_create_field(self) -> bool:
+    def compound_klass(self) -> Optional[Klass]:
         """
-        Whether this field gets its own flag on the generated
-        create_<type> TCL/API command - a scalar leaf value (str/int/
-        double/dbu/bool/enum), not a parent reference, not a child
-        relationship (is_child, set via a future add_X/set_X round, not
-        at creation), not a plain list (same reasoning - an empty vector
-        already conveys "no items" at creation, appended to afterward),
-        and not an embedded-struct-typed field (Point/Rect/Symmetry/...) -
-        those don't have a single scalar flag representation and are also
-        deferred to a future add_X/set_X round.
+        This field's embedded-struct type Klass, if it's a flattenable
+        compound field (Point/Rect/Symmetry/DensityCheckWindow/...) - see
+        Klass.embedded_scalar_leaves(). None for a plain scalar/enum
+        field, a pooled-class reference, or an embedded struct that isn't
+        flattenable (e.g. ParallelRunLengthSpacingTable).
+        """
+        tk = self._type_klass
+        if tk is None or tk.is_enum or tk.has_pool:
+            return None
+        return tk if tk.embedded_scalar_leaves() is not None else None
+
+    def is_compound_create_field(self) -> bool:
+        """
+        Whether this field is a flattenable-embedded-struct create field
+        (see compound_klass()) - distinct from is_create_field()'s
+        broader "gets a flag at all" check, since a compound field's flag
+        explodes into several C slots (one per scalar leaf) rather than
+        one, and is always optional (see Field.create_required()).
         """
         if self.has_parent() or self.is_child or self.is_list:
             return False
-        return self._type_klass is None or self._type_klass.is_enum
+        return self.compound_klass() is not None
 
-    def create_required(self) -> bool:
+    def is_create_field(self) -> bool:
         """
-        Whether create_<type> makes this an unconditionally-required flag.
-        Mirrors is_optional, with one deliberate exception: `bool` fields
-        are never is_optional=True anywhere in this schema (false is
-        already a zero-cost "not specified" default - see is_optional's
-        own convention, established across the whole is_optional audit),
-        so treating a bool create-flag as "required" would force every
-        caller to spell out every boolean flag on every create call for
-        no real benefit - always optional here too, regardless of the
-        field's own is_optional value (which is always False for a bool).
+        Whether this field gets its own flag on the generated
+        create_<type>/update_<type> TCL/API commands - a scalar leaf value
+        (str/int/double/dbu/bool/enum), not a parent reference, not a
+        child relationship (is_child, set via a future add_X/set_X round,
+        not at creation), not a plain list (same reasoning - an empty
+        vector already conveys "no items" at creation, appended to
+        afterward), OR a flattenable embedded-struct field (Point/Rect/
+        Symmetry/DensityCheckWindow/... - see is_compound_create_field()),
+        exploded into one flag with several C slots. A non-flattenable
+        embedded struct (e.g. ParallelRunLengthSpacingTable, a genuine
+        variable-size table) stays excluded, deferred to a future add_X/
+        set_X round the same way is_list fields already are.
         """
+        if self.has_parent() or self.is_child or self.is_list:
+            return False
+        if self._type_klass is None or self._type_klass.is_enum:
+            return True
+        return self.is_compound_create_field()
+
+    def create_required(self, mode: str = "create") -> bool:
+        """
+        Whether create_<type>/update_<type> makes this an unconditionally-
+        required flag. mode="update" is always False - nothing is ever
+        required to *update* an existing object, that's the entire point
+        of the command (an omitted flag there means "leave unchanged", not
+        "unset" - see Klass.update_api_body()). In mode="create", mirrors
+        is_optional, with two deliberate exceptions:
+        - `bool` fields are never is_optional=True anywhere in this schema
+          (false is already a zero-cost "not specified" default - see
+          is_optional's own convention, established across the whole
+          is_optional audit), so treating a bool create-flag as "required"
+          would force every caller to spell out every boolean flag on
+          every create call for no real benefit - always optional,
+          regardless of the field's own is_optional value.
+        - A compound (embedded-struct) field is likewise always optional
+          regardless of is_optional - several, e.g. Abstract.size/origin/
+          bbox, are is_optional=False today only because they were
+          explicitly skipped during the is_optional audit (not a real
+          LEF-syntax judgment), and forcing them required would enforce
+          that scoping accident rather than a deliberate one.
+        """
+        if mode == "update":
+            return False
         if self.type == "bool":
+            return False
+        if self.is_compound_create_field():
             return False
         return not self.is_optional
 
-    def create_needs_has_flag(self) -> bool:
+    def create_needs_has_flag(self, mode: str = "create") -> bool:
         """
-        Whether this optional create-flag needs a companion `has_<field>`
-        int32_t parameter to distinguish "omitted" from "explicitly set to
-        the type's zero value" (0/0.0) - true nullopt, not a zero-value
-        default (see Field.unique_per_parent-adjacent design note in
-        Phase 3/5 planning). Only numeric types need this: str/enum
-        already have an unambiguous "omitted" signal at the C layer
-        (nullptr, distinct from a real, even empty, string/enum name) that
-        a companion flag would be redundant with.
+        Whether this create-flag needs a companion `has_<field>` int32_t
+        parameter to distinguish "omitted" from "explicitly set to the
+        type's zero value" (0/0.0/false) - true nullopt (create) or "leave
+        unchanged" (update), not a zero-value default or an unconditional
+        overwrite.
+        - A compound field always needs one (one has-flag for the whole
+          struct, not one per leaf - create_required() is always False for
+          these, so this fires in both modes).
+        - str/enum never need one: they already have an unambiguous
+          "omitted" signal at the C layer (nullptr, distinct from a real,
+          even empty, string/enum name) that a companion flag would be
+          redundant with, in both modes.
+        - `bool` needs one only in mode="update": in create, `false`
+          already means "unspecified" (see create_required()); in update,
+          "omitted" (leave unchanged) and "explicitly set to false" are
+          genuinely different and must be distinguishable.
+        - `int`/`double`/`dbu` need one whenever the flag isn't
+          unconditionally required - i.e. always in update mode (nothing
+          is required there), and in create mode whenever create_required()
+          is False.
         """
+        if self.is_compound_create_field():
+            return True
+        if mode == "update":
+            return self.type in ("int", "double", "dbu", "bool")
         return self.create_required() is False and self.type in ("int", "double", "dbu")
 
     def create_c_param_name(self) -> str:
@@ -1167,24 +1801,119 @@ class Field:
         name = self.create_c_param_name()
         return f"{ctype}{name}" if ctype.endswith("*") else f"{ctype} {name}"
 
-    def create_forward_expr(self) -> str:
+    def cmd_param_slots(self, mode: str = "create") -> List[Tuple[str, str]]:
         """
-        The expression forwarding this create-field's own value from a
-        create_<type>_cmd shim call to le_create_<type> - identical to the
-        raw parameter for a numeric field, but converts an empty/null
-        string to a real nullptr for an optional str/enum field. Tcl/SWIG
-        can't produce a null `const char *` argument directly (a Tcl
-        string is never itself "null", only empty), so "empty means
-        omitted" has to be applied here, at the first point value is
-        actually plain C++ - matches the same "empty flag value means
-        omitted" convention this codebase's hand-written -flag parsing
-        already uses everywhere else (e.g. create_terminal_port's own
-        `if {$opts(-terminal) eq {}}` check).
+        Every (c_type, param_name) positional slot this field occupies in
+        a generated le_create_<type>/le_update_<type> (or the matching
+        create_<type>_cmd/update_<type>_cmd shim) signature, in order: the
+        has_<field> companion first (create_needs_has_flag(mode)), then
+        one value slot per scalar leaf - exactly one for a plain field,
+        N for a compound one (Point 2, Rect 4, Symmetry 3). This is the
+        single place "one field -> one or more positional slots" is
+        defined - create_api_params/create_shim_params/their update_*
+        counterparts and cmd_forward_exprs() all derive from it, so a
+        signature can never drift from a call site.
         """
+        slots: List[Tuple[str, str]] = []
+        if self.create_needs_has_flag(mode):
+            slots.append(("int32_t", f"has_{self.name}"))
+        ck = self.compound_klass()
+        if ck is None:
+            slots.append((self.create_c_type(), self.create_c_param_name()))
+            return slots
+        for flat, leaf in ck.embedded_scalar_leaves():
+            slots.append((_leaf_c_type(leaf), _leaf_param_name(self.name, flat, leaf)))
+        return slots
+
+    def cmd_forward_exprs(self, mode: str = "create") -> List[str]:
+        """
+        The expression(s) forwarding this field's own value(s) from a
+        create_<type>_cmd/update_<type>_cmd shim call to
+        le_create_<type>/le_update_<type>, in cmd_param_slots(mode) order
+        - identical to the raw parameter for a numeric/compound-leaf slot,
+        but converts an empty/null string to a real nullptr for an
+        optional (or update-mode) str/enum field. Tcl/SWIG can't produce a
+        null `const char *` argument directly (a Tcl string is never
+        itself "null", only empty), so "empty means omitted" has to be
+        applied here, at the first point value is actually plain C++ -
+        matches the same "empty flag value means omitted" convention this
+        codebase's hand-written -flag parsing already used everywhere
+        (e.g. create_terminal_port's own `if {$opts(-terminal) eq {}}`
+        check) before this generator existed.
+        """
+        exprs: List[str] = []
+        if self.create_needs_has_flag(mode):
+            exprs.append(f"has_{self.name}")
+        ck = self.compound_klass()
+        if ck is not None:
+            for flat, leaf in ck.embedded_scalar_leaves():
+                exprs.append(_leaf_param_name(self.name, flat, leaf))
+            return exprs
         name = self.create_c_param_name()
-        if (self.type == "str" or self.is_enum_type()) and not self.create_required():
-            return f"({name} && {name}[0]) ? {name} : nullptr"
+        if (self.type == "str" or self.is_enum_type()) and not self.create_required(mode):
+            exprs.append(f"({name} && {name}[0]) ? {name} : nullptr")
+        else:
+            exprs.append(name)
+        return exprs
+
+    def cmd_uses_dbu(self) -> bool:
+        """
+        Whether this create/update field needs the shared `dbu_per_um`
+        local (database_units_microns()) computed somewhere in the
+        generated body - true for a plain dbu field, or a compound field
+        with at least one dbu leaf (Point/Rect/DensityCheckWindow all
+        qualify; Symmetry, all-bool, does not).
+        """
+        if self.type == "dbu":
+            return True
+        ck = self.compound_klass()
+        if ck is None:
+            return False
+        return any(leaf.type == "dbu" for _, leaf in ck.embedded_scalar_leaves())
+
+    def cmd_value_expr(self) -> str:
+        """
+        The api.cpp-layer expression producing this field's final typed
+        C++ value, assuming it was provided - no has-flag/nullopt
+        wrapping (create_struct_init_expr() and Klass.update_api_body()
+        each apply that themselves, since they wrap it differently -
+        std::optional in a struct initializer vs. a plain value forwarded
+        to Root::update_<klass>()). A plain field reuses the exact
+        to_dbu(...)/*parsed_<enum>/!= 0/identity conversions
+        create_struct_init_expr() already established; a compound field
+        recurses over the *struct* (not the flat leaf list, so nesting
+        like Rect{ll: Point, ur: Point} round-trips correctly) via
+        _compound_ctor_expr().
+        """
+        ck = self.compound_klass()
+        if ck is not None:
+            return self._compound_ctor_expr(ck, self.name)
+        name = self.create_c_param_name()
+        if self.is_enum_type():
+            return f"*parsed_{self.name}"
+        if self.type == "dbu":
+            return f"to_dbu({name}, *dbu_per_um)"
+        if self.type == "bool":
+            return f"{name} != 0"
         return name
+
+    @staticmethod
+    def _compound_ctor_expr(klass: Klass, prefix: str) -> str:
+        """
+        `le::<Klass>{.field = <expr>, ...}` for a compound field's value,
+        recursing into any nested embedded struct (e.g. Rect's own ll/ur
+        Points) so the constructed value has the right nested shape, not
+        a flat list of leaves. `prefix` accumulates the flattened
+        parameter-name prefix (e.g. "bbox", then "bbox_ll" for Rect.ll).
+        """
+        parts = []
+        for f in klass.fields:
+            tk = f._type_klass
+            if tk is not None and not tk.is_enum:
+                parts.append(f".{f.name} = " + Field._compound_ctor_expr(tk, f"{prefix}_{f.name}"))
+            else:
+                parts.append(f".{f.name} = " + _leaf_value_expr(f, _leaf_param_name(prefix, f.name, f)))
+        return f"le::{klass.name}{{" + ", ".join(parts) + "}"
 
     def create_struct_init_expr(self) -> str:
         """
@@ -1193,8 +1922,10 @@ class Field:
         Assumes (built by Klass.create_api_body(), which emits them in
         this order): a local `parsed_<name>` variable already exists for
         an enum field (declared/validated earlier in the function body),
-        and `dbu_per_um` already exists for a dbu field.
+        and `dbu_per_um` already exists for a field with cmd_uses_dbu().
         """
+        if self.is_compound_create_field():
+            return f"has_{self.name} ? std::optional<le::{self.type}>({self.cmd_value_expr()}) : std::nullopt"
         name = self.create_c_param_name()
         if self.is_enum_type():
             return f"*parsed_{self.name}" if self.create_required() else f"parsed_{self.name}"
@@ -1212,24 +1943,158 @@ class Field:
             return name if self.create_required() else f"has_{self.name} ? std::optional<{cpp_type}>({name}) : std::nullopt"
         raise ValueError(f"create_struct_init_expr: unsupported create-field type {self.type!r} on field {self.name!r}")
 
-    def create_tcl_call_args(self) -> List[str]:
+    def cmd_tcl_call_args(self, mode: str = "create") -> List[str]:
         """
-        The Tcl expression(s) passing this create-field's own value from a
-        generated `create_<type> {args}` proc's own `opts` array to
-        create_<type>_cmd - one expression for most fields (Tcl doesn't
-        distinguish omitted from empty any more precisely than the shim
-        layer already does for str/enum), two (has_<field>, value-or-0)
-        for the has-flag numeric case (create_needs_has_flag()) so an
-        omitted flag can't reach SWIG's own int/double typemap as an
-        unparsable empty string, one boolean-coerced expression for a
-        `bool` field (always optional here - see create_required()).
+        The Tcl expression(s) passing this field's own value from a
+        generated `create_<type>`/`update_<type> {args}` proc's own
+        `opts` array to its _cmd form, in cmd_param_slots(mode) order.
+        A compound field references the locals its own
+        _cmd_tcl_compound_preamble() already established (e.g.
+        size_x_um/size_y_um), not $opts(-field) directly - the has-flag
+        (if needed) is that preamble's own `has_<field>` local too. A
+        plain str/enum/required-numeric field passes `$opts(-field)`
+        directly (Tcl doesn't distinguish omitted from empty any more
+        precisely than the shim layer already does for str/enum). A
+        has-flag numeric field passes two expressions (has-flag, value-
+        or-0) so an omitted flag can't reach SWIG's int/double typemap as
+        an unparsable empty string. A `bool` field's own value slot is
+        always boolean-coerced via `[expr {...}]`, since a Tcl caller may
+        spell it as a boolean word (true/false/yes/no) that SWIG's plain
+        int32 typemap can't parse directly.
         """
         opt = f"$opts(-{self.name})"
-        if self.create_needs_has_flag():
-            return [f"[expr {{{opt} ne {{}} ? 1 : 0}}]", f"[expr {{{opt} ne {{}} ? {opt} : 0}}]"]
+        ck = self.compound_klass()
+        args: List[str] = []
+        if self.create_needs_has_flag(mode):
+            if ck is not None:
+                args.append(f"$has_{self.name}")
+            else:
+                args.append(f"[expr {{{opt} ne {{}} ? 1 : 0}}]")
+        if ck is not None:
+            for flat, leaf in ck.embedded_scalar_leaves():
+                args.append(f"${_leaf_param_name(self.name, flat, leaf)}")
+            return args
         if self.type == "bool":
-            return [f"[expr {{{opt} ne {{}} && {opt}}}]"]
-        return [opt]
+            args.append(f"[expr {{{opt} ne {{}} && {opt}}}]")
+            return args
+        if self.create_needs_has_flag(mode):
+            args.append(f"[expr {{{opt} ne {{}} ? {opt} : 0}}]")
+            return args
+        args.append(opt)
+        return args
+
+    def cmd_tcl_preamble(self, mode: str, cmd_name: str) -> str:
+        """
+        Generated Tcl statements for this compound field, emitted (by
+        Klass.cmd_tcl_preamble(), which loops over every compound create
+        field) after flag parsing and before the _cmd call - turns the
+        flag's own Tcl list value into its has-flag + leaf-parameter
+        locals cmd_tcl_call_args() references. Empty string if this field
+        isn't compound. `cmd_name` (e.g. "create_abstract") is only used
+        to make an arity/keyword error message name the actual command.
+        """
+        ck = self.compound_klass()
+        if ck is None:
+            return ""
+        leaves = ck.embedded_scalar_leaves()
+        vals_var = f"{self.name}_vals"
+        has_var = f"has_{self.name}"
+        lines = [
+            f"    set {vals_var} $opts(-{self.name})",
+            f"    set {has_var} [expr {{[llength ${vals_var}] > 0 ? 1 : 0}}]",
+        ]
+        if ck.compound_leaf_kind() == "numeric":
+            n = len(leaves)
+            names = " ".join(flat for flat, _ in leaves)
+            lines.append(f"    if {{${has_var} && [llength ${vals_var}] != {n}}} {{")
+            lines.append(
+                f'        error "{cmd_name}: -{self.name} expects {n} values '
+                + "{" + names + "}"
+                + ', got [llength $' + vals_var + ']"'
+            )
+            lines.append("    }")
+            zeros = " ".join("0" for _ in leaves)
+            lines.append(f"    if {{!${has_var}}} {{ set {vals_var} {{{zeros}}} }}")
+            params = " ".join(_leaf_param_name(self.name, flat, leaf) for flat, leaf in leaves)
+            lines.append(f"    lassign ${vals_var} {params}")
+        else:  # "flags" - Symmetry, keyword-set syntax mirroring LEF's own SYMMETRY X Y R90 ;
+            for flat, leaf in leaves:
+                lines.append(f"    set {_leaf_param_name(self.name, flat, leaf)} 0")
+            lines.append(f"    foreach kw ${vals_var} {{")
+            lines.append("        switch -- [string toupper $kw] {")
+            for flat, leaf in leaves:
+                lines.append(f"            {flat.upper()} {{ set {_leaf_param_name(self.name, flat, leaf)} 1 }}")
+            expected = "/".join(flat.upper() for flat, _ in leaves)
+            lines.append(
+                f'            default {{ error "{cmd_name}: -{self.name}: unknown keyword '
+                + '\\"$kw\\" - expected ' + expected + '" }'
+            )
+            lines.append("        }")
+            lines.append("    }")
+        return "\n".join(lines)
+
+    def root_value_cpp_type(self, qualified: bool = True) -> str:
+        """
+        The bare (non-is_optional-wrapped) final C++ type of this create
+        field's own value - the T in Root::update_<klass>'s
+        std::optional<T> parameter for this field (Klass.
+        update_root_params()) and in the std::optional<T>(...) this
+        field's own update_root_arg_expr() constructs at the api.cpp
+        call site. Deliberately independent of get_cpp_type()'s own
+        is_optional wrapping - Root's "was this field provided in this
+        update call" signal (the outer std::optional this method's
+        result gets wrapped in) is a different concept from whether the
+        field's own database storage is itself is_optional (the inner
+        type here), and wrapping both together would double-wrap a field
+        that's_optional=True in storage (e.g. Terminal.shape,
+        Abstract.size). `qualified=True` (the api.cpp-layer call site,
+        outside `namespace le`) prefixes an enum/compound type with
+        "le::"; `qualified=False` (root_hpp_j2.py's own parameter
+        declaration, already inside `namespace le`) leaves it bare.
+        """
+        ck = self.compound_klass()
+        if ck is not None:
+            return f"le::{self.type}" if qualified else self.type
+        if self.is_enum_type():
+            return f"le::{self.type}" if qualified else self.type
+        if self.type == "str":
+            return "std::string"
+        if self.type == "dbu":
+            return "int64_t"
+        if self.type == "bool":
+            return "bool"
+        if self.type == "int":
+            return "int"
+        if self.type == "double":
+            return "double"
+        raise ValueError(f"root_value_cpp_type: unsupported create-field type {self.type!r} on field {self.name!r}")
+
+    def update_root_arg_expr(self) -> str:
+        """
+        The api.cpp-layer argument this field contributes to the single
+        Root::update_<klass>(...) call in Klass.update_api_body() -
+        always std::optional<T> (T = root_value_cpp_type()), regardless
+        of whether the field's own database storage is is_optional
+        (Root's "was this field provided" signal is independent of
+        storage optionality - see root_value_cpp_type()). An enum field
+        reuses the parsed_<name> local update_api_body() already builds
+        (identical shape to create_api_body()'s own non-required enum
+        branch, since create_required("update") is always False); a str
+        field applies the same "empty means omitted" convention inline
+        (no has_<field> companion exists for str - see
+        create_needs_has_flag()); every other field (numeric/bool/
+        compound) uses its own has_<field> flag and cmd_value_expr() -
+        safe to dereference *dbu_per_um inside that expression even
+        though it's fetched unconditionally, since the surrounding
+        ternary only evaluates the branch it selects.
+        """
+        if self.is_enum_type():
+            return f"parsed_{self.name}"
+        if self.type == "str":
+            name = self.create_c_param_name()
+            return f"({name} && {name}[0]) ? std::optional<std::string>({name}) : std::nullopt"
+        cpp_type = self.root_value_cpp_type()
+        return f"has_{self.name} ? std::optional<{cpp_type}>({self.cmd_value_expr()}) : std::nullopt"
 
     def get_example(self) -> Any:
         """

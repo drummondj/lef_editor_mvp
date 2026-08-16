@@ -1031,25 +1031,6 @@ extern "C"
     /// for the full grammar/validation/error contract.
     LeProperty le_abstract_property_path(LeHandle *handle, LeAbstractId id, const char *path);
 
-    /// @brief Rename the Terminal at `id` (UPDATES.md item 15's
-    /// `update_terminal_port -name ...` pattern, applied to Terminal
-    /// itself) - delegates to the generated, unique_per_parent-aware
-    /// Root::set_terminal_name (see backend/src/database/schema.py's own
-    /// Terminal.name comment), which keeps the per-Abstract name index in
-    /// sync and rejects a collision with a sibling Terminal on the same
-    /// Abstract; renaming to the Terminal's own current name is a no-op
-    /// success, not a self-collision. Returns 0 on success, nonzero if
-    /// handle or name is null, id doesn't name a Terminal on this handle,
-    /// or name collides with a different Terminal already on the same
-    /// Abstract (pushes an ERROR message the same way le_create_terminal
-    /// does).
-    int le_set_terminal_name(LeHandle *handle, LeTerminalId id, const char *name);
-
-    /// @brief Change the Terminal at `id`'s signal direction. Returns 0
-    /// on success, nonzero if handle is null or id doesn't name a
-    /// Terminal on this handle.
-    int le_set_terminal_direction(LeHandle *handle, LeTerminalId id, int32_t direction);
-
     /// @brief Delete the Terminal at `id`, cascading to every
     /// TerminalPort it owns first - unlike Root::delete_terminal's own
     /// no-cascade default (see its doc comment), a orphaned port here
@@ -1223,21 +1204,6 @@ extern "C"
     /// parse/validation error.
     int32_t le_get_obstructions(LeHandle *handle, LeAbstractId of_abstract, const char *filter_expression);
 
-    /// @brief Replace the Abstract at `id`'s boundary outline wholesale
-    /// with a single polygon built from `coords_um` (UPDATES.md item
-    /// 15's `update_abstract -boundary {x y x y ...}`) - a flat array of
-    /// microns, alternating x/y, `coord_count` must be a positive even
-    /// number (at least 3 points, i.e. coord_count >= 6, to be a real
-    /// polygon - a smaller count is rejected). No standalone Boundary
-    /// object exists (see TCL_EXPLORATION.md's round-2 decision) -
-    /// `Abstract.boundary` is a plain field, so this is a direct
-    /// mutation through le::Root::get_abstract(), not a generated
-    /// Root::set_abstract_boundary. Returns 0 on success, nonzero if
-    /// handle or coords_um is null, id doesn't name an Abstract on this
-    /// handle, coord_count is invalid, or no Technology has been read
-    /// yet (needed for the micron-to-dbu conversion).
-    int le_update_abstract_boundary(LeHandle *handle, LeAbstractId id, const double *coords_um, int32_t coord_count);
-
     // --- Shape CRUD, addressed by a stable id (TCL_EXPLORATION.md Phase 3:
     // `Shape` was pooled specifically so a single existing shape - attached
     // to either a TerminalPort or an Obstruction - could be read/updated/
@@ -1362,15 +1328,10 @@ extern "C"
 
     /// @brief The layer name of the Shape at `id`. Owned by the handle's
     /// Root - valid until the handle is destroyed, this shape is
-    /// deleted, or le_set_shape_layer_name changes it, never owned by
+    /// deleted, or le_update_shape changes it, never owned by
     /// the caller. Returns null if handle is null or id doesn't name a
     /// Shape on this handle.
     const char *le_shape_layer_name(LeHandle *handle, LeShapeId id);
-
-    /// @brief Rename the Shape at `id`'s layer. Returns 0 on success,
-    /// nonzero if handle or layer_name is null, or id doesn't name a
-    /// Shape on this handle.
-    int le_set_shape_layer_name(LeHandle *handle, LeShapeId id, const char *layer_name);
 
     /// @brief Delete the Shape at `id`. Its parent (TerminalPort or
     /// Obstruction) is untouched - le_terminal_port_shape_count/

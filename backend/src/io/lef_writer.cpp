@@ -1258,11 +1258,20 @@ namespace le
                 if (const ViaRuleReferenceData *vr_ptr = root.get_via_rule_reference(via_rule_ref_id))
                 {
                     const ViaRuleReferenceData &vr = *vr_ptr;
-                    status = lefwViaViarule(vr.via_rule_name.c_str(), to_um(vr.cut_size.x), to_um(vr.cut_size.y),
+                    // value_or(Point{}), not vr.cut_size->x etc. - the
+                    // reader always populates all four together, but
+                    // update_via_rule_reference (generated) can now set
+                    // them independently, so a partially-set object is a
+                    // real possibility here, not just a reader artifact.
+                    const Point cut_size = vr.cut_size.value_or(Point{});
+                    const Point cut_spacing = vr.cut_spacing.value_or(Point{});
+                    const Point bot_enclosure = vr.bot_enclosure.value_or(Point{});
+                    const Point top_enclosure = vr.top_enclosure.value_or(Point{});
+                    status = lefwViaViarule(vr.via_rule_name.c_str(), to_um(cut_size.x), to_um(cut_size.y),
                                              vr.bot_layer_name.c_str(), vr.cut_layer_name.c_str(), vr.top_layer_name.c_str(),
-                                             to_um(vr.cut_spacing.x), to_um(vr.cut_spacing.y),
-                                             to_um(vr.bot_enclosure.x), to_um(vr.bot_enclosure.y),
-                                             to_um(vr.top_enclosure.x), to_um(vr.top_enclosure.y));
+                                             to_um(cut_spacing.x), to_um(cut_spacing.y),
+                                             to_um(bot_enclosure.x), to_um(bot_enclosure.y),
+                                             to_um(top_enclosure.x), to_um(top_enclosure.y));
                     if (status)
                         return status;
                 }
@@ -1422,12 +1431,15 @@ namespace le
 
             // lefwSite takes one space-joined symmetry string, same
             // convention as write_macro's own SYMMETRY handling.
+            // value_or(Symmetry{}) - unset means "no symmetry flags set",
+            // the same default an all-false Symmetry already represents.
+            const Symmetry site_symmetry = site->symmetry.value_or(Symmetry{});
             std::string symmetry;
-            if (site->symmetry.x)
+            if (site_symmetry.x)
                 symmetry += "X ";
-            if (site->symmetry.y)
+            if (site_symmetry.y)
                 symmetry += "Y ";
-            if (site->symmetry.r90)
+            if (site_symmetry.r90)
                 symmetry += "R90 ";
             if (!symmetry.empty())
                 symmetry.pop_back(); // trailing space
@@ -2041,20 +2053,27 @@ namespace le
                 return status;
         }
 
-        status = lefwMacroOrigin(to_um(abstract->origin.x), to_um(abstract->origin.y));
+        // value_or(Point{})/value_or(Symmetry{}) - all three are now
+        // optional (create_abstract/update_abstract can leave any of them
+        // unset), same zero-value default this writer already emitted
+        // unconditionally before they were optional.
+        const Point origin = abstract->origin.value_or(Point{});
+        status = lefwMacroOrigin(to_um(origin.x), to_um(origin.y));
         if (status)
             return status;
 
-        status = lefwMacroSize(to_um(abstract->size.x), to_um(abstract->size.y));
+        const Point size = abstract->size.value_or(Point{});
+        status = lefwMacroSize(to_um(size.x), to_um(size.y));
         if (status)
             return status;
 
+        const Symmetry abstract_symmetry = abstract->symmetry.value_or(Symmetry{});
         std::string symmetry;
-        if (abstract->symmetry.x)
+        if (abstract_symmetry.x)
             symmetry += "X ";
-        if (abstract->symmetry.y)
+        if (abstract_symmetry.y)
             symmetry += "Y ";
-        if (abstract->symmetry.r90)
+        if (abstract_symmetry.r90)
             symmetry += "R90 ";
         if (!symmetry.empty())
         {
@@ -2079,7 +2098,8 @@ namespace le
             const MacroSitePlacementData *placement = root.get_macro_site_placement(placement_id);
             if (!placement)
                 continue;
-            status = lefwMacroSitePatternStr(placement->site_name.c_str(), to_um(placement->origin.x), to_um(placement->origin.y), orientation_to_string(placement->orient),
+            const Point placement_origin = placement->origin.value_or(Point{});
+            status = lefwMacroSitePatternStr(placement->site_name.c_str(), to_um(placement_origin.x), to_um(placement_origin.y), orientation_to_string(placement->orient),
                                               placement->num_x.value_or(0), placement->num_y.value_or(0),
                                               placement->step_x ? to_um(*placement->step_x) : 0.0, placement->step_y ? to_um(*placement->step_y) : 0.0);
             if (status)

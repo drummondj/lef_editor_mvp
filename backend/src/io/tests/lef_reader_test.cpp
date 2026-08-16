@@ -197,8 +197,9 @@ TEST_F(LEFReaderCompleteFixture, ConvertsMacroSizeAndOriginToDbu)
     AbstractId abstract_id = root.get_design_abstract(design_id);
     const AbstractData *abstract = root.get_abstract(abstract_id);
 
-    EXPECT_EQ(abstract->size.x, 1344000);
-    EXPECT_EQ(abstract->size.y, 480000);
+    ASSERT_TRUE(abstract->size.has_value());
+    EXPECT_EQ(abstract->size->x, 1344000);
+    EXPECT_EQ(abstract->size->y, 480000);
     EXPECT_EQ(abstract->type, "CORE");
 
     // No OVERLAP obstruction on this macro, so the boundary falls back to a
@@ -737,20 +738,24 @@ TEST_F(LEFReaderViaRuleReferenceFixture, ReadsAViaReferencingAViaRuleWithCutGeom
 
     const ViaRuleReferenceData &vr = *vr_ptr;
     EXPECT_EQ(vr.via_rule_name, "VIARULE2");
-    EXPECT_EQ(vr.cut_size.x, 100);
-    EXPECT_EQ(vr.cut_size.y, 100);
+    ASSERT_TRUE(vr.cut_size.has_value());
+    EXPECT_EQ(vr.cut_size->x, 100);
+    EXPECT_EQ(vr.cut_size->y, 100);
     EXPECT_EQ(vr.bot_layer_name, "M1");
     EXPECT_EQ(vr.cut_layer_name, "V1");
     EXPECT_EQ(vr.top_layer_name, "M1");
-    EXPECT_EQ(vr.cut_spacing.x, 100);
-    EXPECT_EQ(vr.cut_spacing.y, 100);
+    ASSERT_TRUE(vr.cut_spacing.has_value());
+    EXPECT_EQ(vr.cut_spacing->x, 100);
+    EXPECT_EQ(vr.cut_spacing->y, 100);
     // ENCLOSURE 0.05 0.01 0.01 0.05 -> xBotEnc yBotEnc xTopEnc yTopEnc
     // (confirmed via lef.y's via_viarule grammar rule's own positional
     // setViaRule(...) call).
-    EXPECT_EQ(vr.bot_enclosure.x, 50);
-    EXPECT_EQ(vr.bot_enclosure.y, 10);
-    EXPECT_EQ(vr.top_enclosure.x, 10);
-    EXPECT_EQ(vr.top_enclosure.y, 50);
+    ASSERT_TRUE(vr.bot_enclosure.has_value());
+    EXPECT_EQ(vr.bot_enclosure->x, 50);
+    EXPECT_EQ(vr.bot_enclosure->y, 10);
+    ASSERT_TRUE(vr.top_enclosure.has_value());
+    EXPECT_EQ(vr.top_enclosure->x, 10);
+    EXPECT_EQ(vr.top_enclosure->y, 50);
 }
 
 TEST_F(LEFReaderViaFixture, ReadsSiteDefinitionsWithClassSizeSymmetryAndRowPattern)
@@ -764,9 +769,10 @@ TEST_F(LEFReaderViaFixture, ReadsSiteDefinitionsWithClassSizeSymmetryAndRowPatte
     ASSERT_TRUE(core->size.has_value());
     EXPECT_EQ(core->size->x, 200);
     EXPECT_EQ(core->size->y, 2000);
-    EXPECT_FALSE(core->symmetry.x);
-    EXPECT_TRUE(core->symmetry.y);
-    EXPECT_FALSE(core->symmetry.r90);
+    ASSERT_TRUE(core->symmetry.has_value());
+    EXPECT_FALSE(core->symmetry->x);
+    EXPECT_TRUE(core->symmetry->y);
+    EXPECT_FALSE(core->symmetry->r90);
     EXPECT_TRUE(core->row_pattern.empty());
 
     const SiteId dblcore_id = root.get_site_by_name("DBLCORE");
@@ -774,8 +780,9 @@ TEST_F(LEFReaderViaFixture, ReadsSiteDefinitionsWithClassSizeSymmetryAndRowPatte
     const SiteData *dblcore = root.get_site(dblcore_id);
     ASSERT_TRUE(dblcore != nullptr);
 
-    EXPECT_TRUE(dblcore->symmetry.x);
-    EXPECT_TRUE(dblcore->symmetry.y);
+    ASSERT_TRUE(dblcore->symmetry.has_value());
+    EXPECT_TRUE(dblcore->symmetry->x);
+    EXPECT_TRUE(dblcore->symmetry->y);
     ASSERT_EQ(dblcore->row_pattern.size(), 2u);
     EXPECT_EQ(dblcore->row_pattern[0].site_name, "CORE");
     EXPECT_EQ(dblcore->row_pattern[0].orient, Orientation::N);
