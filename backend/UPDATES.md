@@ -460,3 +460,21 @@ Features applied to all TCL procs to help the user while they run interactive TC
 The usual way to do this is to create some helper functions in TCL, that can be ran after creating a proc to annotate the usage and option data for that proc. The usage data can be stored in a global TCL variable and read by the help, man and command completetion procs. Then any custom TCL procs can be added to the help system at runtime.
 
 You should wrap all generated TCL commands with procs to enable this feature.
+
+# 21. Object editing
+
+Add support for editing objects in the GUI with undo/redo support.
+
+1. Setup command pattern with undo/redo capability.
+2. Move current Flutter based history into backend and reuse history from step 1.
+3. Implement "Move" command
+  3.1. The user selects one or more shapes in the GUI
+  3.2. Then enters edit mode
+  3.3. Click on Move button or CTRL-m to start move
+  3.4. Click on layout window to register start point
+  3.5. Move mouse to new position, show "ghost" shape while mouse is moving. Defaults to orthogonal, use shift to allow freeform move.
+  3.6. Second click commits the move.
+4. Also, when in edit mode, no select mode keyboard shortcuts should be available that change the object selection. The user needs to move to select mode to change the selection. This is to stop unintended object selection during editing.
+5. Different object types may require different editing semantics, but we will start with shapes only first. Something to consider when shaping the code.
+6. This bulk of this code should probably live in it's own module, with a thin wrapper in the api module.
+

@@ -121,6 +121,14 @@ int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
 int remove_shape_path(const char *id, int path_index);
 
+// --- Editing / undo-redo (UPDATES.md item 21) ---
+void begin_command(const char *label);
+int end_command(int succeeded);
+int undo_command();
+int redo_command();
+int command_history_count();
+const char *command_history_at(int index);
+
 // --- Generated TCL property-reading surface (see backend/CLAUDE.md's
 // TCL section) - never edit generated/le_api_generated.i directly,
 // regenerate via the regen-tcl skill instead. ---

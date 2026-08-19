@@ -522,6 +522,220 @@ class LefEditorPluginBindings {
   late final _le_clear_rulers = _le_clear_rulersPtr
       .asFunction<void Function(ffi.Pointer<LeHandle>)>();
 
+  /// @brief Begins recording a new undo/redo transaction labeled
+  /// `label` (e.g. the raw text of a command a user just typed, or a
+  /// short synthesized label like "move"). Every le_create_X/le_update_X/
+  /// le_delete_X call made on this handle while a transaction is
+  /// recording is captured as one undo/redo step within it. Calling
+  /// this while a transaction is already recording is a no-op (no
+  /// nesting supported this round) - a no-op if handle or label is
+  /// null.
+  void le_begin_command(
+    ffi.Pointer<LeHandle> handle,
+    ffi.Pointer<ffi.Char> label,
+  ) {
+    return _le_begin_command(handle, label);
+  }
+
+  late final _le_begin_commandPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+        >
+      >('le_begin_command');
+  late final _le_begin_command = _le_begin_commandPtr
+      .asFunction<
+        void Function(ffi.Pointer<LeHandle>, ffi.Pointer<ffi.Char>)
+      >();
+
+  /// @brief Ends the transaction started by le_begin_command(). If it
+  /// recorded at least one step, pushes it onto the undo stack
+  /// (clearing the redo stack) regardless of `succeeded`; if
+  /// `succeeded` is nonzero, `label` is also appended to the
+  /// command-recall log (le_command_history_count/_at) - so a
+  /// zero-step command (e.g. a pure read) that still ran successfully
+  /// is recallable even though there's nothing to undo. A no-op if
+  /// handle is null or no transaction is currently recording.
+  void le_end_command(ffi.Pointer<LeHandle> handle, int succeeded) {
+    return _le_end_command(handle, succeeded);
+  }
+
+  late final _le_end_commandPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>, ffi.Int32)>
+      >('le_end_command');
+  late final _le_end_command = _le_end_commandPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Undoes the most recently recorded transaction, if any
+  /// (Ctrl-Z). Returns nonzero if something was undone. A no-op
+  /// (returns 0) if handle is null or the undo stack is empty.
+  int le_undo(ffi.Pointer<LeHandle> handle) {
+    return _le_undo(handle);
+  }
+
+  late final _le_undoPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_undo',
+      );
+  late final _le_undo = _le_undoPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Redoes the most recently undone transaction, if any
+  /// (Ctrl-Shift-Z). Returns nonzero if something was redone. A no-op
+  /// (returns 0) if handle is null or the redo stack is empty.
+  int le_redo(ffi.Pointer<LeHandle> handle) {
+    return _le_redo(handle);
+  }
+
+  late final _le_redoPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_redo',
+      );
+  late final _le_redo = _le_redoPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief True (nonzero) if le_undo() would currently do something.
+  /// Returns 0 if handle is null.
+  int le_can_undo(ffi.Pointer<LeHandle> handle) {
+    return _le_can_undo(handle);
+  }
+
+  late final _le_can_undoPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_can_undo',
+      );
+  late final _le_can_undo = _le_can_undoPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief True (nonzero) if le_redo() would currently do something.
+  /// Returns 0 if handle is null.
+  int le_can_redo(ffi.Pointer<LeHandle> handle) {
+    return _le_can_redo(handle);
+  }
+
+  late final _le_can_redoPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_can_redo',
+      );
+  late final _le_can_redo = _le_can_redoPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Number of recorded command-recall entries (migrated from
+  /// the Flutter Terminal's own local `_commandHistory` list) - only
+  /// successfully (le_end_command(..., 1)) executed commands are
+  /// recorded, in submission order. Indexes le_command_history_at()'s
+  /// own `index` parameter. Returns 0 if handle is null.
+  int le_command_history_count(ffi.Pointer<LeHandle> handle) {
+    return _le_command_history_count(handle);
+  }
+
+  late final _le_command_history_countPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_command_history_count',
+      );
+  late final _le_command_history_count = _le_command_history_countPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief The command text at `index` (0..le_command_history_count()-1).
+  /// Owned by the handle - valid until the handle is destroyed (entries
+  /// are never removed/reordered). Returns null if handle is null or
+  /// index is out of range.
+  ffi.Pointer<ffi.Char> le_command_history_at(
+    ffi.Pointer<LeHandle> handle,
+    int index,
+  ) {
+    return _le_command_history_at(handle, index);
+  }
+
+  late final _le_command_history_atPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, ffi.Int32)
+        >
+      >('le_command_history_at');
+  late final _le_command_history_at = _le_command_history_atPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<LeHandle>, int)>();
+
+  /// @brief Selects every currently selectable shape in the current
+  /// Abstract (same underlying behavior as LE_KEY_SELECT_ALL while
+  /// LE_KEY_CTRL is held - see its own doc comment for the 10,000-object
+  /// cap and capped-selection warning message), but callable directly -
+  /// for the Select-mode toolbox button (UPDATES.md item 21), which has
+  /// no natural "Ctrl held" precondition of its own the way the keyboard
+  /// shortcut does. A no-op if handle is null.
+  void le_select_all(ffi.Pointer<LeHandle> handle) {
+    return _le_select_all(handle);
+  }
+
+  late final _le_select_allPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_select_all',
+      );
+  late final _le_select_all = _le_select_allPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Clears the current selection (same underlying behavior as
+  /// LE_KEY_DESELECT_ALL while LE_KEY_CTRL is held), callable directly -
+  /// see le_select_all's own comment. A no-op if handle is null.
+  void le_deselect_all(ffi.Pointer<LeHandle> handle) {
+    return _le_deselect_all(handle);
+  }
+
+  late final _le_deselect_allPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_deselect_all',
+      );
+  late final _le_deselect_all = _le_deselect_allPtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Arms Move (UPDATES.md item 21) - equivalent to Ctrl-M or
+  /// clicking the Move toolbox button. Only meaningful in Edit mode
+  /// with a non-empty selection; a no-op otherwise (including if
+  /// handle is null). The next two le_mouse_up() clicks in Edit mode
+  /// set the move's anchor point, then commit the move - see
+  /// le_mouse_up's own doc comment.
+  void le_arm_move(ffi.Pointer<LeHandle> handle) {
+    return _le_arm_move(handle);
+  }
+
+  late final _le_arm_movePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_arm_move',
+      );
+  late final _le_arm_move = _le_arm_movePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief Cancels an in-progress move (armed or anchored, not yet
+  /// committed) without applying it - e.g. the Escape key, which
+  /// already reaches this via LE_KEY_FINISH_RULER's handler (safe to
+  /// call regardless of mode, same as that key's own ruler-finishing
+  /// behavior). A no-op if handle is null or no move is in progress.
+  void le_cancel_move(ffi.Pointer<LeHandle> handle) {
+    return _le_cancel_move(handle);
+  }
+
+  late final _le_cancel_movePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<LeHandle>)>>(
+        'le_cancel_move',
+      );
+  late final _le_cancel_move = _le_cancel_movePtr
+      .asFunction<void Function(ffi.Pointer<LeHandle>)>();
+
+  /// @brief True (nonzero) if Move is currently armed (whether or not
+  /// its anchor has been set yet) - for the Move toolbox button's own
+  /// pressed/armed visual state. Returns 0 if handle is null.
+  int le_is_move_armed(ffi.Pointer<LeHandle> handle) {
+    return _le_is_move_armed(handle);
+  }
+
+  late final _le_is_move_armedPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<LeHandle>)>>(
+        'le_is_move_armed',
+      );
+  late final _le_is_move_armed = _le_is_move_armedPtr
+      .asFunction<int Function(ffi.Pointer<LeHandle>)>();
+
   /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
   /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
   /// general row/column model this mirrors. Selectable by default until
@@ -859,7 +1073,13 @@ class LefEditorPluginBindings {
   /// once per repeat, matching a real keyboard's own repeat behavior,
   /// not a one-shot trigger on first press only:
   ///
-  /// - LE_KEY_ZOOM: le_zoom() by a fixed factor, anchored at the
+  /// - LE_KEY_ZOOM: while LE_KEY_CTRL is currently held, undoes
+  /// (le_undo) or, if LE_KEY_SHIFT is also held, redoes (le_redo) the
+  /// most recent transaction instead of zooming (UPDATES.md item 21,
+  /// Ctrl-Z/Ctrl-Shift-Z) - the frontend's key-to-code map already
+  /// sends every "z" press as LE_KEY_ZOOM regardless of modifiers, so
+  /// this branches here rather than needing its own key code.
+  /// Otherwise: le_zoom() by a fixed factor, anchored at the
   /// current mouse position (Scene::mouse_x_px/mouse_y_px - i.e.
   /// wherever le_set_mouse_position was last called for); zooms in,
   /// or out if LE_KEY_SHIFT is currently held (le_is_key_held).
@@ -873,12 +1093,15 @@ class LefEditorPluginBindings {
   /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
   /// viewport-fraction step in the corresponding direction.
   /// - LE_KEY_SELECT_ALL (UPDATES.md 9.1): only while LE_KEY_CTRL is
-  /// currently held - clears the current selection, then selects
-  /// every currently selectable shape in the current Abstract
-  /// regardless of viewport (not just what's on screen), up to a
-  /// fixed cap of 10,000 objects. If the design has more selectable
-  /// shapes than that, the selection stops at the cap and a
-  /// "WARNING: Selection capped..." entry is appended to the
+  /// currently held *and* the current mode is LE_MODE_SELECT
+  /// (UPDATES.md item 21 - Select-mode selection shortcuts are
+  /// disabled in Edit/Ruler mode; switch back to Select mode to
+  /// change the selection there) - clears the current selection,
+  /// then selects every currently selectable shape in the current
+  /// Abstract regardless of viewport (not just what's on screen), up
+  /// to a fixed cap of 10,000 objects. If the design has more
+  /// selectable shapes than that, the selection stops at the cap and
+  /// a "WARNING: Selection capped..." entry is appended to the
   /// le_message_count()/le_message_at() queue (UPDATES.md item 3) -
   /// there's no separate "was it capped" return value, this is the
   /// same mechanism any other backend-originated message uses.
@@ -896,8 +1119,13 @@ class LefEditorPluginBindings {
   /// visibility, unconditional on LE_KEY_CTRL - same VIA-pairing
   /// re-check as LE_KEY_1..LE_KEY_9 above.
   /// - LE_KEY_DESELECT_ALL (UPDATES.md 9.5): only while LE_KEY_CTRL is
-  /// currently held - clears the current selection. A no-op (not an
-  /// error) if the selection was already empty.
+  /// currently held *and* the current mode is LE_MODE_SELECT (same
+  /// mode-gating as LE_KEY_SELECT_ALL above, UPDATES.md item 21) -
+  /// clears the current selection. A no-op (not an error) if the
+  /// selection was already empty.
+  /// - LE_KEY_MOVE (UPDATES.md item 21): only while LE_KEY_CTRL is
+  /// currently held - equivalent to le_arm_move(); a no-op outside
+  /// Edit mode or with an empty selection, same as that function.
   ///
   /// A no-op if handle is null.
   void le_key_down(ffi.Pointer<LeHandle> handle, int key_code) {
@@ -1027,6 +1255,23 @@ class LefEditorPluginBindings {
   /// rectangle between the down and up points. Without shift held,
   /// replaces the current selection with the results; with shift
   /// held, adds them to it.
+  ///
+  /// **In Edit mode with Move armed** (UPDATES.md item 21, see
+  /// le_arm_move) - a click (not a drag; a drag's up-event is treated
+  /// the same as a click here, Move has no rubber-band behavior of its
+  /// own) does one of two things depending on whether the move already
+  /// has an anchor: with no anchor yet, this click sets it (the move's
+  /// start point); with an anchor already set, this click computes the
+  /// offset from the anchor to this click's own (grid-snapped)
+  /// position - orthogonally constrained to whichever axis moved
+  /// further unless LE_KEY_SHIFT is held (free-form) - applies it to
+  /// every moving shape's geometry, records the whole set as one
+  /// undoable transaction (le_undo/le_redo), and clears the armed/
+  /// anchored move state. Selection is untouched either way - Move
+  /// never changes *which* shapes are selected, only their geometry.
+  /// In Edit mode with Move *not* armed, this is a no-op (selection
+  /// changes are Select-mode-only - see LE_KEY_SELECT_ALL's own
+  /// comment).
   ///
   /// **Started by le_zoom_drag_down()** (UPDATES.md 9.3): a click-sized
   /// release (same threshold as above) is a no-op - fitting to a
@@ -1246,15 +1491,21 @@ class LefEditorPluginBindings {
       .asFunction<LePixelBuffer Function(ffi.Pointer<LeHandle>)>();
 
   /// @brief Find the Terminal named `name` (exact match) within the
-  /// currently selected Design's Abstract (see le_set_current_design/
-  /// le_set_current_design_by_id - same current-view scoping
-  /// le_get_terminals already uses). A linear scan over
+  /// currently selected Abstract (le_set_current_abstract/
+  /// le_current_abstract's own handle->current_abstract_id - same
+  /// current-view scoping le_get_terminals' own default scope already
+  /// uses; deliberately *not* handle->scene.current_abstract(), a
+  /// separate GUI-rendering "current view" only ever moved as a side
+  /// effect of selecting a Design, e.g. le_set_current_design_by_id -
+  /// a script that builds an Abstract from scratch and calls
+  /// le_set_current_abstract directly, with no Design to select, needs
+  /// this to still work). A linear scan over
   /// Root::get_abstract_terminals, not a cmg index=True lookup - Terminal
   /// name uniqueness is per-Abstract (unique_per_parent, see
   /// backend/src/database/schema.py's own Terminal.name comment), not
   /// global, so a flat index=True lookup would be the wrong shape here.
   /// Returns an invalid LeTerminalId (index == UINT32_MAX) if handle or
-  /// name is null, no Design is currently selected, or no Terminal in
+  /// name is null, no Abstract is currently selected, or no Terminal in
   /// the current Abstract has that name.
   LeTerminalId le_terminal_by_name(
     ffi.Pointer<LeHandle> handle,
@@ -7558,12 +7809,17 @@ class LefEditorPluginBindings {
       .asFunction<LeInstanceId Function(ffi.Pointer<LeHandle>, int)>();
 
   /// --- create_<type> - one flag per scalar field (str/int/double/dbu/bool/
-  /// enum), required iff Field.create_required(); is_child/is_list/embedded-
-  /// struct fields are out of scope here (a future add_X/set_X round - see
-  /// TCL_EXPLORATION.md). A dbu field crosses this C boundary in microns
-  /// (`<field>_um`, converted via database_units_microns()/to_dbu(), same
-  /// convention le_add_shape_rect's own ll_x_um/.../ur_y_um already uses).
-  /// An optional numeric field (int/double/dbu) gets a companion
+  /// enum), required iff Field.create_required(); a flattenable embedded
+  /// struct (Point/Rect/Symmetry/... - Field.compound_klass()) or a *list*
+  /// of one (Field.list_compound_kind() - e.g. Shape.rects/polygons/paths)
+  /// also gets its own flag, exploded into a fixed set of C slots or a
+  /// single flat (const double*, int32_t count) pair respectively; a
+  /// non-flattenable embedded struct or an is_child relationship stays out
+  /// of scope (a future add_X/set_X round - see TCL_EXPLORATION.md). A dbu
+  /// field (plain or nested inside a compound/list_compound one) crosses
+  /// this C boundary in microns (`<field>_um`, converted via
+  /// database_units_microns()/to_dbu()). An optional numeric field
+  /// (int/double/dbu) gets a companion
   /// `has_<field>` int32_t so an omitted flag stores real std::nullopt, not
   /// a zero value that could collide with a genuine, meaningful 0 - unlike
   /// str/enum fields, which use nullptr for "omitted" directly (see
@@ -13844,8 +14100,23 @@ enum LeKeyCode {
   /// once there's nothing active to finish, and there's no active
   /// ruler at all outside Ruler mode (leaving it already finishes
   /// whatever was in progress - see Scene::set_mode), so this
-  /// never needs mode-gating at the call site either.
-  LE_KEY_FINISH_RULER(24);
+  /// never needs mode-gating at the call site either. Also cancels
+  /// an in-progress (not yet committed) Move, if any (UPDATES.md
+  /// item 21, le_cancel_move) - same "always safe to fire" reasoning,
+  /// Scene::end_move() is a no-op once there's nothing to cancel.
+  LE_KEY_FINISH_RULER(24),
+
+  /// Arms Move (UPDATES.md item 21, Ctrl-M) - see le_arm_move's own
+  /// doc comment. Ctrl-gated at the le_key_down call site, same as
+  /// LE_KEY_SELECT_ALL/LE_KEY_DESELECT_ALL, even though the Move
+  /// toolbox button calls le_arm_move() directly and bypasses this
+  /// gate. No separate LE_KEY_UNDO/LE_KEY_REDO code exists -
+  /// Ctrl-Z/Ctrl-Shift-Z are handled by branching inside
+  /// LE_KEY_ZOOM's own handler instead (see le_key_down's doc
+  /// comment) - the frontend's key-to-code map already sends every
+  /// "z" press as LE_KEY_ZOOM regardless of modifiers, the same way
+  /// every other canvas-navigation code already works.
+  LE_KEY_MOVE(25);
 
   final int value;
   const LeKeyCode(this.value);
@@ -13875,6 +14146,7 @@ enum LeKeyCode {
     22 => LE_KEY_EDIT_MODE,
     23 => LE_KEY_RULER_MODE,
     24 => LE_KEY_FINISH_RULER,
+    25 => LE_KEY_MOVE,
     _ => throw ArgumentError('Unknown value for LeKeyCode: $value'),
   };
 }

@@ -92,7 +92,7 @@ class _HomeState extends State<Home> {
       case 'menu':
         return DockingItem(
           id: id,
-          name: 'Menu',
+          name: 'File',
           widget: WidgetCard(child: MainMenu()),
           closable: false,
           keepAlive: true,
@@ -229,21 +229,42 @@ class _HomeState extends State<Home> {
       ),
       child: TabbedViewTheme(
         data: TabbedViewThemeData.dark()
-          ..tab.selectedStatus.innerBottomBorder = BorderSide(
-            color: Theme.of(context).colorScheme.secondary,
-            width: 3,
-          )
+          // ..tab.selectedStatus.innerTopBorder = BorderSide(
+          //   color: Theme.of(context).colorScheme.tertiary,
+          //   width: 3,
+          // )
           ..tabsArea.color = Theme.of(context).colorScheme.surfaceDim
+          ..tabsArea.equalHeights = .all
           ..tab.selectedStatus.decoration = BoxDecoration(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(5),
+              topRight: Radius.circular(5),
+            ),
+            border: BoxBorder.fromLTRB(
+              top: BorderSide(
+                color: Theme.of(context).colorScheme.tertiary,
+                width: 2,
+              ),
+            ),
           )
           ..tab.decoration = BoxDecoration(
             color: Theme.of(context).colorScheme.surfaceDim,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(5),
+              topRight: Radius.circular(5),
+            ),
+            border: BoxBorder.fromLTRB(
+              top: BorderSide(
+                color: Theme.of(context).colorScheme.surfaceDim,
+                width: 1,
+              ),
+            ),
           )
           ..contentArea.decoration = BoxDecoration(
             border: BoxBorder.all(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              width: 3,
+              width: 4,
             ),
           )
           ..contentArea.padding = EdgeInsets.all(2),

@@ -566,6 +566,109 @@ class LeEditor {
     _bindings.le_clear_rulers(_handle);
   }
 
+  // --- Editing / undo-redo (UPDATES.md item 21) ---
+
+  /// Begins recording a new undo/redo transaction labeled [label] (e.g.
+  /// the raw text of a typed command). See [endCommand].
+  void beginCommand(String label) {
+    _checkNotDisposed();
+    final labelPtr = label.toNativeUtf8();
+    try {
+      _bindings.le_begin_command(_handle, labelPtr.cast());
+    } finally {
+      pkg_ffi.calloc.free(labelPtr);
+    }
+  }
+
+  /// Ends the transaction started by [beginCommand]. If it recorded at
+  /// least one step, pushes it onto the undo stack regardless of
+  /// [succeeded]; if [succeeded] is true, the label is also appended to
+  /// the command-recall log ([commandHistoryCount]/[commandHistoryAt]).
+  void endCommand(bool succeeded) {
+    _checkNotDisposed();
+    _bindings.le_end_command(_handle, succeeded ? 1 : 0);
+  }
+
+  /// Undoes the most recently recorded transaction, if any. Returns true
+  /// if something was undone.
+  bool undo() {
+    _checkNotDisposed();
+    return _bindings.le_undo(_handle) != 0;
+  }
+
+  /// Redoes the most recently undone transaction, if any. Returns true
+  /// if something was redone.
+  bool redo() {
+    _checkNotDisposed();
+    return _bindings.le_redo(_handle) != 0;
+  }
+
+  /// True if [undo] would currently do something.
+  bool get canUndo {
+    _checkNotDisposed();
+    return _bindings.le_can_undo(_handle) != 0;
+  }
+
+  /// True if [redo] would currently do something.
+  bool get canRedo {
+    _checkNotDisposed();
+    return _bindings.le_can_redo(_handle) != 0;
+  }
+
+  /// Number of recorded command-recall entries (only successfully
+  /// executed commands - see [endCommand]) - indexes [commandHistoryAt]'s
+  /// own `index` parameter.
+  int get commandHistoryCount {
+    _checkNotDisposed();
+    return _bindings.le_command_history_count(_handle);
+  }
+
+  /// The command text at [index] (0..[commandHistoryCount]-1).
+  String commandHistoryAt(int index) {
+    _checkNotDisposed();
+    final textPtr = _bindings.le_command_history_at(_handle, index);
+    if (textPtr == ffi.nullptr) return '';
+    return textPtr.cast<pkg_ffi.Utf8>().toDartString();
+  }
+
+  /// Selects every currently selectable shape in the current Abstract -
+  /// the Select-mode toolbox button's direct entry point (same underlying
+  /// behavior as Ctrl-A - see [LeEditorInput.handleKeyEvent] - but not
+  /// gated on a held Ctrl key).
+  void selectAll() {
+    _checkNotDisposed();
+    _bindings.le_select_all(_handle);
+  }
+
+  /// Clears the current selection - the Select-mode toolbox button's
+  /// direct entry point (same underlying behavior as Ctrl-D).
+  void deselectAll() {
+    _checkNotDisposed();
+    _bindings.le_deselect_all(_handle);
+  }
+
+  /// Arms Move - equivalent to Ctrl-M. Only meaningful in Edit mode with
+  /// a non-empty selection; a no-op otherwise. The next two [mouseUp]
+  /// clicks in Edit mode set the move's anchor, then commit it.
+  void armMove() {
+    _checkNotDisposed();
+    _bindings.le_arm_move(_handle);
+  }
+
+  /// Cancels an in-progress move without applying it.
+  void cancelMove() {
+    _checkNotDisposed();
+    _bindings.le_cancel_move(_handle);
+  }
+
+  /// True if Move is currently armed (whether or not its anchor has been
+  /// set yet) - for the Move toolbox button's own pressed/armed visual
+  /// state.
+  bool get isMoveArmed {
+    _checkNotDisposed();
+    return _bindings.le_is_move_armed(_handle) != 0;
+  }
+
   /// Whether every ViewLayer named [layerName] is currently selectable -
   /// true by default until toggled with [setLayerNameSelectable]. Purely
   /// an interaction-layer concern (no hit-testing/click-to-select API

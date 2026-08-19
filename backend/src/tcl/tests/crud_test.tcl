@@ -566,4 +566,50 @@ set scratch_shape [create_shape -terminal_port $scratch_port -layer_name M1 -rec
 check_true "create_shape on the from-scratch TerminalPort returned a valid friendly id" [expr {$scratch_shape ne {}}]
 check "the from-scratch shape's rect round-trips" {0 0 10 10} [lindex [shape_rects $scratch_shape] 0]
 
+# --- Undo/redo (UPDATES.md item 21) - via le_repl_eval, the same bracket
+# point a typed console command goes through, exercising the real
+# create_terminal/update_shape/delete_terminal command names (not the
+# raw C++/Root layer - see editing_test.cpp for that). Reuses the
+# from-scratch scratch_abstract/scratch_shape set up just above -
+# current_abstract is already $scratch_abstract at this point. ---
+
+check "command_history is empty before any le_repl_eval call" {} [command_history]
+
+set undo_term [le_repl_eval {create_terminal -name UNDOTEST -direction INPUT}]
+check_true "le_repl_eval create_terminal returned a valid friendly id" [expr {$undo_term ne {}}]
+check "get_terminals sees the new terminal" $undo_term [get_terminals UNDOTEST]
+check "command_history records the successful create_terminal command" \
+    "0: create_terminal -name UNDOTEST -direction INPUT" [command_history]
+
+check "undo removes the just-created terminal" 1 [undo]
+check "get_terminals no longer sees it after undo" {} [get_terminals UNDOTEST]
+
+check "redo re-creates it" 1 [redo]
+check_true "get_terminals sees it again after redo" [expr {[get_terminals UNDOTEST] ne {}}]
+
+# update_shape round trip - scratch_shape's layer_name is M1 (set above).
+le_repl_eval "update_shape $scratch_shape -layer_name M2"
+check "update_shape via le_repl_eval renamed the layer" M2 [dict get [get_properties $scratch_shape] layer_name]
+
+check "undo restores the shape's original layer name" 1 [undo]
+check "layer name is back to M1 after undo" M1 [dict get [get_properties $scratch_shape] layer_name]
+
+check "redo re-applies the rename" 1 [redo]
+check "layer name is M2 again after redo" M2 [dict get [get_properties $scratch_shape] layer_name]
+
+# A deliberately-errored command is not added to command_history.
+set history_before [command_history]
+le_repl_eval {this_command_does_not_exist}
+check "command_history is unchanged after a failed command" $history_before [command_history]
+
+# delete_terminal round trip - undo recreates the terminal (at a new id,
+# not necessarily $delete_target - see Transaction's own id-cell doc
+# comment), which get_terminals (name-scoped, not id-scoped) still finds.
+set delete_target [le_repl_eval {create_terminal -name DELETETEST -direction OUTPUT}]
+le_repl_eval "delete_terminal $delete_target"
+check "delete_terminal via le_repl_eval removed the terminal" {} [get_terminals DELETETEST]
+
+check "undo recreates the deleted terminal" 1 [undo]
+check_true "get_terminals sees the recreated terminal" [expr {[get_terminals DELETETEST] ne {}}]
+
 puts "le_tcl CRUD test passed"

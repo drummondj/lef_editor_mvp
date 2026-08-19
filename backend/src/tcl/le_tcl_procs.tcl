@@ -21,6 +21,33 @@
 
 set kInvalidId 4294967295
 
+# --- Editing / undo-redo (UPDATES.md item 21) ---
+#
+# Wraps one user-typed command with undo/redo transaction recording +
+# command-recall logging - the single bracket point every REPL-style
+# caller should use instead of raw Tcl_Eval, so a typed command is
+# exactly as undoable (Ctrl-Z/Ctrl-Shift-Z) as a GUI edit like Move, and
+# only successfully-run commands (`code == 0`) get added to
+# command_history. `uplevel #0` runs $command in the *global* scope, not
+# nested inside this proc's own local one - matching how a real
+# interactive shell evaluates each line at toplevel (a bare `set x 5`
+# lands in global scope, not thrown away when this proc returns).
+#
+# `flutter_plugin`'s LeTclBridge.mm is the only caller (every typed
+# console command goes through it) - le_shell.cpp's own interactive REPL
+# is deliberately *not* wired through this yet, since it doesn't route
+# through a caller-controlled eval loop the way LeTclBridge.mm does; a
+# command typed at that shell is undoable/recorded at the individual
+# create/update/delete level (the generic per-mutation hook still fires),
+# just not batched into one transaction/recall entry per line the way a
+# Flutter-console command is.
+proc le_repl_eval {command} {
+    begin_command $command
+    set code [catch {uplevel #0 $command} result]
+    end_command [expr {$code == 0}]
+    return $result
+}
+
 # --- Help system (UPDATES.md item 20) ---
 #
 # ::command_help maps a command name to a {usage <str> description <str>
@@ -444,6 +471,56 @@ proc generate_command_docs {{path {}}} {
     }
     return $text
 }
+
+# --- undo/redo/command_history (UPDATES.md item 21) - the raw undo_command/
+# redo_command/command_history_count/command_history_at shim functions
+# (le_tcl_shim.hpp) are named with a suffix specifically so these procs
+# can be the real `undo`/`redo`/`command_history` Tcl commands without
+# shadowing (and thereby recursing into) the shim's own SWIG-bound ones. ---
+
+proc undo {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "undo \[-help\] - Undoes the most recently recorded command or edit"
+    }
+    return [expr {[undo_command] ? "1" : "0"}]
+}
+register_command_help undo \
+    "undo \[-help\] - Undoes the most recently recorded command or edit" \
+    "Undoes the most recently recorded transaction (a typed command or a GUI edit like Move), if any. Returns 1 if something was undone, 0 otherwise." \
+    {
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
+
+proc redo {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "redo \[-help\] - Redoes the most recently undone command or edit"
+    }
+    return [expr {[redo_command] ? "1" : "0"}]
+}
+register_command_help redo \
+    "redo \[-help\] - Redoes the most recently undone command or edit" \
+    "Redoes the most recently undone transaction, if any. Returns 1 if something was redone, 0 otherwise." \
+    {
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
+
+proc command_history {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "command_history \[-help\] - Lists successfully executed commands, in order"
+    }
+    set count [command_history_count]
+    set lines {}
+    for {set i 0} {$i < $count} {incr i} {
+        lappend lines "$i: [command_history_at $i]"
+    }
+    return [join $lines "\n"]
+}
+register_command_help command_history \
+    "command_history \[-help\] - Lists successfully executed commands, in order" \
+    "Lists every successfully executed typed command, in submission order (one per line, numbered) - backs the console's Up/Down recall. A command that errored is not recorded." \
+    {
+        {-help {type flag required 0 description {Show this usage message and return immediately}}}
+    }
 
 proc set_viewport_size {args} {
     if {[lsearch -exact $args "-help"] >= 0} {

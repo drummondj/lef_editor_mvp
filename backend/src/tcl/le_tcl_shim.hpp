@@ -235,6 +235,22 @@ int shape_path_point_count(const char *id, int path_index);
 const char *shape_path_point_at(const char *id, int path_index, int point_index);
 int remove_shape_path(const char *id, int path_index);
 
+// --- Editing / undo-redo (UPDATES.md item 21) - begin_command/end_command
+// bracket one recording transaction; le_repl_eval (le_tcl_procs.tcl) is
+// the only caller, wrapping every top-level typed console command with
+// them so it's exactly as undoable as a GUI edit like Move. undo/redo/
+// command_history back the `undo`/`redo`/`command_history` Tcl commands
+// directly (le_tcl_procs.tcl). ---
+
+void begin_command(const char *label);
+int end_command(int succeeded);
+int undo_command();
+int redo_command();
+int command_history_count();
+/// @brief The command text at `index` (0..command_history_count()-1).
+/// Empty string if index is out of range.
+const char *command_history_at(int index);
+
 // --- Generated TCL property-reading surface (see backend/CLAUDE.md's
 // TCL section) - bare property-table accessors and is_child-field
 // enumeration for every TCL-readable class not already covered above.

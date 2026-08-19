@@ -352,6 +352,104 @@ extern "C"
     /// is null.
     void le_clear_rulers(LeHandle *handle);
 
+    // --- Editing / undo-redo (UPDATES.md item 21) ---
+    // A command-pattern undo/redo stack (le::editing::CommandHistory, one
+    // per LeHandle) that every generated le_create_X/le_update_X and the
+    // 4 hand-written le_delete_X functions record themselves into
+    // whenever a transaction is currently recording - see
+    // le_begin_command/le_end_command below, and le_repl_eval
+    // (le_tcl_procs.tcl), the single bracket point that wraps every
+    // typed Tcl console command with them so a typed command is exactly
+    // as undoable as a GUI edit like Move (le_arm_move below).
+
+    /// @brief Begins recording a new undo/redo transaction labeled
+    /// `label` (e.g. the raw text of a command a user just typed, or a
+    /// short synthesized label like "move"). Every le_create_X/le_update_X/
+    /// le_delete_X call made on this handle while a transaction is
+    /// recording is captured as one undo/redo step within it. Calling
+    /// this while a transaction is already recording is a no-op (no
+    /// nesting supported this round) - a no-op if handle or label is
+    /// null.
+    void le_begin_command(LeHandle *handle, const char *label);
+
+    /// @brief Ends the transaction started by le_begin_command(). If it
+    /// recorded at least one step, pushes it onto the undo stack
+    /// (clearing the redo stack) regardless of `succeeded`; if
+    /// `succeeded` is nonzero, `label` is also appended to the
+    /// command-recall log (le_command_history_count/_at) - so a
+    /// zero-step command (e.g. a pure read) that still ran successfully
+    /// is recallable even though there's nothing to undo. A no-op if
+    /// handle is null or no transaction is currently recording.
+    void le_end_command(LeHandle *handle, int32_t succeeded);
+
+    /// @brief Undoes the most recently recorded transaction, if any
+    /// (Ctrl-Z). Returns nonzero if something was undone. A no-op
+    /// (returns 0) if handle is null or the undo stack is empty.
+    int32_t le_undo(LeHandle *handle);
+
+    /// @brief Redoes the most recently undone transaction, if any
+    /// (Ctrl-Shift-Z). Returns nonzero if something was redone. A no-op
+    /// (returns 0) if handle is null or the redo stack is empty.
+    int32_t le_redo(LeHandle *handle);
+
+    /// @brief True (nonzero) if le_undo() would currently do something.
+    /// Returns 0 if handle is null.
+    int32_t le_can_undo(LeHandle *handle);
+
+    /// @brief True (nonzero) if le_redo() would currently do something.
+    /// Returns 0 if handle is null.
+    int32_t le_can_redo(LeHandle *handle);
+
+    /// @brief Number of recorded command-recall entries (migrated from
+    /// the Flutter Terminal's own local `_commandHistory` list) - only
+    /// successfully (le_end_command(..., 1)) executed commands are
+    /// recorded, in submission order. Indexes le_command_history_at()'s
+    /// own `index` parameter. Returns 0 if handle is null.
+    int32_t le_command_history_count(LeHandle *handle);
+
+    /// @brief The command text at `index` (0..le_command_history_count()-1).
+    /// Owned by the handle - valid until the handle is destroyed (entries
+    /// are never removed/reordered). Returns null if handle is null or
+    /// index is out of range.
+    const char *le_command_history_at(LeHandle *handle, int32_t index);
+
+    /// @brief Selects every currently selectable shape in the current
+    /// Abstract (same underlying behavior as LE_KEY_SELECT_ALL while
+    /// LE_KEY_CTRL is held - see its own doc comment for the 10,000-object
+    /// cap and capped-selection warning message), but callable directly -
+    /// for the Select-mode toolbox button (UPDATES.md item 21), which has
+    /// no natural "Ctrl held" precondition of its own the way the keyboard
+    /// shortcut does. A no-op if handle is null.
+    void le_select_all(LeHandle *handle);
+
+    /// @brief Clears the current selection (same underlying behavior as
+    /// LE_KEY_DESELECT_ALL while LE_KEY_CTRL is held), callable directly -
+    /// see le_select_all's own comment. A no-op if handle is null.
+    void le_deselect_all(LeHandle *handle);
+
+    /// @brief Arms Move (UPDATES.md item 21) - equivalent to Ctrl-M or
+    /// clicking the Move toolbox button. Only meaningful in Edit mode
+    /// with a non-empty selection; a no-op otherwise (including if
+    /// handle is null). The next two le_mouse_up() clicks in Edit mode
+    /// set the move's anchor point, then commit the move - see
+    /// le_mouse_up's own doc comment. Calling this again while already
+    /// armed (including the re-arm a successful commit itself performs -
+    /// see le_mouse_up) is harmless - it just re-snapshots the ghost
+    /// preview from the current selection/geometry.
+    void le_arm_move(LeHandle *handle);
+
+    /// @brief Cancels an in-progress move (armed or anchored, not yet
+    /// committed) without applying it - e.g. the Escape key, which
+    /// already reaches this via LE_KEY_FINISH_RULER's handler (safe to
+    /// call regardless of mode, same as that key's own ruler-finishing
+    /// behavior). A no-op if handle is null or no move is in progress.
+    void le_cancel_move(LeHandle *handle);
+
+    /// @brief True (nonzero) if Move is currently armed (whether or not
+    /// its anchor has been set yet) - for the Move toolbox button's own
+    /// pressed/armed visual state. Returns 0 if handle is null.
+    int32_t le_is_move_armed(LeHandle *handle);
+
     /// @brief Current selectability of every ViewLayer whose LeLayerRow::name
     /// is `layer_name` - see le_is_layer_name_visible()'s comment for the
     /// general row/column model this mirrors. Selectable by default until
@@ -582,8 +680,22 @@ extern "C"
         /// once there's nothing active to finish, and there's no active
         /// ruler at all outside Ruler mode (leaving it already finishes
         /// whatever was in progress - see Scene::set_mode), so this
-        /// never needs mode-gating at the call site either.
+        /// never needs mode-gating at the call site either. Also cancels
+        /// an in-progress (not yet committed) Move, if any (UPDATES.md
+        /// item 21, le_cancel_move) - same "always safe to fire" reasoning,
+        /// Scene::end_move() is a no-op once there's nothing to cancel.
         LE_KEY_FINISH_RULER = 24,
+        /// Arms Move (UPDATES.md item 21, Ctrl-M) - see le_arm_move's own
+        /// doc comment. Ctrl-gated at the le_key_down call site, same as
+        /// LE_KEY_SELECT_ALL/LE_KEY_DESELECT_ALL, even though the Move
+        /// toolbox button calls le_arm_move() directly and bypasses this
+        /// gate. No separate LE_KEY_UNDO/LE_KEY_REDO code exists -
+        /// Ctrl-Z/Ctrl-Shift-Z are handled by branching inside
+        /// LE_KEY_ZOOM's own handler instead (see le_key_down's doc
+        /// comment) - the frontend's key-to-code map already sends every
+        /// "z" press as LE_KEY_ZOOM regardless of modifiers, the same way
+        /// every other canvas-navigation code already works.
+        LE_KEY_MOVE = 25,
     };
 
     /// @brief Mark `key_code` (an LeKeyCode value) as currently held,
@@ -596,7 +708,13 @@ extern "C"
     /// once per repeat, matching a real keyboard's own repeat behavior,
     /// not a one-shot trigger on first press only:
     ///
-    /// - LE_KEY_ZOOM: le_zoom() by a fixed factor, anchored at the
+    /// - LE_KEY_ZOOM: while LE_KEY_CTRL is currently held, undoes
+    ///   (le_undo) or, if LE_KEY_SHIFT is also held, redoes (le_redo) the
+    ///   most recent transaction instead of zooming (UPDATES.md item 21,
+    ///   Ctrl-Z/Ctrl-Shift-Z) - the frontend's key-to-code map already
+    ///   sends every "z" press as LE_KEY_ZOOM regardless of modifiers, so
+    ///   this branches here rather than needing its own key code.
+    ///   Otherwise: le_zoom() by a fixed factor, anchored at the
     ///   current mouse position (Scene::mouse_x_px/mouse_y_px - i.e.
     ///   wherever le_set_mouse_position was last called for); zooms in,
     ///   or out if LE_KEY_SHIFT is currently held (le_is_key_held).
@@ -610,12 +728,15 @@ extern "C"
     /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
     ///   viewport-fraction step in the corresponding direction.
     /// - LE_KEY_SELECT_ALL (UPDATES.md 9.1): only while LE_KEY_CTRL is
-    ///   currently held - clears the current selection, then selects
-    ///   every currently selectable shape in the current Abstract
-    ///   regardless of viewport (not just what's on screen), up to a
-    ///   fixed cap of 10,000 objects. If the design has more selectable
-    ///   shapes than that, the selection stops at the cap and a
-    ///   "WARNING: Selection capped..." entry is appended to the
+    ///   currently held *and* the current mode is LE_MODE_SELECT
+    ///   (UPDATES.md item 21 - Select-mode selection shortcuts are
+    ///   disabled in Edit/Ruler mode; switch back to Select mode to
+    ///   change the selection there) - clears the current selection,
+    ///   then selects every currently selectable shape in the current
+    ///   Abstract regardless of viewport (not just what's on screen), up
+    ///   to a fixed cap of 10,000 objects. If the design has more
+    ///   selectable shapes than that, the selection stops at the cap and
+    ///   a "WARNING: Selection capped..." entry is appended to the
     ///   le_message_count()/le_message_at() queue (UPDATES.md item 3) -
     ///   there's no separate "was it capped" return value, this is the
     ///   same mechanism any other backend-originated message uses.
@@ -633,8 +754,13 @@ extern "C"
     ///   visibility, unconditional on LE_KEY_CTRL - same VIA-pairing
     ///   re-check as LE_KEY_1..LE_KEY_9 above.
     /// - LE_KEY_DESELECT_ALL (UPDATES.md 9.5): only while LE_KEY_CTRL is
-    ///   currently held - clears the current selection. A no-op (not an
-    ///   error) if the selection was already empty.
+    ///   currently held *and* the current mode is LE_MODE_SELECT (same
+    ///   mode-gating as LE_KEY_SELECT_ALL above, UPDATES.md item 21) -
+    ///   clears the current selection. A no-op (not an error) if the
+    ///   selection was already empty.
+    /// - LE_KEY_MOVE (UPDATES.md item 21): only while LE_KEY_CTRL is
+    ///   currently held - equivalent to le_arm_move(); a no-op outside
+    ///   Edit mode or with an empty selection, same as that function.
     ///
     /// A no-op if handle is null.
     void le_key_down(LeHandle *handle, int32_t key_code);
@@ -706,6 +832,27 @@ extern "C"
     ///   rectangle between the down and up points. Without shift held,
     ///   replaces the current selection with the results; with shift
     ///   held, adds them to it.
+    ///
+    /// **In Edit mode with Move armed** (UPDATES.md item 21, see
+    /// le_arm_move) - a click (not a drag; a drag's up-event is treated
+    /// the same as a click here, Move has no rubber-band behavior of its
+    /// own) does one of two things depending on whether the move already
+    /// has an anchor: with no anchor yet, this click sets it (the move's
+    /// start point); with an anchor already set, this click computes the
+    /// offset from the anchor to this click's own (grid-snapped)
+    /// position - orthogonally constrained to whichever axis moved
+    /// further unless LE_KEY_SHIFT is held (free-form) - applies it to
+    /// every moving shape's geometry and records the whole set as one
+    /// undoable transaction (le_undo/le_redo). Move then stays armed,
+    /// re-snapshotted from the shapes' new positions and with the
+    /// anchor cleared, ready for an immediate follow-up move on the same
+    /// selection - only le_cancel_move (the Escape key) or leaving Edit
+    /// mode actually disarms it, so moving several shapes one after
+    /// another doesn't need Ctrl-M/the Move button re-pressed between
+    /// each one. Selection is untouched either way - Move never changes
+    /// *which* shapes are selected, only their geometry. In Edit mode
+    /// with Move *not* armed, this is a no-op (selection changes are
+    /// Select-mode-only - see LE_KEY_SELECT_ALL's own comment).
     ///
     /// **Started by le_zoom_drag_down()** (UPDATES.md 9.3): a click-sized
     /// release (same threshold as above) is a no-op - fitting to a

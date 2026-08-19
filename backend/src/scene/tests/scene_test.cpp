@@ -1070,6 +1070,194 @@ TEST(Scene, ClearRulersOnAnEmptyListIsANoOp)
     EXPECT_EQ(scene.ruler_version(), 0u);
 }
 
+TEST(Scene, ArmMoveWithEmptySelectionIsNoOp)
+{
+    Scene scene;
+    scene.arm_move({});
+    EXPECT_FALSE(scene.move().armed);
+    EXPECT_TRUE(scene.move().moving_ids.empty());
+}
+
+TEST(Scene, ArmMoveSnapshotsSelectionAndGeometry)
+{
+    Scene scene;
+    ShapeId shape_id{3, 0};
+    scene.select(shape_id);
+
+    Shape geometry;
+    geometry.layer_name = "M1";
+    const uint64_t before = scene.mouse_version();
+
+    scene.arm_move({geometry});
+    EXPECT_TRUE(scene.move().armed);
+    ASSERT_EQ(scene.move().moving_ids.size(), 1u);
+    EXPECT_EQ(scene.move().moving_ids[0], shape_id);
+    ASSERT_EQ(scene.move().moving_geometry.size(), 1u);
+    EXPECT_EQ(scene.move().moving_geometry[0].layer_name, "M1");
+    EXPECT_GT(scene.mouse_version(), before);
+}
+
+TEST(Scene, RefreshMoveGeometryReplacesTheGhostSnapshotWithoutTouchingAnchorOrArmedState)
+{
+    // Regression: committing a move re-arms for a follow-up move (see
+    // api.cpp's move_click_unlocked), keeping the ghost snapshot from the
+    // moment of that re-arm - if something *else* changes the moving
+    // shapes' geometry afterward (an external undo/redo), that snapshot
+    // goes stale unless explicitly refreshed. refresh_move_geometry is
+    // that explicit refresh - unlike arm_move, it must not touch
+    // anchor/armed, since an undo/redo can happen mid-gesture too.
+    Scene scene;
+    scene.select(ShapeId{1, 0});
+    Shape original;
+    original.layer_name = "M1";
+    scene.arm_move({original});
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_mouse_position(10, 10);
+    ASSERT_TRUE(scene.move_set_anchor());
+    ASSERT_TRUE(scene.move().anchor.has_value());
+    const uint64_t before = scene.mouse_version();
+
+    Shape refreshed;
+    refreshed.layer_name = "M2";
+    scene.refresh_move_geometry({refreshed});
+
+    EXPECT_TRUE(scene.move().armed); // untouched
+    ASSERT_TRUE(scene.move().anchor.has_value()); // untouched - not cleared like arm_move would
+    ASSERT_EQ(scene.move().moving_geometry.size(), 1u);
+    EXPECT_EQ(scene.move().moving_geometry[0].layer_name, "M2");
+    EXPECT_GT(scene.mouse_version(), before);
+}
+
+TEST(Scene, RefreshMoveGeometryIsANoOpWhenNotArmed)
+{
+    Scene scene;
+    const uint64_t before = scene.mouse_version();
+    Shape geometry;
+    scene.refresh_move_geometry({geometry});
+    EXPECT_FALSE(scene.move().armed);
+    EXPECT_TRUE(scene.move().moving_geometry.empty());
+    EXPECT_EQ(scene.mouse_version(), before);
+}
+
+TEST(Scene, MoveSetAnchorRequiresArmedAndAMousePosition)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(ShapeId{1, 0});
+
+    // Not armed yet - no-op.
+    scene.set_mouse_position(10, 90);
+    EXPECT_FALSE(scene.move_set_anchor());
+
+    scene.arm_move({Shape{}});
+    // Armed, but requires a mouse position too - already set above, so
+    // this should succeed now.
+    EXPECT_TRUE(scene.move_set_anchor());
+    ASSERT_TRUE(scene.move().anchor.has_value());
+    EXPECT_EQ(scene.move().anchor->x, 10);
+    EXPECT_EQ(scene.move().anchor->y, 10);
+
+    // A second call while an anchor already exists is a no-op.
+    EXPECT_FALSE(scene.move_set_anchor());
+}
+
+TEST(Scene, MoveDeltaOrthogonalConstrainsToTheLargerMagnitudeAxis)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(ShapeId{1, 0});
+    scene.arm_move({Shape{}});
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    ASSERT_TRUE(scene.move_set_anchor());
+
+    scene.set_mouse_position(25, 85); // dbu (25, 15) - dx=15, dy=5, x wins
+    const std::optional<Point> delta = scene.move_delta(/*free_form=*/false);
+    ASSERT_TRUE(delta.has_value());
+    EXPECT_EQ(delta->x, 15);
+    EXPECT_EQ(delta->y, 0);
+}
+
+TEST(Scene, MoveDeltaFreeFormReturnsTheRawOffset)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(ShapeId{1, 0});
+    scene.arm_move({Shape{}});
+
+    scene.set_mouse_position(10, 90); // dbu (10, 10)
+    ASSERT_TRUE(scene.move_set_anchor());
+
+    scene.set_mouse_position(25, 85); // dbu (25, 15)
+    const std::optional<Point> delta = scene.move_delta(/*free_form=*/true);
+    ASSERT_TRUE(delta.has_value());
+    EXPECT_EQ(delta->x, 15);
+    EXPECT_EQ(delta->y, 5);
+}
+
+TEST(Scene, MoveDeltaIsNulloptBeforeAnAnchorIsSet)
+{
+    Scene scene;
+    scene.select(ShapeId{1, 0});
+    scene.arm_move({Shape{}});
+    EXPECT_FALSE(scene.move_delta(false).has_value());
+}
+
+TEST(Scene, EndMoveClearsAllMoveState)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(ShapeId{1, 0});
+    scene.arm_move({Shape{}});
+    scene.set_mouse_position(10, 10);
+    scene.move_set_anchor();
+
+    scene.end_move();
+    EXPECT_FALSE(scene.move().armed);
+    EXPECT_FALSE(scene.move().anchor.has_value());
+    EXPECT_TRUE(scene.move().moving_ids.empty());
+}
+
+TEST(Scene, SetModeLeavingEditCancelsAnInProgressMove)
+{
+    Scene scene;
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_mode(Scene::Mode::EDIT);
+    scene.select(ShapeId{1, 0});
+    scene.arm_move({Shape{}});
+    ASSERT_TRUE(scene.move().armed);
+
+    scene.set_mode(Scene::Mode::SELECT);
+    EXPECT_FALSE(scene.move().armed);
+}
+
+TEST(Scene, SetMoveFreeFormDedupsItsVersionBump)
+{
+    Scene scene;
+    scene.set_move_free_form(true);
+    const uint64_t after_first = scene.mouse_version();
+    scene.set_move_free_form(true);
+    EXPECT_EQ(scene.mouse_version(), after_first);
+
+    scene.set_move_free_form(false);
+    EXPECT_GT(scene.mouse_version(), after_first);
+}
+
 TEST(Scene, SelectDeselectAndClear)
 {
     Scene scene;

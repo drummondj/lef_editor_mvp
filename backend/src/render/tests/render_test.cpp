@@ -1162,6 +1162,127 @@ TEST_F(RenderFixture, BuildOverlayPictureHasNoHoverOutlineWhenNothingIsHovered)
     EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 20, 30)), 0);
 }
 
+TEST_F(RenderFixture, BuildOverlayPictureDrawsMoveGhostWhileArmedAndAnchored)
+{
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    const ShapeId shape_id = add_port_shape(terminal_id, piece);
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(shape_id);
+    scene.set_mode(Scene::Mode::EDIT);
+    scene.arm_move({piece});
+
+    scene.set_mouse_position(0, 100); // dbu (0, 0) - the anchor
+    ASSERT_TRUE(scene.move_set_anchor());
+    scene.set_mouse_position(15, 95); // dbu (15, 5) - dx=15, dy=5, orthogonal delta = (15, 0)
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
+
+    // Moved rect: (10,10)-(30,30) + (15,0) = (25,10)-(45,30), pre-flip
+    // pixel space (scale 1.0, pan (0,0)). The ghost's dashed stroke's
+    // first segment starts exactly at the moved ll corner (25,10) and
+    // runs along the vertical edge x=25 - sampled 1px into the 2px
+    // stroke, comfortably within the first (6px) dash-on run.
+    EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 24, 13)), 0);
+
+    // Where the *original*, pre-move rect's left edge would be - nothing
+    // drawn there confirms this is really the translated ghost geometry,
+    // not a stray draw of the unmoved shape.
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 9, 20)), 0);
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureGhostFollowsARefreshedMoveGeometry)
+{
+    // Regression: move_click_unlocked re-arms after a commit, keeping
+    // Move armed with a snapshot of the moved geometry - if Root's data
+    // changes again afterward (e.g. an external undo/redo), the ghost
+    // must follow Scene::refresh_move_geometry's updated snapshot, not
+    // keep drawing the stale one (see api.cpp's
+    // refresh_armed_move_geometry_unlocked, called from le_undo/le_redo
+    // and the Ctrl-Z/Ctrl-Shift-Z key handler).
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape stale_piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    const ShapeId shape_id = add_port_shape(terminal_id, stale_piece);
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(shape_id);
+    scene.set_mode(Scene::Mode::EDIT);
+    scene.arm_move({stale_piece}); // as if re-armed after an earlier move
+
+    scene.set_mouse_position(0, 100); // dbu (0, 0) - the anchor
+    ASSERT_TRUE(scene.move_set_anchor());
+    scene.set_mouse_position(15, 95); // dbu (15, 5) - orthogonal delta (15, 0)
+
+    // A reverted (undo-equivalent) geometry, at a different position -
+    // refreshing to it must move the ghost to match.
+    const Shape reverted_piece{.layer_name = "M1", .rects = {Rect{.ll = {50, 10}, .ur = {70, 30}}}};
+    scene.refresh_move_geometry({reverted_piece});
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
+
+    // reverted_piece (50,10)-(70,30) + delta (15,0) = (65,10)-(85,30) -
+    // ghost should now start at x=65, not the stale piece's x=25.
+    EXPECT_GT(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 64, 13)), 0);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 24, 13)), 0); // stale position - nothing here
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureOmitsMoveGhostBeforeAnAnchorIsSet)
+{
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    const ShapeId shape_id = add_port_shape(terminal_id, piece);
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(shape_id);
+    scene.set_mode(Scene::Mode::EDIT);
+    scene.arm_move({piece}); // armed, but no anchor yet - no ghost should draw
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 9, 20)), 0);
+}
+
+TEST_F(RenderFixture, BuildOverlayPictureOmitsMoveGhostOutsideEditMode)
+{
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape piece{.layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {30, 30}}}};
+    const ShapeId shape_id = add_port_shape(terminal_id, piece);
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.set_minor_grid_spacing(1);
+    scene.select(shape_id);
+    scene.set_mode(Scene::Mode::EDIT);
+    scene.arm_move({piece});
+    scene.set_mouse_position(0, 100);
+    ASSERT_TRUE(scene.move_set_anchor());
+    scene.set_mouse_position(15, 95);
+
+    // Leaving Edit mode cancels the in-progress move (Scene::set_mode's
+    // own end_move() call) - back in Select mode, nothing should draw.
+    scene.set_mode(Scene::Mode::SELECT);
+
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
+    EXPECT_EQ(SkColorGetA(sample_pixel(overlay_picture, 100, 100, 24, 13)), 0);
+}
+
 TEST_F(RenderFixture, BuildOverlayPictureDrawsTheLiveDragRectangleWhileDragging)
 {
     Scene scene;

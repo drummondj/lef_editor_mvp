@@ -105,6 +105,11 @@ add_library(scene INTERFACE)
 target_include_directories(scene INTERFACE src)
 target_link_libraries(scene INTERFACE database view_style)
 
+# --- editing: header-only undo/redo command recording (UPDATES.md item 21) ---
+add_library(editing INTERFACE)
+target_include_directories(editing INTERFACE src)
+target_link_libraries(editing INTERFACE database scene)
+
 # --- core: header-only generic building blocks shared between pipeline and
 # render (RenderedShape/TinyShapeDot, VersionedStage) - neither module
 # depends on the other for these, only both on core. See UPDATES.md item 16. ---
@@ -180,7 +185,7 @@ le_enable_coverage_instrumentation(io)
 # plain-C-parseable header for ffigen/Dart FFI - see api.hpp's own comment. ---
 add_library(api STATIC src/api/api.cpp)
 target_include_directories(api PUBLIC src/api)
-target_link_libraries(api PRIVATE database geometry scene view_style pipeline render io)
+target_link_libraries(api PRIVATE database geometry scene editing view_style pipeline render io)
 le_enable_coverage_instrumentation(api)
 
 # --- le_tcl: Phase 0 SWIG toolchain spike (UPDATES.md item 15 /
@@ -413,6 +418,7 @@ add_executable(backend_tests
     src/geometry/tests/geometry_test.cpp
     src/view_style/tests/view_style_test.cpp
     src/scene/tests/scene_test.cpp
+    src/editing/tests/editing_test.cpp
     src/pipeline/tests/pipeline_test.cpp
     src/render/tests/render_test.cpp
     src/io/tests/lef_reader_test.cpp
@@ -420,7 +426,7 @@ add_executable(backend_tests
     src/io/tests/lef_writer_test.cpp
     src/api/tests/api_test.cpp
 )
-target_link_libraries(backend_tests PRIVATE database geometry view_style scene pipeline render io api fmt::fmt GTest::gtest_main)
+target_link_libraries(backend_tests PRIVATE database geometry view_style scene editing pipeline render io api fmt::fmt GTest::gtest_main)
 target_compile_definitions(backend_tests PRIVATE
     LEFDEF_TEST_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/TEST"
     IO_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/io/tests/fixtures"

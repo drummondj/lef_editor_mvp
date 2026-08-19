@@ -119,6 +119,43 @@ TEST(Geometry, TransformTranslatesPoints)
     expect_point_eq(moved.points[2], Point{15, 5});
 }
 
+TEST(Geometry, TransformTranslatesRect)
+{
+    Rect rect{.ll = {0, 0}, .ur = {10, 20}};
+    Rect moved = Geometry::transform(rect, Point{5, -5});
+
+    expect_point_eq(moved.ll, Point{5, -5});
+    expect_point_eq(moved.ur, Point{15, 15});
+}
+
+TEST(Geometry, TransformTranslatesPath)
+{
+    Path path{.polygon = Polygon{.points = {{0, 0}, {10, 0}}}, .width = 4};
+    Path moved = Geometry::transform(path, Point{5, -5});
+
+    EXPECT_EQ(moved.width, 4);
+    ASSERT_EQ(moved.polygon.points.size(), 2u);
+    expect_point_eq(moved.polygon.points[0], Point{5, -5});
+    expect_point_eq(moved.polygon.points[1], Point{15, -5});
+}
+
+TEST(Geometry, TransformTranslatesEveryRectPolygonAndPathInAShapeAndLeavesOtherFieldsUntouched)
+{
+    ShapeData shape{.layer_name = "M1"};
+    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
+    shape.polygons.push_back(Polygon{.points = {{0, 0}, {10, 0}, {10, 10}}});
+    shape.paths.push_back(Path{.polygon = Polygon{.points = {{0, 0}, {10, 0}}}, .width = 4});
+    shape.spacing = 7;
+
+    ShapeData moved = Geometry::transform(shape, Point{5, -5});
+
+    EXPECT_EQ(moved.layer_name, "M1");
+    EXPECT_EQ(moved.spacing, 7);
+    expect_point_eq(moved.rects[0].ll, Point{5, -5});
+    expect_point_eq(moved.polygons[0].points[0], Point{5, -5});
+    expect_point_eq(moved.paths[0].polygon.points[0], Point{5, -5});
+}
+
 TEST(Geometry, EnsureClosedReturnsInputUnchangedWhenFewerThanTwoPoints)
 {
     EXPECT_TRUE(Geometry::ensure_closed({}).empty());

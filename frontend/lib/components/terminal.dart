@@ -39,7 +39,6 @@ class _TerminalState extends State<Terminal> {
   final List<String> _lines = [];
   bool _running = false;
   int _nextCommandNumber = 1;
-  final List<String> _commandHistory = [];
   int _currentHistoryIndex = -1;
   late StreamSubscription<String> _messageSubscription;
 
@@ -110,11 +109,17 @@ class _TerminalState extends State<Terminal> {
     final command = _inputController.text.trim();
     if (command.isEmpty || _running) return;
     if (command == "history") {
-      var padding = (_nextCommandNumber - 1).toString().length;
+      // Sourced from the backend's own command-recall log (UPDATES.md
+      // item 21), not a local list - only successfully executed commands
+      // appear, an intentional, requirement-driven behavior change (the
+      // old local _commandHistory recorded every submission regardless
+      // of outcome).
+      final history = _provider.commandHistoryCache;
+      var padding = history.length.toString().length;
       setState(() {
         _lines.add("");
         _lines.addAll(
-          _commandHistory.indexed.map(
+          history.indexed.map(
             (e) => "${(e.$1 + 1).toString().padLeft(padding)}  ${e.$2}",
           ),
         );
@@ -123,7 +128,6 @@ class _TerminalState extends State<Terminal> {
     } else {
       setState(() {
         _lines.add('$_nextCommandNumber> $command');
-        _commandHistory.add(command);
         _nextCommandNumber++;
         _running = true;
       });
@@ -273,22 +277,23 @@ class _TerminalState extends State<Terminal> {
   }
 
   void _history(int by) {
-    if (_commandHistory.isEmpty) {
+    final history = _provider.commandHistoryCache;
+    if (history.isEmpty) {
       return;
     }
     int index = -1;
     if (_currentHistoryIndex == -1) {
-      index = _nextCommandNumber - 1 + by;
+      index = history.length + by;
     } else {
       index = _currentHistoryIndex + by;
     }
 
-    if (index < 0 || index > _commandHistory.length - 1) {
+    if (index < 0 || index > history.length - 1) {
       return;
     }
 
     _inputController.clear();
-    _inputController.text = _commandHistory[index];
+    _inputController.text = history[index];
     _currentHistoryIndex = index;
     // Same reasoning as _completeCommand's own trailing requestFocus -
     // arrow-key history recall can also fire while focus is on the

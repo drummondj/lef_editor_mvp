@@ -99,11 +99,23 @@ const char *const kCapturePutsBootstrap = R"tcl(
   if (_interp == nullptr) {
     return @"error: Tcl interpreter unavailable";
   }
+  // Routed through le_repl_eval (le_tcl_procs.tcl), not a raw Tcl_Eval of
+  // `command` itself (UPDATES.md item 21) - the single bracket point that
+  // makes a typed console command exactly as undoable (Ctrl-Z/Ctrl-
+  // Shift-Z) as a GUI edit, and the source of the command-recall log's
+  // success-only filtering. `command` is passed through Tcl_SetVar/a
+  // variable reference, not substituted directly into the eval'd string,
+  // to avoid re-escaping arbitrary user-typed text - same pattern this
+  // file already uses for `le_console_output` below.
+  //
   // Tcl_Eval's return code (TCL_OK vs TCL_ERROR) isn't surfaced
-  // separately here - the interpreter's own string result already holds
-  // the error message on failure, exactly what a real interactive Tcl
-  // shell would print either way (see this class's header comment).
-  Tcl_Eval(_interp, command.UTF8String);
+  // separately here - le_repl_eval already catches the wrapped command's
+  // own error internally and always returns TCL_OK itself, and the
+  // interpreter's own string result holds the (successful or error)
+  // result either way, exactly what a real interactive Tcl shell would
+  // print (see this class's header comment).
+  Tcl_SetVar(_interp, "le_pending_command", command.UTF8String, TCL_GLOBAL_ONLY);
+  Tcl_Eval(_interp, "le_repl_eval $le_pending_command");
   NSString *result = [NSString stringWithUTF8String:Tcl_GetStringResult(_interp)];
 
   // Drain whatever `puts` captured during this command (see

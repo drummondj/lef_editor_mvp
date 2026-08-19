@@ -18,6 +18,7 @@
 #include "include/core/SkSurface.h"
 #include "include/core/SkTileMode.h"
 #include "include/core/SkTypeface.h"
+#include "include/effects/SkDashPathEffect.h"
 #include <fmt/format.h>
 #include <cmath>
 #include <cstdint>
@@ -172,6 +173,16 @@ namespace le
     // is the only consumer of these constants.
     inline constexpr Color kSelectionOutlineColor = {255, 255, 255, 255};
     inline constexpr float kSelectionOutlineStrokeWidth = 2.0f;
+
+    // Move ghost preview (UPDATES.md item 21) - same white family as the
+    // selection outline above (a moving shape is, definitionally, always
+    // already selected) but dashed and lower-alpha so it reads as "not
+    // committed yet", the same "ghost" treatment kRulerGhostColor already
+    // uses relative to kRulerColor.
+    inline constexpr Color kMoveGhostColor = {255, 255, 255, 160};
+    inline constexpr float kMoveGhostStrokeWidth = 2.0f;
+    inline constexpr float kMoveGhostDashOnPx = 6.0f;
+    inline constexpr float kMoveGhostDashOffPx = 4.0f;
 
     // Rubber-band drag-select rectangle (UPDATES.md 7.1 item 5) - a
     // translucent fill so covered shapes stay visible underneath, plus
@@ -588,6 +599,59 @@ namespace le
 
         for (const auto &path : piece.paths)
             for (const auto &buffered : Geometry::path_to_polygons(path))
+                stroke_polygon(buffered);
+    }
+
+    // Draws `piece`'s own geometry translated by `offset_dbu` in a
+    // dashed, reduced-alpha "ghost" style - the live Move preview
+    // (UPDATES.md item 21), shown while a move is armed and anchored but
+    // not yet committed (see BuildOverlayPictureStage). Same dbu->pixel
+    // transform and per-geometry-kind loop as draw_selected_piece_outline,
+    // translating each rect/polygon/path via Geometry::transform before
+    // projecting to pixels rather than translating in pixel space, so the
+    // preview traces the exact geometry Move would actually commit.
+    inline void draw_move_ghost(SkCanvas &canvas, const Scene &scene, const Shape &piece, const Point &offset_dbu)
+    {
+        const double scale = scene.scale();
+        if (scale <= 0.0)
+            return;
+
+        const Point pan = scene.pan();
+        auto to_pixel = [&](const Point &p)
+        {
+            return SkPoint::Make(
+                static_cast<SkScalar>((static_cast<double>(p.x) - static_cast<double>(pan.x)) * scale),
+                static_cast<SkScalar>((static_cast<double>(p.y) - static_cast<double>(pan.y)) * scale));
+        };
+
+        SkPaint stroke;
+        stroke.setAntiAlias(true);
+        stroke.setStyle(SkPaint::kStroke_Style);
+        stroke.setStrokeWidth(kMoveGhostStrokeWidth);
+        stroke.setColor(to_sk_color(kMoveGhostColor));
+        stroke.setPathEffect(SkDashPathEffect::Make({kMoveGhostDashOnPx, kMoveGhostDashOffPx}, 0.0f));
+
+        auto stroke_polygon = [&](const Polygon &polygon)
+        {
+            if (polygon.points.empty())
+                return;
+
+            SkPathBuilder builder;
+            builder.moveTo(to_pixel(polygon.points.front()));
+            for (size_t i = 1; i < polygon.points.size(); ++i)
+                builder.lineTo(to_pixel(polygon.points[i]));
+            builder.close();
+            canvas.drawPath(builder.detach(), stroke);
+        };
+
+        for (const auto &rect : piece.rects)
+            stroke_polygon(Geometry::rect_to_polygon(Geometry::transform(rect, offset_dbu)));
+
+        for (const auto &polygon : piece.polygons)
+            stroke_polygon(Geometry::transform(polygon, offset_dbu));
+
+        for (const auto &path : piece.paths)
+            for (const auto &buffered : Geometry::path_to_polygons(Geometry::transform(path, offset_dbu)))
                 stroke_polygon(buffered);
     }
 

@@ -245,6 +245,40 @@ namespace le
             return Polygon{.points = transformed_points};
         }
 
+        // Plain hand-translation, deliberately not routed through Boost's
+        // translate_transformer like the Polygon overload above - a pure
+        // integer offset of two corners/a wrapped polygon needs none of
+        // that machinery. Used by Move's commit path and its ghost
+        // preview (UPDATES.md item 21, see draw_move_ghost).
+        static Rect transform(const Rect &rect, const Point &offset)
+        {
+            return Rect{
+                .ll = Point{.x = rect.ll.x + offset.x, .y = rect.ll.y + offset.y},
+                .ur = Point{.x = rect.ur.x + offset.x, .y = rect.ur.y + offset.y},
+            };
+        }
+
+        static Path transform(const Path &path, const Point &offset)
+        {
+            return Path{.polygon = transform(path.polygon, offset), .width = path.width};
+        }
+
+        // Translates every rect/polygon/path in `data` by `offset` -
+        // every other field (layer_name, spacing, ...) is copied
+        // unchanged. The whole-Shape convenience Move's commit path uses
+        // to build its "after" geometry in one call.
+        static ShapeData transform(const ShapeData &data, const Point &offset)
+        {
+            ShapeData out = data;
+            for (auto &r : out.rects)
+                r = transform(r, offset);
+            for (auto &p : out.polygons)
+                p = transform(p, offset);
+            for (auto &p : out.paths)
+                p = transform(p, offset);
+            return out;
+        }
+
         static Polygon rect_to_polygon(const Rect &rect)
         {
             std::vector<Point> points;

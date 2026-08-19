@@ -797,12 +797,13 @@ class Klass:
             lines.extend(f.list_compound_parse_lines("create", "return invalid;", f"le_create_{snake}"))
 
         add()
-        add(f"const le::{self.name}Id created = handle->root.create_{snake}(le::{self.name}Data{{")
+        add(f"const le::{self.name}Data new_data{{")
         for pf in parent_fields:
             add(f"    .{pf.name} = {pf.name},")
         for f in create_fields:
             add(f"    .{f.name} = {f.create_struct_init_expr()},")
-        add("});")
+        add("};")
+        add(f"const le::{self.name}Id created = handle->root.create_{snake}(new_data);")
 
         if unique_fields:
             field = unique_fields[0]
@@ -816,6 +817,17 @@ class Klass:
             add("}")
 
         add("handle->root.bump_mutation_version();")
+        add()
+        add("// UPDATES.md item 21 - record this mutation into whatever")
+        add("// transaction is currently recording (a typed Tcl command via")
+        add("// le_repl_eval, or a GUI edit like Move), so Ctrl-Z can undo it.")
+        add("if (handle->command_history.is_recording())")
+        add("{")
+        add(f"    handle->command_history.current()->record_create<le::{self.name}Id, le::{self.name}Data>(")
+        add("        created, new_data,")
+        add(f"        [](le::Root &r, const le::{self.name}Data &d) {{ return r.create_{snake}(d); }},")
+        add(f"        [](le::Root &r, le::{self.name}Id i) {{ return r.delete_{snake}(i); }});")
+        add("}")
         add("return to_c(created);")
 
         return "\n".join(lines)
@@ -1217,11 +1229,17 @@ class Klass:
         add("std::lock_guard<std::mutex> lock(handle->mutex_);")
         add()
         add(f"const le::{self.name}Id typed_id = from_c(id);")
-        add(f"if (!handle->root.get_{snake}(typed_id))")
+        add(f"const le::{self.name}Data *existing_{snake} = handle->root.get_{snake}(typed_id);")
+        add(f"if (!existing_{snake})")
         add("{")
         add(f'    handle->messages.push_back(fmt::format("ERROR: le_update_{snake}: unknown id"));')
         add("    return 1;")
         add("}")
+        add()
+        add("// UPDATES.md item 21 - snapshotted before the mutation below,")
+        add("// so a currently-recording transaction can undo back to this")
+        add("// exact state (see the record_update call further down).")
+        add(f"const le::{self.name}Data before_{snake} = *existing_{snake};")
 
         if single_parent is not None:
             add()
@@ -1295,7 +1313,53 @@ class Klass:
             add("}")
 
         add("handle->root.bump_mutation_version();")
+        add()
+        add("// UPDATES.md item 21 - see create_api_body()'s own comment.")
+        add("if (handle->command_history.is_recording())")
+        add("{")
+        add(f"    const le::{self.name}Data after_{snake} = *handle->root.get_{snake}(typed_id);")
+        add(f"    handle->command_history.current()->record_update<le::{self.name}Id, le::{self.name}Data>(")
+        add(f"        typed_id, before_{snake}, after_{snake}, &le::apply_{snake}_snapshot);")
+        add("}")
         add("return 0;")
+
+        return "\n".join(lines)
+
+    def apply_snapshot_body(self) -> str:
+        """
+        The full statement-list body of `inline bool apply_<snake>_snapshot
+        (Root &root, <Klass>Id id, const <Klass>Data &data)`
+        (api_snapshot_appliers_hpp_j2.py) - reduces a *whole* field
+        snapshot to one real Root::update_<klass>() call, reusing exactly
+        the same field list/single-parent handling update_root_params()
+        does. Every create field is wrapped in `std::optional<T>(data.
+        <field>)` (T = root_value_cpp_type()) - this constructs correctly
+        whether `data.<field>` is itself a bare T or already a
+        std::optional<T> (Field.root_value_cpp_type()'s own comment
+        explains why Root::update_<klass>() never double-wraps an
+        is_optional-in-storage field), so no is_optional branching is
+        needed here unlike update_api_body()'s enum/str/dbu handling -
+        this operates on already-typed C++ values, not TCL C-string
+        arguments, so none of that parsing applies.
+        """
+        indent = "        "
+        lines: List[str] = []
+
+        def add(text: str = "") -> None:
+            lines.append(f"{indent}{text}" if text else "")
+
+        snake = self.to_snake_case()
+        parent_fields = self.get_parent_fields()
+        create_fields = self.get_create_fields()
+        single_parent = parent_fields[0] if len(parent_fields) == 1 else None
+
+        call_args = ["id"]
+        if single_parent is not None:
+            call_args.append(f"data.{single_parent.name}")
+        for f in create_fields:
+            call_args.append(f"std::optional<{f.root_value_cpp_type(qualified=False)}>(data.{f.name})")
+
+        add(f"return root.update_{snake}({', '.join(call_args)});")
 
         return "\n".join(lines)
 

@@ -375,3 +375,37 @@ int remove_shape_path(const char *id, int path_index)
 {
     return le_remove_shape_path(session(), resolve_shape_id(id), path_index);
 }
+
+// --- Editing / undo-redo (UPDATES.md item 21) ---
+
+void begin_command(const char *label)
+{
+    le_begin_command(session(), label);
+}
+
+int end_command(int succeeded)
+{
+    le_end_command(session(), succeeded);
+    return 0;
+}
+
+int undo_command()
+{
+    return le_undo(session());
+}
+
+int redo_command()
+{
+    return le_redo(session());
+}
+
+int command_history_count()
+{
+    return le_command_history_count(session());
+}
+
+const char *command_history_at(int index)
+{
+    const char *value = le_command_history_at(session(), index);
+    return value ? value : "";
+}

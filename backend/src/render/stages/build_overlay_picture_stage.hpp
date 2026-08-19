@@ -14,9 +14,11 @@ namespace le
     /// rubber-band drag-select rectangle if a drag is in progress
     /// (see draw_drag_rect), the grid-snap indicator box (see
     /// draw_cursor), a hovered shape's yellow outline (see
-    /// draw_hover_outline), and the live ruler ghost segment trailing
+    /// draw_hover_outline), the live ruler ghost segment trailing
     /// from an active (unfinished) ruler in Ruler mode (UPDATES.md item
-    /// 13, see draw_ruler_segment) - into its own small SkPicture,
+    /// 13, see draw_ruler_segment), and the live Move ghost preview
+    /// while a move is armed and anchored in Edit mode (UPDATES.md item
+    /// 21, see draw_move_ghost) - into its own small SkPicture,
     /// cached independently of the (potentially design-sized, expensive)
     /// design picture - keyed on viewport_version()/visibility_version()
     /// (grid spacing lives there), mouse_version(), and ruler_version(),
@@ -60,6 +62,13 @@ namespace le
                 {
                     if (const std::optional<Point> ghost = scene.ruler_next_point(scene.ruler_free_form()))
                         draw_ruler_segment(*canvas, scene, dbu_per_um, scene.rulers().back().points.back(), *ghost, /*is_ghost=*/true);
+                }
+
+                if (scene.mode() == Scene::Mode::EDIT && scene.move().armed && scene.move().anchor)
+                {
+                    if (const std::optional<Point> delta = scene.move_delta(scene.move_free_form()))
+                        for (const Shape &piece : scene.move().moving_geometry)
+                            draw_move_ghost(*canvas, scene, piece, *delta);
                 }
 
                 return recorder.finishRecordingAsPicture();

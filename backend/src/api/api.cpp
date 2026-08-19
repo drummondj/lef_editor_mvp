@@ -1,12 +1,20 @@
 #include "api.hpp"
 #include "../database/database.hpp"
 #include "../database/filter.hpp"
+#include "../editing/editing.hpp"
 #include "../geometry/geometry.hpp"
 #include "../io/lef_reader.hpp"
 #include "../pipeline/pipeline.hpp"
 #include "../render/render.hpp"
 #include "../scene/scene.hpp"
 #include "../view_style/view_style.hpp"
+// Generated apply_<snake>_snapshot(Root&, <Klass>Id, const <Klass>Data&)
+// helpers (UPDATES.md item 21) - a real standalone header, unlike every
+// other generated_tcl/*.inc fragment, so it's included here with the
+// rest of api.cpp's top-level includes rather than spliced into a
+// specific scope. Never edit generated_tcl/snapshot_appliers.hpp
+// directly - regenerate via the regen-tcl skill.
+#include "generated_tcl/snapshot_appliers.hpp"
 #include <fmt/format.h>
 #include <algorithm>
 #include <cmath>
@@ -43,6 +51,15 @@ struct LeHandle
     le::Scene scene;
     le::Pipeline pipeline;
     le::Renderer renderer;
+
+    // Undo/redo stack + command-recall log (UPDATES.md item 21) - every
+    // generated le_create_X/le_update_X and the 4 hand-written
+    // le_delete_X functions record themselves into whatever transaction
+    // is currently recording (see command_history.is_recording()); Move
+    // (le_mouse_up's Edit-mode branch) and le_repl_eval (the Tcl-side
+    // wrapper every typed console command goes through) are the two
+    // callers that bracket one with begin()/end().
+    le::editing::CommandHistory command_history;
     std::mutex mutex_;
 
     // Single-slot cache backing le_object_property_count/le_object_
@@ -123,10 +140,12 @@ namespace
     // on the current mode rather than returning a single fixed string.
     constexpr const char *kSelectModeTooltip =
         "Left click to select. Shift for multi-select. Left click and drag for rectangle multi-select.";
-    // Placeholder - Edit mode's actual editing behavior is a later item
-    // ("Details of how objects are edited to follow"), so this text will
-    // need to change once that's defined.
-    constexpr const char *kEditModeTooltip = "Edit mode";
+    // UPDATES.md item 21 - Move is the only real editing semantic
+    // implemented so far (Resize/Rotate/Align/Delete remain inert UI
+    // stubs), so this text describes only that flow.
+    constexpr const char *kEditModeTooltip =
+        "Ctrl-M or the Move button to arm a move. Click to set the start point, move the mouse, click again "
+        "to commit - stays armed for another move until Esc. Shift for free-form (non-orthogonal).";
     constexpr const char *kRulerModeTooltip =
         "Click to add a ruler point. Shift for a non-orthogonal segment. Esc to finish the ruler.";
 
@@ -436,6 +455,127 @@ namespace
             return;
 
         handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
+    }
+
+    // LE_KEY_MOVE/le_arm_move's own body (UPDATES.md item 21) - unlocked
+    // variant, same reasoning as fit_selected_unlocked/select_all_unlocked
+    // below (called from inside le_key_down, which already holds
+    // handle->mutex_). Only meaningful in Edit mode with a non-empty
+    // selection - the Mode::EDIT check lives here rather than inside
+    // Scene::arm_move itself (Scene stays mode-agnostic - see
+    // Scene::set_mode's own comment on the analogous Ruler-mode split).
+    // Snapshots each selected shape's *current* geometry for the ghost
+    // overlay (Scene::MoveState::moving_geometry) - kept parallel to
+    // Scene::selection() even for a stale/dangling selected id (a
+    // default-constructed Shape{} placeholder, drawing nothing, rather
+    // than skipping and desyncing the two parallel lists).
+    void arm_move_unlocked(LeHandle *handle)
+    {
+        if (handle->scene.mode() != le::Scene::Mode::EDIT)
+            return;
+
+        std::vector<le::Shape> geometry;
+        geometry.reserve(handle->scene.selection().size());
+        for (const le::SelectedObject &selected : handle->scene.selection())
+        {
+            const le::Shape *shape = handle->root.get_shape(selected.shape_id);
+            geometry.push_back(shape ? *shape : le::Shape{});
+        }
+
+        handle->scene.arm_move(std::move(geometry));
+    }
+
+    // le_undo/le_redo's own follow-up (UPDATES.md item 21) - unlocked
+    // variant, called right after handle->command_history.undo()/redo()
+    // succeeds. If Move is currently armed (including the "stays armed
+    // after a commit" case - see move_click_unlocked), the moving
+    // shapes' geometry may have just changed out from under its own
+    // moving_geometry snapshot (taken at the last arm/re-arm, not
+    // continuously) - re-snapshot it via Scene::refresh_move_geometry so
+    // a subsequent move's ghost preview starts from the actual
+    // post-undo/redo position rather than a stale one. A no-op (via
+    // refresh_move_geometry's own guard) if Move isn't armed.
+    void refresh_armed_move_geometry_unlocked(LeHandle *handle)
+    {
+        if (!handle->scene.move().armed)
+            return;
+
+        std::vector<le::Shape> geometry;
+        geometry.reserve(handle->scene.move().moving_ids.size());
+        for (const le::ShapeId shape_id : handle->scene.move().moving_ids)
+        {
+            const le::Shape *shape = handle->root.get_shape(shape_id);
+            geometry.push_back(shape ? *shape : le::Shape{});
+        }
+        handle->scene.refresh_move_geometry(std::move(geometry));
+    }
+
+    // le_mouse_up's Edit-mode branch (UPDATES.md item 21) - unlocked
+    // variant, called with handle->mutex_ already held. First click (no
+    // anchor yet) sets the move's anchor (Scene::move_set_anchor, which
+    // - like Scene::add_ruler_point's own click handling just below in
+    // le_mouse_up - reads the separately-tracked *stored* mouse position,
+    // not an x/y passed in here); second click (anchor already set)
+    // computes the delta and commits: re-fetches each moving shape's
+    // *current* geometry from Root (not the arm-time snapshot, which is
+    // ghost-rendering-only - see arm_move_unlocked), translates it via
+    // Geometry::transform, applies it directly via Root::update_shape
+    // (bypassing the micron-conversion C API layer - Move already works
+    // in dbu), and records the whole set as one undo/redo transaction. A
+    // no-op if Move isn't armed.
+    //
+    // Stays armed after a successful commit (re-arms with each moved
+    // shape's now-current geometry, ready for an immediate follow-up
+    // move) rather than fully clearing Move state - only Escape
+    // (le_cancel_move/LE_KEY_FINISH_RULER) or leaving Edit mode
+    // (Scene::set_mode's own end_move() call) actually disarms it, so a
+    // user moving several shapes in sequence doesn't have to re-press
+    // the Move button/Ctrl-M between each one.
+    void move_click_unlocked(LeHandle *handle)
+    {
+        if (!handle->scene.move().armed)
+            return;
+
+        if (!handle->scene.move().anchor)
+        {
+            handle->scene.move_set_anchor();
+            return;
+        }
+
+        const std::optional<le::Point> delta = handle->scene.move_delta(handle->scene.move_free_form());
+        if (!delta)
+        {
+            handle->scene.end_move();
+            return;
+        }
+
+        handle->command_history.begin("move");
+        const std::vector<le::ShapeId> moving_ids = handle->scene.move().moving_ids;
+        for (const le::ShapeId shape_id : moving_ids)
+        {
+            const le::ShapeData *existing = handle->root.get_shape(shape_id);
+            if (!existing)
+                continue;
+
+            const le::ShapeData before = *existing;
+            const le::ShapeData after = le::Geometry::transform(before, *delta);
+            handle->root.update_shape(shape_id, after.layer_name, after.paths, after.polygons, after.rects,
+                                       after.spacing, after.design_rule_width, after.except_pg_net);
+            handle->root.bump_mutation_version();
+
+            if (le::editing::Transaction *txn = handle->command_history.current())
+                txn->record_update<le::ShapeId, le::ShapeData>(shape_id, before, after, &le::apply_shape_snapshot);
+        }
+        handle->command_history.end(/*succeeded=*/true);
+
+        std::vector<le::Shape> geometry;
+        geometry.reserve(moving_ids.size());
+        for (const le::ShapeId shape_id : moving_ids)
+        {
+            const le::ShapeData *existing = handle->root.get_shape(shape_id);
+            geometry.push_back(existing ? *existing : le::Shape{});
+        }
+        handle->scene.arm_move(std::move(geometry));
     }
 
     // LE_KEY_SELECT_ALL's own body (UPDATES.md 9.1) - unlocked variant,
@@ -1121,6 +1261,105 @@ extern "C"
         handle->scene.clear_rulers();
     }
 
+    // --- Editing / undo-redo (UPDATES.md item 21) ---
+
+    void le_begin_command(LeHandle *handle, const char *label)
+    {
+        if (!handle || !label)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->command_history.begin(label);
+    }
+
+    void le_end_command(LeHandle *handle, int32_t succeeded)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->command_history.end(succeeded != 0);
+    }
+
+    int32_t le_undo(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        const bool undone = handle->command_history.undo(handle->root);
+        if (undone)
+            refresh_armed_move_geometry_unlocked(handle);
+        return undone ? 1 : 0;
+    }
+
+    int32_t le_redo(LeHandle *handle)
+    {
+        if (!handle)
+            return 0;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        const bool redone = handle->command_history.redo(handle->root);
+        if (redone)
+            refresh_armed_move_geometry_unlocked(handle);
+        return redone ? 1 : 0;
+    }
+
+    int32_t le_can_undo(LeHandle *handle)
+    {
+        return handle && handle->command_history.can_undo() ? 1 : 0;
+    }
+
+    int32_t le_can_redo(LeHandle *handle)
+    {
+        return handle && handle->command_history.can_redo() ? 1 : 0;
+    }
+
+    int32_t le_command_history_count(LeHandle *handle)
+    {
+        return handle ? static_cast<int32_t>(handle->command_history.recall_count()) : 0;
+    }
+
+    const char *le_command_history_at(LeHandle *handle, int32_t index)
+    {
+        if (!handle || index < 0 || static_cast<size_t>(index) >= handle->command_history.recall_count())
+            return nullptr;
+        return handle->command_history.recall_at(static_cast<size_t>(index)).c_str();
+    }
+
+    void le_select_all(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        select_all_unlocked(handle);
+    }
+
+    void le_deselect_all(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.clear_selection();
+    }
+
+    void le_arm_move(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        arm_move_unlocked(handle);
+    }
+
+    void le_cancel_move(LeHandle *handle)
+    {
+        if (!handle)
+            return;
+        std::lock_guard<std::mutex> lock(handle->mutex_);
+        handle->scene.end_move();
+    }
+
+    int32_t le_is_move_armed(LeHandle *handle)
+    {
+        return handle && handle->scene.move().armed ? 1 : 0;
+    }
+
     int32_t le_is_layer_name_selectable(LeHandle *handle, const char *layer_name)
     {
         if (!handle || !layer_name)
@@ -1300,11 +1539,25 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.press_key(key_code);
         handle->scene.set_ruler_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
+        handle->scene.set_move_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
 
         switch (key_code)
         {
         case LE_KEY_ZOOM:
         {
+            // UPDATES.md item 21 - Ctrl-Z/Ctrl-Shift-Z undo/redo, branched
+            // here rather than a separate key code (see LE_KEY_ZOOM's own
+            // api.hpp doc comment for why). Falls through to the ordinary
+            // zoom action when Ctrl isn't held.
+            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            {
+                if (handle->scene.is_key_held(LE_KEY_SHIFT))
+                    handle->command_history.redo(handle->root);
+                else
+                    handle->command_history.undo(handle->root);
+                refresh_armed_move_geometry_unlocked(handle);
+                break;
+            }
             // Unlocked variants (see their own comment) - handle->mutex_
             // is already held above; le_zoom/le_fit_scene/le_pan
             // themselves would re-lock it and deadlock.
@@ -1331,7 +1584,10 @@ extern "C"
             pan_unlocked(handle, 0.0, -kKeyPanFactor);
             break;
         case LE_KEY_SELECT_ALL:
-            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            // UPDATES.md item 21 - Select-mode-only, in addition to the
+            // existing Ctrl-held gate (switch back to Select mode to
+            // change the selection from Edit/Ruler mode).
+            if (handle->scene.mode() == le::Scene::Mode::SELECT && handle->scene.is_key_held(LE_KEY_CTRL))
                 select_all_unlocked(handle);
             break;
         case LE_KEY_1:
@@ -1357,8 +1613,14 @@ extern "C"
             toggle_routing_layer_visibility_unlocked(handle, 9); // the 10th ROUTING layer
             break;
         case LE_KEY_DESELECT_ALL:
-            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            // UPDATES.md item 21 - same Select-mode-only gate as
+            // LE_KEY_SELECT_ALL above.
+            if (handle->scene.mode() == le::Scene::Mode::SELECT && handle->scene.is_key_held(LE_KEY_CTRL))
                 handle->scene.clear_selection();
+            break;
+        case LE_KEY_MOVE:
+            if (handle->scene.is_key_held(LE_KEY_CTRL))
+                arm_move_unlocked(handle);
             break;
         case LE_KEY_SELECT_MODE:
             handle->scene.set_mode(le::Scene::Mode::SELECT);
@@ -1371,6 +1633,7 @@ extern "C"
             break;
         case LE_KEY_FINISH_RULER:
             handle->scene.finish_active_ruler();
+            handle->scene.end_move(); // UPDATES.md item 21 - Escape also cancels an in-progress move
             break;
         default:
             break;
@@ -1384,6 +1647,7 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.release_key(key_code);
         handle->scene.set_ruler_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
+        handle->scene.set_move_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
     }
 
     int32_t le_is_key_held(LeHandle *handle, int32_t key_code)
@@ -1491,6 +1755,16 @@ extern "C"
             // ending the gesture below.
             if (is_click)
                 handle->scene.add_ruler_point(handle->scene.is_key_held(LE_KEY_SHIFT));
+        }
+        else if (handle->scene.mode() == le::Scene::Mode::EDIT)
+        {
+            // UPDATES.md item 21 - only a click (not a drag) sets the
+            // move's anchor / commits it; a drag in Edit mode does
+            // nothing beyond ending the gesture below, same as Ruler
+            // mode's own click-only handling just above. A no-op if
+            // Move isn't armed (see move_click_unlocked).
+            if (is_click)
+                move_click_unlocked(handle);
         }
 
         handle->scene.end_drag();
@@ -1640,8 +1914,10 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const le::TerminalId terminal_id = from_c(id);
-        if (!handle->root.get_terminal(terminal_id))
+        const le::TerminalData *existing_terminal = handle->root.get_terminal(terminal_id);
+        if (!existing_terminal)
             return 1;
+        const le::TerminalData terminal_snapshot = *existing_terminal;
 
         // Cascade first (see le_delete_terminal's own doc comment for why
         // this API layer does this rather than leaving it to
@@ -1649,11 +1925,48 @@ extern "C"
         // port id list first since deleting a port mutates the same
         // index Root::get_terminal_ports() reads from.
         const std::vector<le::TerminalPortId> port_ids = handle->root.get_terminal_ports(terminal_id);
+        std::vector<le::TerminalPortData> port_snapshots;
+        port_snapshots.reserve(port_ids.size());
+        for (const le::TerminalPortId port_id : port_ids)
+            port_snapshots.push_back(*handle->root.get_terminal_port(port_id));
+
+        // UPDATES.md item 21 - grab the terminal's own live-id cell
+        // *before* deleting anything, so each cascaded port's undo
+        // (recorded below) can repoint its own .terminal field to
+        // wherever the terminal ends up if this whole delete is later
+        // undone-then-redone. The terminal's own record_delete step is
+        // recorded *last* (after every port's), so Transaction::undo_all's
+        // reverse-order replay recreates the terminal before its ports.
+        le::editing::Transaction *txn = handle->command_history.current();
+        const std::shared_ptr<le::editing::IdCell<le::TerminalId>> terminal_cell =
+            txn ? txn->id_cell_for(terminal_id) : nullptr;
+
         for (const le::TerminalPortId port_id : port_ids)
             handle->root.delete_terminal_port(port_id);
 
         const bool deleted = handle->root.delete_terminal(terminal_id);
         handle->root.bump_mutation_version();
+
+        if (txn)
+        {
+            for (size_t i = 0; i < port_ids.size(); ++i)
+            {
+                txn->record_delete<le::TerminalPortId, le::TerminalPortData>(
+                    port_ids[i], port_snapshots[i],
+                    [terminal_cell](le::Root &r, const le::TerminalPortData &d)
+                    {
+                        le::TerminalPortData fixed = d;
+                        fixed.terminal = terminal_cell->id;
+                        return r.create_terminal_port(fixed);
+                    },
+                    [](le::Root &r, le::TerminalPortId i) { return r.delete_terminal_port(i); });
+            }
+            txn->record_delete<le::TerminalId, le::TerminalData>(
+                terminal_id, terminal_snapshot,
+                [](le::Root &r, const le::TerminalData &d) { return r.create_terminal(d); },
+                [](le::Root &r, le::TerminalId i) { return r.delete_terminal(i); });
+        }
+
         return deleted ? 0 : 1;
     }
 
@@ -1683,18 +1996,53 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const le::TerminalPortId port_id = from_c(id);
-        if (!handle->root.get_terminal_port(port_id))
+        const le::TerminalPortData *existing_port = handle->root.get_terminal_port(port_id);
+        if (!existing_port)
             return 1;
+        const le::TerminalPortData port_snapshot = *existing_port;
 
         // Cascade first (see le_delete_terminal_port's own doc comment) -
         // copy the shape id list first since deleting a shape mutates the
         // same index Root::get_terminal_port_shapes() reads from.
         const std::vector<le::ShapeId> shape_ids = handle->root.get_terminal_port_shapes(port_id);
+        std::vector<le::ShapeData> shape_snapshots;
+        shape_snapshots.reserve(shape_ids.size());
+        for (const le::ShapeId shape_id : shape_ids)
+            shape_snapshots.push_back(*handle->root.get_shape(shape_id));
+
+        // UPDATES.md item 21 - see le_delete_terminal's own comment on
+        // this same pattern (grab the parent's live-id cell before
+        // deleting, record children's delete steps before the parent's).
+        le::editing::Transaction *txn = handle->command_history.current();
+        const std::shared_ptr<le::editing::IdCell<le::TerminalPortId>> port_cell =
+            txn ? txn->id_cell_for(port_id) : nullptr;
+
         for (const le::ShapeId shape_id : shape_ids)
             handle->root.delete_shape(shape_id);
 
         const bool deleted = handle->root.delete_terminal_port(port_id);
         handle->root.bump_mutation_version();
+
+        if (txn)
+        {
+            for (size_t i = 0; i < shape_ids.size(); ++i)
+            {
+                txn->record_delete<le::ShapeId, le::ShapeData>(
+                    shape_ids[i], shape_snapshots[i],
+                    [port_cell](le::Root &r, const le::ShapeData &d)
+                    {
+                        le::ShapeData fixed = d;
+                        fixed.terminal_port = port_cell->id;
+                        return r.create_shape(fixed);
+                    },
+                    [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
+            }
+            txn->record_delete<le::TerminalPortId, le::TerminalPortData>(
+                port_id, port_snapshot,
+                [](le::Root &r, const le::TerminalPortData &d) { return r.create_terminal_port(d); },
+                [](le::Root &r, le::TerminalPortId i) { return r.delete_terminal_port(i); });
+        }
+
         return deleted ? 0 : 1;
     }
 
@@ -1724,16 +2072,50 @@ extern "C"
         std::lock_guard<std::mutex> lock(handle->mutex_);
 
         const le::ObstructionId obstruction_id = from_c(id);
-        if (!handle->root.get_obstruction(obstruction_id))
+        const le::ObstructionData *existing_obstruction = handle->root.get_obstruction(obstruction_id);
+        if (!existing_obstruction)
             return 1;
+        const le::ObstructionData obstruction_snapshot = *existing_obstruction;
 
         // Cascade first (see le_delete_obstruction's own doc comment).
         const std::vector<le::ShapeId> shape_ids = handle->root.get_obstruction_shapes(obstruction_id);
+        std::vector<le::ShapeData> shape_snapshots;
+        shape_snapshots.reserve(shape_ids.size());
+        for (const le::ShapeId shape_id : shape_ids)
+            shape_snapshots.push_back(*handle->root.get_shape(shape_id));
+
+        // UPDATES.md item 21 - see le_delete_terminal's own comment on
+        // this same pattern.
+        le::editing::Transaction *txn = handle->command_history.current();
+        const std::shared_ptr<le::editing::IdCell<le::ObstructionId>> obstruction_cell =
+            txn ? txn->id_cell_for(obstruction_id) : nullptr;
+
         for (const le::ShapeId shape_id : shape_ids)
             handle->root.delete_shape(shape_id);
 
         const bool deleted = handle->root.delete_obstruction(obstruction_id);
         handle->root.bump_mutation_version();
+
+        if (txn)
+        {
+            for (size_t i = 0; i < shape_ids.size(); ++i)
+            {
+                txn->record_delete<le::ShapeId, le::ShapeData>(
+                    shape_ids[i], shape_snapshots[i],
+                    [obstruction_cell](le::Root &r, const le::ShapeData &d)
+                    {
+                        le::ShapeData fixed = d;
+                        fixed.obstruction = obstruction_cell->id;
+                        return r.create_shape(fixed);
+                    },
+                    [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
+            }
+            txn->record_delete<le::ObstructionId, le::ObstructionData>(
+                obstruction_id, obstruction_snapshot,
+                [](le::Root &r, const le::ObstructionData &d) { return r.create_obstruction(d); },
+                [](le::Root &r, le::ObstructionId i) { return r.delete_obstruction(i); });
+        }
+
         return deleted ? 0 : 1;
     }
 
@@ -1813,8 +2195,29 @@ extern "C"
         if (!handle)
             return 1;
         std::lock_guard<std::mutex> lock(handle->mutex_);
-        const bool deleted = handle->root.delete_shape(from_c(id));
+
+        const le::ShapeId shape_id = from_c(id);
+        const le::ShapeData *existing_shape = handle->root.get_shape(shape_id);
+        if (!existing_shape)
+            return 1;
+        const le::ShapeData shape_snapshot = *existing_shape;
+
+        const bool deleted = handle->root.delete_shape(shape_id);
         handle->root.bump_mutation_version();
+
+        // UPDATES.md item 21 - a leaf delete (Shape has no children of
+        // its own), so no id-cell indirection is needed the way the
+        // cascading deletes above need it: this shape's own parent
+        // (terminal_port/obstruction) isn't touched by this call, so its
+        // id in the snapshot stays valid regardless of undo/redo.
+        if (le::editing::Transaction *txn = handle->command_history.current())
+        {
+            txn->record_delete<le::ShapeId, le::ShapeData>(
+                shape_id, shape_snapshot,
+                [](le::Root &r, const le::ShapeData &d) { return r.create_shape(d); },
+                [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
+        }
+
         return deleted ? 0 : 1;
     }
 

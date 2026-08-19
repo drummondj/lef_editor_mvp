@@ -145,7 +145,7 @@ diverge is a script that builds an `Abstract` from scratch and calls
 `current_abstract <id>` directly, with no `Design` to select at all;
 that still only touches this generated state, never `Scene`.
 
-## The nine generated-code injection points
+## The ten generated-code injection points
 
 Each of these hand-written files gains one or more `#include`/`%include`/
 `source` lines pointing at generated output - added once, never touched
@@ -159,7 +159,15 @@ again on subsequent regenerations:
   by-name lookups, property-table declarations, `is_child` enumeration,
   current-instance access, `get_<type>` search declarations, and
   `le_create_<type>`/`le_update_<type>` declarations).
-- `api.cpp` - **four** injection points: `#include "generated_tcl/handle_fields.inc"`
+- `api.cpp` - **five** injection points: `#include "generated_tcl/snapshot_appliers.hpp"`
+  near the top of the file with the rest of its ordinary top-level
+  `#include`s (UPDATES.md item 21) - unlike every other generated_tcl/
+  file below, this one is a real standalone header (`#pragma once`, its
+  own `namespace le { ... }`), not a `.inc` fragment spliced into a
+  specific existing scope, since `apply_<snake>_snapshot(Root&, <Klass>Id,
+  const <Klass>Data&)` needs to be callable from both the generic
+  create/update recording hook (below) and `editing::MoveCommand`'s own
+  commit path; `#include "generated_tcl/handle_fields.inc"`
   inside `struct LeHandle`'s body (per-class property-table caches,
   search-result caches, `current_X_id` fields); `#include "generated_tcl/property_accessors_internal.inc"`
   *inside* the file's anonymous namespace (internal helpers -
@@ -173,7 +181,11 @@ again on subsequent regenerations:
   inside an anonymous namespace has internal linkage regardless of
   `extern "C"`, so putting these there produces unresolved-symbol link
   errors in `le_tcl.so` - don't merge the internal/public fragments back
-  into one); `#include "generated_tcl/search.inc"` right after it, also
+  into one; `le_create_X`/`le_update_X`'s generated bodies also each
+  record themselves into `handle->command_history`'s currently-recording
+  transaction, if any, using `apply_<snake>_snapshot` from
+  `snapshot_appliers.hpp` above - see UPDATES.md item 21);
+  `#include "generated_tcl/search.inc"` right after it, also
   inside `extern "C" { ... }` (`le_get_X`/`le_search_result_X_at`, same
   linkage reasoning). `filter_field_tables()`'s body is also generated -
   `= \n#include "generated_tcl/filter_tables.inc"` replaces its old

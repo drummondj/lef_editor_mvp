@@ -403,6 +403,8 @@ namespace le
                 return;
             if (mode_ == Mode::RULER)
                 finish_active_ruler();
+            if (mode_ == Mode::EDIT)
+                end_move(); // leaving Edit mode cancels an in-progress (not yet committed) Move, same reasoning as finishing an active ruler above
             mode_ = mode;
             if (mode_ != Mode::SELECT)
                 clear_hover();
@@ -425,6 +427,143 @@ namespace le
             std::vector<Point> points;
             bool finished = false;
         };
+
+        // --- Move (UPDATES.md item 21) ---
+        // Transient, uncommitted drag state for the two-click Move
+        // gesture in Edit mode - the direct analog of Ruler above (armed/
+        // anchored/free-form flag instead of a committed polyline), see
+        // arm_move()/move_set_anchor()/move_delta()/end_move(). Never
+        // itself mutates Root - a committed Move is recorded as an
+        // ordinary editing::Transaction of per-shape update steps by the
+        // caller (see api.cpp's le_mouse_up EDIT-mode branch), once the
+        // second click lands. `moving_geometry` is a snapshot of each
+        // moving shape's own current ShapeData taken once at arm_move()
+        // time (Move never changes *which* shapes are moving mid-gesture,
+        // only the offset) - this keeps the render-side ghost overlay
+        // (BuildOverlayPictureStage) Root-agnostic, the same reason it
+        // doesn't take a Root reference anywhere else.
+        struct MoveState
+        {
+            bool armed = false;
+            std::optional<Point> anchor;
+            std::vector<ShapeId> moving_ids;
+            std::vector<Shape> moving_geometry;
+            bool free_form = false;
+        };
+
+        // Arms Move: snapshots the current selection's shape ids (a
+        // no-op, stays unarmed, if the selection is empty - nothing to
+        // move). `geometry` must be parallel to Scene::selection() at the
+        // moment of the call (one ShapeData per selected shape, in the
+        // same order) - api.cpp's arm_move_unlocked builds it from Root
+        // right before calling this, since Scene itself has no Root
+        // access. Does not itself check Mode - callers gate this on
+        // Mode::EDIT (see api.cpp's LE_KEY_MOVE handler).
+        void arm_move(std::vector<Shape> geometry)
+        {
+            if (selection_.empty())
+                return;
+
+            move_.armed = true;
+            move_.anchor.reset();
+            move_.moving_ids.clear();
+            move_.moving_ids.reserve(selection_.size());
+            for (const SelectedObject &selected : selection_)
+                move_.moving_ids.push_back(selected.shape_id);
+            move_.moving_geometry = std::move(geometry);
+            ++mouse_version_;
+        }
+
+        // Re-snapshots the ghost-preview geometry for the *current*
+        // moving_ids, leaving armed/anchor/free_form untouched - unlike
+        // arm_move(), which also resets the anchor and rebuilds
+        // moving_ids from the current selection. For when something
+        // *other* than Move itself changed the moving shapes' geometry
+        // while a move is still armed - namely undo/redo (UPDATES.md
+        // item 21): committing move A stays armed for a follow-up move,
+        // but if the user then undoes move A instead, the armed move's
+        // own moving_geometry snapshot (taken at arm/re-arm time) still
+        // reflects move A's *result*, not the reverted state - a
+        // subsequent move without this refresh would ghost-preview from
+        // the wrong base position. A no-op if Move isn't armed - nothing
+        // to refresh. `geometry` must be parallel to moving_ids, same
+        // convention as arm_move's own parameter.
+        void refresh_move_geometry(std::vector<Shape> geometry)
+        {
+            if (!move_.armed)
+                return;
+
+            move_.moving_geometry = std::move(geometry);
+            ++mouse_version_;
+        }
+
+        // Commits the current mouse position as the move's anchor point
+        // (the first click of the two-click gesture) - a no-op (returns
+        // false) if Move isn't armed, an anchor is already set, or no
+        // mouse position is available yet.
+        bool move_set_anchor()
+        {
+            if (!move_.armed || move_.anchor || !has_mouse_position_)
+                return false;
+
+            move_.anchor = snapped_mouse_position();
+            ++mouse_version_;
+            return true;
+        }
+
+        // The offset the moving shapes would be translated by right now
+        // (or the ghost preview should show) - snapped_mouse_position()
+        // minus the anchor, then unless `free_form`, constrained to
+        // whichever axis has the larger magnitude (the other pinned to
+        // 0) - the same orthogonal-by-default rule Ruler::ruler_next_point
+        // already uses, just as a relative delta instead of an absolute
+        // point. nullopt if not armed, no anchor yet, or no mouse
+        // position.
+        std::optional<Point> move_delta(bool free_form) const
+        {
+            if (!move_.armed || !move_.anchor)
+                return std::nullopt;
+
+            const std::optional<Point> snapped = snapped_mouse_position();
+            if (!snapped)
+                return std::nullopt;
+
+            const int64_t dx = snapped->x - move_.anchor->x;
+            const int64_t dy = snapped->y - move_.anchor->y;
+            if (free_form)
+                return Point{dx, dy};
+
+            return std::llabs(dx) >= std::llabs(dy) ? Point{dx, 0} : Point{0, dy};
+        }
+
+        // Clears all Move state - called both on commit (the second
+        // click, after the caller has already applied move_delta() to
+        // every moving shape and recorded the resulting Transaction) and
+        // on cancel (Escape, sharing LE_KEY_FINISH_RULER's handler - see
+        // api.cpp). A no-op if Move wasn't armed.
+        void end_move()
+        {
+            if (!move_.armed && move_.moving_ids.empty())
+                return;
+
+            move_ = MoveState{};
+            ++mouse_version_;
+        }
+
+        const MoveState &move() const { return move_; }
+
+        // Same dedup-then-bump pattern as set_ruler_free_form - api.cpp
+        // resyncs this from LE_KEY_SHIFT on every key event, right next
+        // to its own ruler_free_form_ resync.
+        void set_move_free_form(bool free_form)
+        {
+            if (free_form != move_.free_form)
+            {
+                move_.free_form = free_form;
+                ++mouse_version_;
+            }
+        }
+        bool move_free_form() const { return move_.free_form; }
 
         // The point a click would commit right now (or the ghost
         // preview should show) - grid-snapped (snapped_mouse_position()),
@@ -790,6 +929,7 @@ namespace le
         std::vector<Ruler> rulers_;
         uint64_t ruler_version_ = 0;
         bool ruler_free_form_ = false;
+        MoveState move_;
         double ruler_label_size_px_ = 11.0;
         // Minimum on-screen distance (px, converted via the current
         // scale) a new ruler's first point must be from the most

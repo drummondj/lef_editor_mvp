@@ -3403,3 +3403,240 @@ TEST_F(ApiFixture, ShapeAccessorsWithNullHandleOrUnknownIdDegradeGracefully)
     const LePointUm path_point = le_shape_path_point_at(handle, bogus, 0, 0);
     EXPECT_DOUBLE_EQ(path_point.x_um, 0.0);
 }
+
+// --- Editing / undo-redo (UPDATES.md item 21) ---
+
+TEST_F(ApiFixture, SelectAllInEditModeIsANoOpEvenWithCtrlHeld)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_set_mode(handle, LE_MODE_EDIT);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
+TEST_F(ApiFixture, DeselectAllInEditModeIsANoOpEvenWithCtrlHeld)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_mouse_down(handle, 25, 175); // PIN A, in the default Select mode
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_DESELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 1); // untouched
+}
+
+TEST_F(ApiFixture, UndoRedoRoundTripsAGeneratedUpdateCallThroughBeginEndCommand)
+{
+    // Confirms the generated recording hook actually fires end-to-end
+    // through the real le_update_shape entry point, not just at the
+    // Root layer directly (see editing_test.cpp for that).
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    EXPECT_EQ(le_can_undo(handle), 0);
+
+    le_begin_command(handle, "update_shape test");
+    EXPECT_EQ(le_update_shape(handle, shape_id, "M6", 0, nullptr, 0, 0, nullptr, 0, 0, nullptr, 0, 0, 0.0, 0, 0.0, 0, 0), 0);
+    le_end_command(handle, 1);
+
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M6");
+    EXPECT_NE(le_can_undo(handle), 0);
+    EXPECT_EQ(le_can_redo(handle), 0);
+
+    EXPECT_NE(le_undo(handle), 0);
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M4"); // restored
+    EXPECT_EQ(le_can_undo(handle), 0);
+    EXPECT_NE(le_can_redo(handle), 0);
+
+    EXPECT_NE(le_redo(handle), 0);
+    EXPECT_STREQ(le_shape_layer_name(handle, shape_id), "M6");
+    EXPECT_EQ(le_undo(nullptr), 0);
+    EXPECT_EQ(le_redo(nullptr), 0);
+}
+
+TEST_F(ApiFixture, CommandHistoryOnlyRecordsSuccessfulCommands)
+{
+    EXPECT_EQ(le_command_history_count(handle), 0);
+
+    le_begin_command(handle, "ok_command");
+    le_end_command(handle, 1);
+    ASSERT_EQ(le_command_history_count(handle), 1);
+    EXPECT_STREQ(le_command_history_at(handle, 0), "ok_command");
+
+    le_begin_command(handle, "bad_command");
+    le_end_command(handle, 0);
+    EXPECT_EQ(le_command_history_count(handle), 1); // unchanged
+
+    EXPECT_EQ(le_command_history_at(handle, 1), nullptr); // out of range
+    EXPECT_EQ(le_command_history_at(handle, -1), nullptr);
+}
+
+TEST_F(ApiFixture, EndCommandWithNoBeginCommandIsANoOp)
+{
+    le_end_command(handle, 1);
+    EXPECT_EQ(le_command_history_count(handle), 0);
+    EXPECT_EQ(le_can_undo(handle), 0);
+}
+
+TEST_F(ApiFixture, EditingFunctionsWithNullHandleDoNotCrash)
+{
+    le_begin_command(nullptr, "x");
+    le_end_command(nullptr, 1);
+    EXPECT_EQ(le_undo(nullptr), 0);
+    EXPECT_EQ(le_redo(nullptr), 0);
+    EXPECT_EQ(le_can_undo(nullptr), 0);
+    EXPECT_EQ(le_can_redo(nullptr), 0);
+    EXPECT_EQ(le_command_history_count(nullptr), 0);
+    EXPECT_EQ(le_command_history_at(nullptr, 0), nullptr);
+    le_select_all(nullptr);
+    le_deselect_all(nullptr);
+    le_arm_move(nullptr);
+    le_cancel_move(nullptr);
+    EXPECT_EQ(le_is_move_armed(nullptr), 0);
+}
+
+TEST_F(ApiFixture, MoveTranslatesSelectedShapeGeometryAndIsUndoable)
+{
+    // Own obstruction+rect at a known dbu location (testcell.lef is
+    // DATABASE MICRONS 1000, so kRect0 (0.1,0.1)-(0.3,0.4) um is
+    // (100,100)-(300,400) dbu), rather than the LEF-fixture pins
+    // load_two_shapes_at_known_scale sets up, so the exact rect can be
+    // read back and compared by value below.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+    const LeObstructionId obstruction_id = create_obstruction_with_rect(handle, abstract_id, "M4", kRect0);
+    const LeShapeId shape_id = le_obstruction_shape_at(handle, obstruction_id, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    // scale 0.1 (10 dbu/px), pan (0,0) - "anchor at the bottom-left image
+    // corner" trick (see load_two_shapes_at_known_scale's own comment):
+    // le_zoom's factor is multiplicative (new_scale = old_scale*(1+factor)),
+    // so -0.9 takes the default scale 1.0 to 0.1; anchoring at (0,
+    // viewport_height) - dbu (0,0) at the already-(0,0) pan - keeps pan
+    // pinned at (0,0) across the zoom.
+    le_set_viewport_size(handle, 200, 200);
+    le_zoom(handle, -0.9, 0, 200);
+
+    // dbu (200,250) - inside the (100,100)-(300,400) rect - is device
+    // pixel (20,175) at this scale/pan (pre-flip: x_px=dbu_x*scale,
+    // y_px=viewport_height-dbu_y*scale). Select it (default Select mode).
+    le_mouse_down(handle, 20, 175);
+    le_mouse_up(handle, 20, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_arm_move(handle);
+    EXPECT_NE(le_is_move_armed(handle), 0);
+
+    // First click sets the anchor at dbu (200,250) - same point as the
+    // selecting click above (Move reads the *stored* mouse position, not
+    // this call's own x/y - le_set_mouse_position must precede it, unlike
+    // a plain Select-mode click - see le_mouse_up's own doc comment).
+    le_set_mouse_position(handle, 20, 175);
+    le_mouse_down(handle, 20, 175);
+    le_mouse_up(handle, 20, 175);
+
+    // Second click at dbu (250,260) - dx=50, dy=10, orthogonal delta
+    // (50,0) dbu = (0.05,0) um - commits the move.
+    le_set_mouse_position(handle, 25, 174);
+    le_mouse_down(handle, 25, 174);
+    le_mouse_up(handle, 25, 174);
+
+    // Move stays armed after a successful commit (UPDATES.md item 21) -
+    // ready for an immediate follow-up move on the same selection,
+    // without re-arming, until Escape (see below).
+    EXPECT_NE(le_is_move_armed(handle), 0);
+    ASSERT_EQ(le_selection_count(handle), 1); // selection untouched by Move
+
+    LeRectUm rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.15);
+    EXPECT_DOUBLE_EQ(rect.ll_y_um, 0.1);
+    EXPECT_DOUBLE_EQ(rect.ur_x_um, 0.35);
+    EXPECT_DOUBLE_EQ(rect.ur_y_um, 0.4);
+
+    // A follow-up move, with no re-arming call in between - proves Move
+    // really does stay armed for another gesture. dbu (300,150) (device
+    // (30,185)) is inside the moved rect; dbu (300,200) (device (30,180))
+    // is a pure +50 dbu y-delta (dx=0, dy=50).
+    le_set_mouse_position(handle, 30, 185);
+    le_mouse_down(handle, 30, 185);
+    le_mouse_up(handle, 30, 185);
+    le_set_mouse_position(handle, 30, 180);
+    le_mouse_down(handle, 30, 180);
+    le_mouse_up(handle, 30, 180);
+
+    EXPECT_NE(le_is_move_armed(handle), 0); // still armed
+    rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.15);
+    EXPECT_DOUBLE_EQ(rect.ll_y_um, 0.15);
+    EXPECT_DOUBLE_EQ(rect.ur_x_um, 0.35);
+    EXPECT_DOUBLE_EQ(rect.ur_y_um, 0.45);
+
+    // Escape (LE_KEY_FINISH_RULER's handler) disarms it.
+    le_key_down(handle, LE_KEY_FINISH_RULER);
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+
+    // Undo unwinds the two moves LIFO - the second move first.
+    ASSERT_NE(le_can_undo(handle), 0);
+    ASSERT_NE(le_undo(handle), 0);
+    rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.15); // back to after the first move only
+    EXPECT_DOUBLE_EQ(rect.ll_y_um, 0.1);
+
+    ASSERT_NE(le_undo(handle), 0);
+    rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.1); // back to the original position
+    EXPECT_DOUBLE_EQ(rect.ur_x_um, 0.3);
+
+    ASSERT_NE(le_redo(handle), 0);
+    ASSERT_NE(le_redo(handle), 0);
+    rect = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect.ll_x_um, 0.15); // both moves re-applied
+    EXPECT_DOUBLE_EQ(rect.ll_y_um, 0.15);
+}
+
+TEST_F(ApiFixture, ArmMoveWithEmptySelectionOrOutsideEditModeIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    // Select mode, nothing selected.
+    le_arm_move(handle);
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+
+    // Selected, but still Select mode (not Edit).
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+    le_arm_move(handle);
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+
+    // Edit mode, but nothing selected.
+    le_key_down(handle, LE_KEY_DESELECT_ALL); // not Ctrl-gated via direct call below
+    le_deselect_all(handle);
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_arm_move(handle);
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+}
+
+TEST_F(ApiFixture, CancelMoveViaEscapeClearsArmedState)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_arm_move(handle);
+    ASSERT_NE(le_is_move_armed(handle), 0);
+
+    le_key_down(handle, LE_KEY_FINISH_RULER); // Escape - also cancels an in-progress move
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+}

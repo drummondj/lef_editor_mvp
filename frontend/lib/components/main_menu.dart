@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor/providers/le_provider.dart';
@@ -17,19 +19,19 @@ class _MainMenuState extends State<MainMenu> {
     if (files.isEmpty || !mounted) return;
     final provider = context.read<LeProvider>();
     for (final file in files) {
-      await provider.readLef(file.path);
+      unawaited(provider.readLef(file.path));
     }
   }
 
-  void _loadTestData() async {
+  void _loadTestData() {
     var provider = context.read<LeProvider>();
-    await provider.readLef(
+    provider.readLef(
       "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_tech.lef",
     );
-    await provider.readLef(
+    provider.readLef(
       "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/Nangate45_stdcell.lef",
     );
-    await provider.readLef(
+    provider.readLef(
       "/Volumes/Docking/Projects/synthosilicon/layout_engine/test_data/Nangate45/fakeram45_1024x32.lef",
     );
   }
@@ -51,11 +53,6 @@ class _MainMenuState extends State<MainMenu> {
             icon: Icon(Icons.my_library_books_sharp),
             onPressed: _loadTestData,
             label: Text("Load test data"),
-          ),
-          TextButton.icon(
-            icon: Icon(Icons.layers_clear),
-            onPressed: () => context.read<LeProvider>().clearRulers(),
-            label: Text("Clear Rulers"),
           ),
         ],
       ),

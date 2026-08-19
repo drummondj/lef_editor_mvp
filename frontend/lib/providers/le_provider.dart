@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lef_editor_plugin/lef_editor_plugin.dart';
+import 'package:synchronized/synchronized.dart';
 
 class LeLayerInfo {
   int index;
@@ -30,6 +31,8 @@ class LePurposeInfo {
 }
 
 class LeProvider extends ChangeNotifier {
+  final Lock _lock = Lock();
+
   LeProvider() {
     _messageStream = _messageStreamController.stream;
   }
@@ -82,6 +85,19 @@ class LeProvider extends ChangeNotifier {
 
   LeMode _mode = LeMode.LE_MODE_SELECT;
   LeMode get mode => _mode;
+
+  bool _moveArmed = false;
+  bool get moveArmed => _moveArmed;
+
+  // Command-recall log (UPDATES.md item 21, migrated from Terminal's own
+  // local _commandHistory list) - cached here (rather than re-fetched on
+  // every Up/Down press) so Terminal's own recall navigation can stay
+  // synchronous. Same incremental-fetch shape as _lastMessageCount/
+  // refreshMessages above: entries are never removed/reordered, so this
+  // just needs to remember how many have already been pulled in.
+  final List<String> _commandHistoryCache = [];
+  List<String> get commandHistoryCache => _commandHistoryCache;
+  int _lastCommandHistoryCount = 0;
 
   final List<LeObjectRef> _selectedObjects = [];
   List<LeObjectRef> get selectedObjects => _selectedObjects;
@@ -141,6 +157,21 @@ class LeProvider extends ChangeNotifier {
   // Same "cheap direct read" shape as refreshTooltipMessage above.
   void refreshMode() {
     _mode = _editor.mode;
+  }
+
+  // Same "cheap direct read" shape as refreshTooltipMessage/refreshMode
+  // above - for the Move toolbox button's own armed/pressed visual state.
+  void refreshMoveArmed() {
+    _moveArmed = _editor.isMoveArmed;
+  }
+
+  // Same incremental-fetch shape as refreshMessages above.
+  void refreshCommandHistory() {
+    final count = _editor.commandHistoryCount;
+    for (int i = _lastCommandHistoryCount; i < count; i++) {
+      _commandHistoryCache.add(_editor.commandHistoryAt(i));
+    }
+    _lastCommandHistoryCount = count;
   }
 
   // Rebuilds _selectedObjects as a flat list of refs only - one FFI call
@@ -216,6 +247,8 @@ class LeProvider extends ChangeNotifier {
     refreshMessages();
     refreshTooltipMessage();
     refreshMode();
+    refreshMoveArmed();
+    refreshCommandHistory();
     refreshTexture();
     notifyListeners();
   }
@@ -230,6 +263,43 @@ class LeProvider extends ChangeNotifier {
   /// Removes every ruler, finished or not (UPDATES.md item 13).
   Future<void> clearRulers() async {
     _editor.clearRulers();
+    refreshAndNotify();
+  }
+
+  /// Undoes the most recently recorded transaction, if any - a typed Tcl
+  /// command or a GUI edit like Move (UPDATES.md item 21). Also reachable
+  /// via Ctrl-Z (see handleKeyEvent).
+  Future<void> undo() async {
+    _editor.undo();
+    refreshAndNotify();
+  }
+
+  /// Redoes the most recently undone transaction, if any. Also reachable
+  /// via Ctrl-Shift-Z.
+  Future<void> redo() async {
+    _editor.redo();
+    refreshAndNotify();
+  }
+
+  /// Arms Move (UPDATES.md item 21) - the Move toolbox button's own
+  /// handler. Only meaningful in Edit mode with a non-empty selection;
+  /// a no-op otherwise. Also reachable via Ctrl-M.
+  Future<void> armMove() async {
+    _editor.armMove();
+    refreshAndNotify();
+  }
+
+  /// Selects every currently selectable shape in the current Abstract -
+  /// the Select-mode toolbox button's own handler (UPDATES.md item 21).
+  Future<void> selectAll() async {
+    _editor.selectAll();
+    refreshAndNotify();
+  }
+
+  /// Clears the current selection - the Select-mode toolbox button's own
+  /// handler.
+  Future<void> deselectAll() async {
+    _editor.deselectAll();
     refreshAndNotify();
   }
 
@@ -256,21 +326,23 @@ class LeProvider extends ChangeNotifier {
   // short of one containing a literal, unescaped '{' or '}', which a real
   // filesystem path essentially never does.
   Future<void> readLef(String path) async {
-    if (_openLefFiles.contains(path)) {
-      _messageStreamController.add("ERROR: $path already open");
-      refreshAndNotify();
-      return;
-    }
-    _messageStreamController.add("INFO: Reading $path");
-    final result = await runTclCommand('read_lef {$path}');
-    // On failure, the backend's own le_message_count/le_message_at
-    // queue already has a more specific error (e.g. "ERROR: Could not
-    // open LEF file ..." or a real parser diagnostic) - runTclCommand's
-    // own refreshAndNotify (via refreshMessages) already pulled it in,
-    // so no generic fallback message is added here.
-    if (int.tryParse(result) == 0) {
-      _openLefFiles.add(path);
-    }
+    _lock.synchronized(() async {
+      if (_openLefFiles.contains(path)) {
+        _messageStreamController.add("ERROR: $path already open");
+        refreshAndNotify();
+        return;
+      }
+      _messageStreamController.add("INFO: Reading $path");
+      final result = await runTclCommand('read_lef {$path}');
+      // On failure, the backend's own le_message_count/le_message_at
+      // queue already has a more specific error (e.g. "ERROR: Could not
+      // open LEF file ..." or a real parser diagnostic) - runTclCommand's
+      // own refreshAndNotify (via refreshMessages) already pulled it in,
+      // so no generic fallback message is added here.
+      if (int.tryParse(result) == 0) {
+        _openLefFiles.add(path);
+      }
+    });
   }
 
   Future<List<LeLibrary>> getLibraries() async {
