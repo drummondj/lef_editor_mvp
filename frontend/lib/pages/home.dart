@@ -9,7 +9,8 @@ import 'package:lef_editor/components/main_menu.dart';
 import 'package:lef_editor/components/property_viewer.dart';
 import 'package:lef_editor/components/status_bar.dart';
 import 'package:lef_editor/components/terminal.dart';
-import 'package:lef_editor/components/toolbox.dart';
+import 'package:lef_editor/components/toolbars/mode_selector.dart';
+import 'package:lef_editor/components/toolbars/mode_toolbar.dart';
 import 'package:lef_editor/components/widget_card.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -79,17 +80,7 @@ class _HomeState extends State<Home> {
     bool maximized = false,
   }) {
     switch (id) {
-      case 'toolbox':
-        return DockingItem(
-          id: id,
-          name: 'Toolbox',
-          widget: WidgetCard(child: Toolbox()),
-          closable: false,
-          keepAlive: true,
-          maximizable: false,
-          weight: weight,
-        );
-      case 'menu':
+      case 'file':
         return DockingItem(
           id: id,
           name: 'File',
@@ -114,10 +105,18 @@ class _HomeState extends State<Home> {
           id: id,
           name: 'Layout',
           widget: WidgetCard(
-            child: Column(
+            child: Row(
               children: [
-                Expanded(child: LayoutEditor()),
-                StatusBar(),
+                ModeSelector(),
+                Expanded(
+                  child: Column(
+                    children: [
+                      ModeToolbar(),
+                      Expanded(child: LayoutEditor()),
+                      StatusBar(),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -166,8 +165,7 @@ class _HomeState extends State<Home> {
     return DockingLayout(
       root: DockingRow([
         DockingTabs(size: 300, minimalSize: 300, [
-          _dockingItem(id: 'toolbox'),
-          _dockingItem(id: 'menu'),
+          _dockingItem(id: 'file'),
           _dockingItem(id: 'browser'),
         ]),
         DockingColumn([

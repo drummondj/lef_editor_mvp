@@ -23,6 +23,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -457,6 +458,21 @@ namespace
         handle->scene.fit_to_content(le::Geometry::bbox(shape_ptrs), padding_px);
     }
 
+    // Builds the one-piece ghost-preview geometry for a single selected
+    // piece (UPDATES.md item 21) - a fresh Root lookup plus
+    // Geometry::extract_piece, shared by arm_move_unlocked and
+    // refresh_armed_move_geometry_unlocked. An empty one-piece Shape
+    // (drawing nothing) if the shape itself or the piece index has gone
+    // stale since it was selected, rather than crashing or substituting
+    // the wrong piece.
+    le::Shape move_ghost_piece_unlocked(LeHandle *handle, const le::SelectedObject &selected)
+    {
+        const le::ShapeData *data = handle->root.get_shape(selected.shape_id);
+        if (!data)
+            return le::Shape{};
+        return le::Geometry::extract_piece(*data, selected.piece_kind, selected.piece_index);
+    }
+
     // LE_KEY_MOVE/le_arm_move's own body (UPDATES.md item 21) - unlocked
     // variant, same reasoning as fit_selected_unlocked/select_all_unlocked
     // below (called from inside le_key_down, which already holds
@@ -464,11 +480,11 @@ namespace
     // selection - the Mode::EDIT check lives here rather than inside
     // Scene::arm_move itself (Scene stays mode-agnostic - see
     // Scene::set_mode's own comment on the analogous Ruler-mode split).
-    // Snapshots each selected shape's *current* geometry for the ghost
-    // overlay (Scene::MoveState::moving_geometry) - kept parallel to
-    // Scene::selection() even for a stale/dangling selected id (a
-    // default-constructed Shape{} placeholder, drawing nothing, rather
-    // than skipping and desyncing the two parallel lists).
+    // Snapshots each selected *piece's* current geometry for the ghost
+    // overlay (Scene::MoveState::moving_geometry), piece-granular
+    // (UPDATES.md item 21's follow-up) - Move moves exactly whichever
+    // pieces are selected, not necessarily every piece of their owning
+    // Shapes.
     void arm_move_unlocked(LeHandle *handle)
     {
         if (handle->scene.mode() != le::Scene::Mode::EDIT)
@@ -477,10 +493,7 @@ namespace
         std::vector<le::Shape> geometry;
         geometry.reserve(handle->scene.selection().size());
         for (const le::SelectedObject &selected : handle->scene.selection())
-        {
-            const le::Shape *shape = handle->root.get_shape(selected.shape_id);
-            geometry.push_back(shape ? *shape : le::Shape{});
-        }
+            geometry.push_back(move_ghost_piece_unlocked(handle, selected));
 
         handle->scene.arm_move(std::move(geometry));
     }
@@ -489,7 +502,7 @@ namespace
     // variant, called right after handle->command_history.undo()/redo()
     // succeeds. If Move is currently armed (including the "stays armed
     // after a commit" case - see move_click_unlocked), the moving
-    // shapes' geometry may have just changed out from under its own
+    // pieces' geometry may have just changed out from under its own
     // moving_geometry snapshot (taken at the last arm/re-arm, not
     // continuously) - re-snapshot it via Scene::refresh_move_geometry so
     // a subsequent move's ghost preview starts from the actual
@@ -501,12 +514,9 @@ namespace
             return;
 
         std::vector<le::Shape> geometry;
-        geometry.reserve(handle->scene.move().moving_ids.size());
-        for (const le::ShapeId shape_id : handle->scene.move().moving_ids)
-        {
-            const le::Shape *shape = handle->root.get_shape(shape_id);
-            geometry.push_back(shape ? *shape : le::Shape{});
-        }
+        geometry.reserve(handle->scene.move().moving_pieces.size());
+        for (const le::SelectedObject &selected : handle->scene.move().moving_pieces)
+            geometry.push_back(move_ghost_piece_unlocked(handle, selected));
         handle->scene.refresh_move_geometry(std::move(geometry));
     }
 
@@ -516,20 +526,22 @@ namespace
     // - like Scene::add_ruler_point's own click handling just below in
     // le_mouse_up - reads the separately-tracked *stored* mouse position,
     // not an x/y passed in here); second click (anchor already set)
-    // computes the delta and commits: re-fetches each moving shape's
-    // *current* geometry from Root (not the arm-time snapshot, which is
-    // ghost-rendering-only - see arm_move_unlocked), translates it via
-    // Geometry::transform, applies it directly via Root::update_shape
-    // (bypassing the micron-conversion C API layer - Move already works
-    // in dbu), and records the whole set as one undo/redo transaction. A
-    // no-op if Move isn't armed.
+    // computes the delta and commits: for each moving *piece*, re-fetches
+    // its owning Shape's *current* full geometry from Root (not the
+    // arm-time snapshot, which is ghost-rendering-only - see
+    // arm_move_unlocked), translates only that one piece in place
+    // (Geometry::transform_piece_in_place - leaving every sibling piece,
+    // including other entries of the same owning Shape, untouched),
+    // applies it via Root::update_shape (bypassing the micron-conversion
+    // C API layer - Move already works in dbu), and records the whole
+    // set as one undo/redo transaction. A no-op if Move isn't armed.
     //
     // Stays armed after a successful commit (re-arms with each moved
-    // shape's now-current geometry, ready for an immediate follow-up
+    // piece's now-current geometry, ready for an immediate follow-up
     // move) rather than fully clearing Move state - only Escape
     // (le_cancel_move/LE_KEY_FINISH_RULER) or leaving Edit mode
     // (Scene::set_mode's own end_move() call) actually disarms it, so a
-    // user moving several shapes in sequence doesn't have to re-press
+    // user moving several pieces in sequence doesn't have to re-press
     // the Move button/Ctrl-M between each one.
     void move_click_unlocked(LeHandle *handle)
     {
@@ -550,31 +562,29 @@ namespace
         }
 
         handle->command_history.begin("move");
-        const std::vector<le::ShapeId> moving_ids = handle->scene.move().moving_ids;
-        for (const le::ShapeId shape_id : moving_ids)
+        const std::vector<le::SelectedObject> moving_pieces = handle->scene.move().moving_pieces;
+        for (const le::SelectedObject &selected : moving_pieces)
         {
-            const le::ShapeData *existing = handle->root.get_shape(shape_id);
-            if (!existing)
-                continue;
+            const le::ShapeData *existing = handle->root.get_shape(selected.shape_id);
+            if (!existing || !le::Geometry::piece_in_range(*existing, selected.piece_kind, selected.piece_index))
+                continue; // stale shape or piece index - skip rather than corrupt an unrelated piece
 
             const le::ShapeData before = *existing;
-            const le::ShapeData after = le::Geometry::transform(before, *delta);
-            handle->root.update_shape(shape_id, after.layer_name, after.paths, after.polygons, after.rects,
+            le::ShapeData after = before;
+            le::Geometry::transform_piece_in_place(after, selected.piece_kind, selected.piece_index, *delta);
+            handle->root.update_shape(selected.shape_id, after.layer_name, after.paths, after.polygons, after.rects,
                                        after.spacing, after.design_rule_width, after.except_pg_net);
             handle->root.bump_mutation_version();
 
             if (le::editing::Transaction *txn = handle->command_history.current())
-                txn->record_update<le::ShapeId, le::ShapeData>(shape_id, before, after, &le::apply_shape_snapshot);
+                txn->record_update<le::ShapeId, le::ShapeData>(selected.shape_id, before, after, &le::apply_shape_snapshot);
         }
         handle->command_history.end(/*succeeded=*/true);
 
         std::vector<le::Shape> geometry;
-        geometry.reserve(moving_ids.size());
-        for (const le::ShapeId shape_id : moving_ids)
-        {
-            const le::ShapeData *existing = handle->root.get_shape(shape_id);
-            geometry.push_back(existing ? *existing : le::Shape{});
-        }
+        geometry.reserve(moving_pieces.size());
+        for (const le::SelectedObject &selected : moving_pieces)
+            geometry.push_back(move_ghost_piece_unlocked(handle, selected));
         handle->scene.arm_move(std::move(geometry));
     }
 
@@ -589,7 +599,16 @@ namespace
     // generate_shapes-direct call above needs, for the same reason).
     // Every selectable shape's own bbox is trivially inside the whole
     // Abstract's bbox, so hit_test_rect against that bbox correctly
-    // enumerates "everything selectable" with no new traversal.
+    // enumerates every *candidate* Shape (still respecting layer
+    // visibility/selectability), with no new traversal.
+    //
+    // hit_test_rect's own pieces (UPDATES.md item 21) are Pipeline's
+    // *rendered*, merge_overlapping_fills-processed geometry, not
+    // addressable in Root - only used here to find which ShapeIds are
+    // candidates at all; every raw rect/polygon/path of each candidate's
+    // actual Root::get_shape() data is then selected directly (select-all
+    // means "select everything", not a geometric containment test - no
+    // second fully_enclosed_pieces call needed, unlike drag-select).
     void select_all_unlocked(LeHandle *handle)
     {
         const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
@@ -605,17 +624,42 @@ namespace
 
         handle->scene.clear_selection();
 
-        const auto hits = le::Pipeline::hit_test_rect(filtered, handle->view_layers, handle->scene, *bbox);
-        for (const le::HoverTarget &hit : hits)
+        std::set<le::ShapeId> candidate_ids;
+        for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(filtered, handle->view_layers, handle->scene, *bbox))
+            if (hit.shape_id)
+                candidate_ids.insert(*hit.shape_id);
+
+        bool capped = false;
+        for (const le::ShapeId shape_id : candidate_ids)
         {
-            if (!hit.shape_id)
-                continue;
-            if (static_cast<int32_t>(handle->scene.selection().size()) >= kMaxSelectAllCount)
+            if (capped)
                 break;
-            handle->scene.select(*hit.shape_id);
+
+            const le::ShapeData *data = handle->root.get_shape(shape_id);
+            if (!data)
+                continue;
+
+            auto select_piece = [&](le::PieceKind kind, size_t index)
+            {
+                if (capped)
+                    return;
+                if (static_cast<int32_t>(handle->scene.selection().size()) >= kMaxSelectAllCount)
+                {
+                    capped = true;
+                    return;
+                }
+                handle->scene.select(shape_id, kind, index);
+            };
+
+            for (size_t i = 0; i < data->rects.size(); ++i)
+                select_piece(le::PieceKind::RECT, i);
+            for (size_t i = 0; i < data->polygons.size(); ++i)
+                select_piece(le::PieceKind::POLYGON, i);
+            for (size_t i = 0; i < data->paths.size(); ++i)
+                select_piece(le::PieceKind::PATH, i);
         }
 
-        if (hits.size() > static_cast<size_t>(kMaxSelectAllCount))
+        if (capped)
             handle->messages.push_back(fmt::format("WARNING: Selection capped at {} objects - design has more.", kMaxSelectAllCount));
     }
 
@@ -1730,9 +1774,29 @@ extern "C"
                 // separately-tracked *stored* mouse position (see
                 // le_set_mouse_position), which this call has no guaranteed
                 // ordering against.
-                const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, handle->scene.pixel_to_dbu(x, y));
+                const le::Point dbu_point = handle->scene.pixel_to_dbu(x, y);
+                const auto hit = le::Pipeline::hit_test_point(shapes, handle->view_layers, handle->scene, dbu_point);
                 if (hit && hit->shape_id)
-                    handle->scene.select(*hit->shape_id);
+                {
+                    // UPDATES.md item 21 - hit_test_point's own piece is
+                    // Pipeline's *rendered* (merge_overlapping_fills-processed)
+                    // geometry, not addressable in Root - re-hit-test the
+                    // same point against the shape's real, raw geometry to
+                    // find the piece selection/Move actually operate on
+                    // (see HoverTarget's own comment). Selects the whole
+                    // shape id with the default piece (0) in the
+                    // vanishingly unlikely case the raw geometry doesn't
+                    // hit at the exact same point the rendered/merged
+                    // geometry did (e.g. a boundary rounding difference)
+                    // rather than silently selecting nothing.
+                    if (const le::ShapeData *data = handle->root.get_shape(*hit->shape_id))
+                    {
+                        if (const auto raw_piece = le::Geometry::find_hit_piece(*data, dbu_point))
+                            handle->scene.select(*hit->shape_id, raw_piece->kind, raw_piece->index);
+                        else
+                            handle->scene.select(*hit->shape_id);
+                    }
+                }
             }
             else
             {
@@ -1743,9 +1807,26 @@ extern "C"
                     .ur = le::Point{std::max(start.x, end.x), std::max(start.y, end.y)},
                 };
 
+                // UPDATES.md item 21 - same "re-test against raw geometry"
+                // reasoning as the click branch above: hit_test_rect's own
+                // pieces are only used to find which ShapeIds are
+                // candidates at all; each candidate's actual enclosed
+                // pieces are then found by re-running fully_enclosed_pieces
+                // against its real Root::get_shape() data.
+                std::set<le::ShapeId> candidate_ids;
                 for (const le::HoverTarget &hit : le::Pipeline::hit_test_rect(shapes, handle->view_layers, handle->scene, drag_rect))
                     if (hit.shape_id)
-                        handle->scene.select(*hit.shape_id);
+                        candidate_ids.insert(*hit.shape_id);
+
+                for (const le::ShapeId shape_id : candidate_ids)
+                {
+                    const le::ShapeData *data = handle->root.get_shape(shape_id);
+                    if (!data)
+                        continue;
+
+                    for (const auto &piece : le::Geometry::fully_enclosed_pieces(drag_rect, *data))
+                        handle->scene.select(shape_id, piece.kind, piece.index);
+                }
             }
         }
         else if (handle->scene.mode() == le::Scene::Mode::RULER)

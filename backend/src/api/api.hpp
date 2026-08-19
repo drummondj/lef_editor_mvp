@@ -732,10 +732,11 @@ extern "C"
     ///   (UPDATES.md item 21 - Select-mode selection shortcuts are
     ///   disabled in Edit/Ruler mode; switch back to Select mode to
     ///   change the selection there) - clears the current selection,
-    ///   then selects every currently selectable shape in the current
-    ///   Abstract regardless of viewport (not just what's on screen), up
-    ///   to a fixed cap of 10,000 objects. If the design has more
-    ///   selectable shapes than that, the selection stops at the cap and
+    ///   then selects every piece of every currently selectable shape in
+    ///   the current Abstract regardless of viewport (not just what's on
+    ///   screen), up to a fixed cap of 10,000 objects (pieces, not whole
+    ///   shapes - UPDATES.md item 21). If the design has more
+    ///   selectable pieces than that, the selection stops at the cap and
     ///   a "WARNING: Selection capped..." entry is appended to the
     ///   le_message_count()/le_message_at() queue (UPDATES.md item 3) -
     ///   there's no separate "was it capped" return value, this is the
@@ -824,7 +825,7 @@ extern "C"
     ///
     /// - **Click** (down/up pixel distance below a small threshold): hit-
     ///   tests the single point. Without shift held, replaces the
-    ///   current selection with the hit shape, or clears it if nothing
+    ///   current selection with the hit piece, or clears it if nothing
     ///   was hit; with shift held, adds the hit to the current selection
     ///   (a no-op if nothing was hit).
     /// - **Drag-select** (distance above the threshold): hit-tests every
@@ -832,6 +833,18 @@ extern "C"
     ///   rectangle between the down and up points. Without shift held,
     ///   replaces the current selection with the results; with shift
     ///   held, adds them to it.
+    ///
+    /// Selection is piece-granular (UPDATES.md item 21): a Shape that
+    /// bundles several rects/polygons/paths together (e.g. several RECT
+    /// statements under one LEF PORT/OBS LAYER line) selects only the
+    /// one piece actually clicked, or the individual pieces actually
+    /// enclosed by a drag - not every piece the Shape happens to own.
+    /// Two different pieces of the same Shape can be independently
+    /// selected (e.g. shift-clicking each in turn) as two separate
+    /// entries. The Property Viewer still resolves to the *owning Shape*
+    /// regardless of which piece is selected (le_selected_object_ref) -
+    /// only the selection outline and Move (le_arm_move) act on the
+    /// specific piece.
     ///
     /// **In Edit mode with Move armed** (UPDATES.md item 21, see
     /// le_arm_move) - a click (not a drag; a drag's up-event is treated

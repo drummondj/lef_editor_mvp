@@ -618,6 +618,53 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
     EXPECT_FALSE(is_white(59, 30)); // second rect's left edge - same Terminal, not the selected piece
 }
 
+TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOneSelectedPieceOfATwoRectShapeNotBothOrNeither)
+{
+    // Regression: a *single* Shape bundling 2+ rects/polygons gets its
+    // rendered geometry restructured by Geometry::merge_overlapping_fills
+    // (both rects replaced by merged polygons) - BuildSelectionOverlayPictureStage
+    // used to resolve a selected piece's outline from that *rendered*
+    // geometry, which for this exact case has no `rects` left at all, so
+    // a RECT-kind selection would silently draw nothing. It now resolves
+    // from Root's own raw (unmerged) geometry instead (UPDATES.md item
+    // 21), which still has both rects, at their original indices.
+    const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
+    const Shape two_rect_piece{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {10, 10}, .ur = {30, 30}},
+            Rect{.ll = {60, 60}, .ur = {80, 80}},
+        },
+    };
+    const ShapeId shape_id = add_port_shape(terminal_id, two_rect_piece);
+
+    Scene scene;
+    scene.set_current_abstract(abstract_id);
+    scene.set_pan(Point{0, 0});
+    scene.set_scale(1.0);
+    scene.set_viewport_size(100, 100);
+    scene.select(shape_id, PieceKind::RECT, 1); // select only the second rect
+
+    const auto &shapes = pipeline.run(root, scene, view_layers);
+    const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
+    const auto &design_picture = renderer.build_picture(pixel_shapes, scene, view_layers, root);
+    const auto &overlay_picture = renderer.build_overlay_picture(scene, std::nullopt);
+    const auto &selection_overlay_picture = renderer.build_selection_overlay_picture(scene, root, shapes);
+    const PixelBuffer &buffer = renderer.compose_with_overlays(root, design_picture, sk_sp<SkPicture>{}, overlay_picture, selection_overlay_picture, sk_sp<SkPicture>{}, scene);
+
+    // Same pre-flip/post-flip coordinates as the two-shape test above -
+    // first rect's left edge (preflip x=9,y=20) -> post-flip y=80; second
+    // rect's left edge (preflip x=59,y=70) -> post-flip y=30.
+    auto is_white = [&](int x, int y)
+    {
+        const uint8_t *p = buffer.data + static_cast<size_t>(y) * static_cast<size_t>(buffer.row_bytes) + static_cast<size_t>(x) * 4;
+        return p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 200;
+    };
+
+    EXPECT_FALSE(is_white(9, 80)); // first rect - not selected
+    EXPECT_TRUE(is_white(59, 30)); // second rect (index 1) - the selected piece
+}
+
 TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
 {
     // draw_selected_piece_outline's polygon branch, otherwise untested -
@@ -631,7 +678,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPolygonSelectedPiece)
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(shape_id);
+    scene.select(shape_id, PieceKind::POLYGON, 0);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);
@@ -732,7 +779,7 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesAPathSelectedPieceHollow)
     scene.set_pan(Point{0, 0});
     scene.set_scale(1.0);
     scene.set_viewport_size(100, 100);
-    scene.select(shape_id);
+    scene.select(shape_id, PieceKind::PATH, 0);
 
     const auto &shapes = pipeline.run(root, scene, view_layers);
     const auto &pixel_shapes = renderer.transform_to_pixels(root, shapes, scene);

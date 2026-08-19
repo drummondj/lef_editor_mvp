@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <variant>
@@ -35,27 +37,47 @@ namespace le
         /// The exact ShapeId the hit RenderedShape was generated from
         /// (RenderedShape::shape_id) - nullopt only if the hit somehow
         /// landed on a RenderedShape with no backing Shape row (shouldn't
-        /// happen for anything with an `origin`, but not assumed). This is
-        /// what Scene::select() is actually called with - see its own
-        /// comment for why selection is shape-granular, not origin-level.
+        /// happen for anything with an `origin`, but not assumed).
+        ///
+        /// Deliberately carries no piece index into `shape_id`'s own raw
+        /// Root geometry (UPDATES.md item 21): `outline` here is copied
+        /// from the *Pipeline's* rendered geometry, which
+        /// Geometry::merge_overlapping_fills has restructured for any
+        /// Shape bundling 2+ rects/polygons (replaces them with a merged
+        /// union of polygons, purely to avoid double-blending overlap in
+        /// translucent fills) - so a piece index into *this* geometry
+        /// would not correspond to an index into the Shape's actual
+        /// stored rects/polygons/paths. Callers that need a piece
+        /// addressable in Root (Scene::select/Move) re-hit-test directly
+        /// against Root's own raw ShapeData instead (see api.cpp's
+        /// find_selected_piece_unlocked) - this struct's own `outline`
+        /// stays merged-geometry, fine for hover's purely visual
+        /// highlight.
         std::optional<ShapeId> shape_id;
     };
 
-    /// @brief One selected object (UPDATES.md 7, made shape-level per a
-    /// later property-viewer redesign) - the exact Shape that was clicked/
-    /// dragged to select it. Selection is deliberately Shape-granular, not
-    /// Terminal/Obstruction-granular: it's what makes "the selected
-    /// object" and "the object the Property Viewer displays" the same
-    /// thing (see le_object_property_at/le_selected_object_ref in
-    /// api.cpp) without a second parallel concept. Geometry itself is
-    /// looked up on demand (from Root for properties/bbox, from the
-    /// Pipeline's generated shapes for rendering the highlight - see
-    /// BuildSelectionOverlayPictureStage) rather than stored here, unlike
-    /// HoverTarget::outline, which still carries its own geometry copy for
-    /// hover rendering.
+    /// @brief One selected piece (UPDATES.md item 21 - piece-granular;
+    /// originally shape-level per an earlier property-viewer redesign,
+    /// UPDATES.md 7) - the exact rect/polygon/path that was clicked/
+    /// dragged to select it, identified by its owning Shape's id plus
+    /// which entry of that Shape's own rects/polygons/paths it is
+    /// (`piece_kind`/`piece_index` - see Geometry::HitPiece, which
+    /// Scene::select()'s callers build these from). The Property Viewer
+    /// still resolves "the selected object" to the *owning Shape*
+    /// (le_object_property_at/le_selected_object_ref in api.cpp only
+    /// ever read `shape_id`, ignoring which piece) - properties are
+    /// per-Shape, not per-piece, so that deliberately didn't change; only
+    /// rendering the selection outline and Move (UPDATES.md item 21) care
+    /// which specific piece this is. Geometry itself is looked up on
+    /// demand (from Root for Move, from the Pipeline's generated shapes
+    /// for rendering the highlight - see BuildSelectionOverlayPictureStage)
+    /// rather than stored here, unlike HoverTarget::outline, which still
+    /// carries its own geometry copy for hover rendering.
     struct SelectedObject
     {
         ShapeId shape_id;
+        PieceKind piece_kind = PieceKind::RECT;
+        size_t piece_index = 0;
     };
 
     /// @brief Per-handle mutable view state: which Abstract is displayed,
@@ -434,31 +456,37 @@ namespace le
         // anchored/free-form flag instead of a committed polyline), see
         // arm_move()/move_set_anchor()/move_delta()/end_move(). Never
         // itself mutates Root - a committed Move is recorded as an
-        // ordinary editing::Transaction of per-shape update steps by the
+        // ordinary editing::Transaction of per-piece update steps by the
         // caller (see api.cpp's le_mouse_up EDIT-mode branch), once the
-        // second click lands. `moving_geometry` is a snapshot of each
-        // moving shape's own current ShapeData taken once at arm_move()
-        // time (Move never changes *which* shapes are moving mid-gesture,
-        // only the offset) - this keeps the render-side ghost overlay
+        // second click lands. Piece-granular (UPDATES.md item 21's
+        // follow-up): `moving_pieces` is a direct copy of `selection_` at
+        // arm time, so Move moves exactly whichever pieces are selected,
+        // not necessarily every piece of their owning Shapes.
+        // `moving_geometry` is a snapshot of each moving *piece's* own
+        // current one-piece geometry (Geometry::extract_piece), parallel
+        // to `moving_pieces`, taken once at arm_move()/re-arm time (Move
+        // never changes *which* pieces are moving mid-gesture, only the
+        // offset) - this keeps the render-side ghost overlay
         // (BuildOverlayPictureStage) Root-agnostic, the same reason it
         // doesn't take a Root reference anywhere else.
         struct MoveState
         {
             bool armed = false;
             std::optional<Point> anchor;
-            std::vector<ShapeId> moving_ids;
+            std::vector<SelectedObject> moving_pieces;
             std::vector<Shape> moving_geometry;
             bool free_form = false;
         };
 
-        // Arms Move: snapshots the current selection's shape ids (a
-        // no-op, stays unarmed, if the selection is empty - nothing to
-        // move). `geometry` must be parallel to Scene::selection() at the
-        // moment of the call (one ShapeData per selected shape, in the
-        // same order) - api.cpp's arm_move_unlocked builds it from Root
-        // right before calling this, since Scene itself has no Root
-        // access. Does not itself check Mode - callers gate this on
-        // Mode::EDIT (see api.cpp's LE_KEY_MOVE handler).
+        // Arms Move: snapshots the current selection (a no-op, stays
+        // unarmed, if the selection is empty - nothing to move).
+        // `geometry` must be parallel to Scene::selection() at the moment
+        // of the call (one one-piece Shape per selected piece, in the
+        // same order - see Geometry::extract_piece) - api.cpp's
+        // arm_move_unlocked builds it from Root right before calling
+        // this, since Scene itself has no Root access. Does not itself
+        // check Mode - callers gate this on Mode::EDIT (see api.cpp's
+        // LE_KEY_MOVE handler).
         void arm_move(std::vector<Shape> geometry)
         {
             if (selection_.empty())
@@ -466,19 +494,16 @@ namespace le
 
             move_.armed = true;
             move_.anchor.reset();
-            move_.moving_ids.clear();
-            move_.moving_ids.reserve(selection_.size());
-            for (const SelectedObject &selected : selection_)
-                move_.moving_ids.push_back(selected.shape_id);
+            move_.moving_pieces = selection_;
             move_.moving_geometry = std::move(geometry);
             ++mouse_version_;
         }
 
         // Re-snapshots the ghost-preview geometry for the *current*
-        // moving_ids, leaving armed/anchor/free_form untouched - unlike
-        // arm_move(), which also resets the anchor and rebuilds
-        // moving_ids from the current selection. For when something
-        // *other* than Move itself changed the moving shapes' geometry
+        // moving_pieces, leaving armed/anchor/free_form untouched -
+        // unlike arm_move(), which also resets the anchor and rebuilds
+        // moving_pieces from the current selection. For when something
+        // *other* than Move itself changed the moving pieces' geometry
         // while a move is still armed - namely undo/redo (UPDATES.md
         // item 21): committing move A stays armed for a follow-up move,
         // but if the user then undoes move A instead, the armed move's
@@ -486,7 +511,7 @@ namespace le
         // reflects move A's *result*, not the reverted state - a
         // subsequent move without this refresh would ghost-preview from
         // the wrong base position. A no-op if Move isn't armed - nothing
-        // to refresh. `geometry` must be parallel to moving_ids, same
+        // to refresh. `geometry` must be parallel to moving_pieces, same
         // convention as arm_move's own parameter.
         void refresh_move_geometry(std::vector<Shape> geometry)
         {
@@ -543,7 +568,7 @@ namespace le
         // api.cpp). A no-op if Move wasn't armed.
         void end_move()
         {
-            if (!move_.armed && move_.moving_ids.empty())
+            if (!move_.armed && move_.moving_pieces.empty())
                 return;
 
             move_ = MoveState{};
@@ -864,32 +889,36 @@ namespace le
         // convention) - a no-op bump would invalidate the design picture
         // cache for nothing.
         //
-        // Dedup is by ShapeId identity alone (selected_ids_, an
-        // unordered_set - O(1) average membership/insert, Id<Tag> already
-        // has std::hash) - simpler than the old geometry-hash dedup this
-        // replaced, since a Shape is either selected or it isn't, no
-        // "same origin, different piece" distinction to make any more.
-        // This still needs to stay O(1) average per call: le_mouse_up's
-        // drag-select branch (api.cpp) calls select() once per enclosed
-        // piece, and a real design can put hundreds of thousands of
-        // pieces under one shared Obstruction's OBS block.
-        void select(ShapeId shape_id)
+        // Dedup is by (shape_id, piece_kind, piece_index) identity
+        // (selected_keys_, an ordered std::set of that tuple - Id<Tag>
+        // already has operator<=>, and PieceKind/size_t compare
+        // trivially, so no custom hash is needed) - UPDATES.md item 21's
+        // piece-granular selection: two different pieces of the same
+        // Shape are two independent selected entries, not deduped
+        // against each other, but re-selecting the exact same piece
+        // twice (e.g. shift-clicking it again, or a drag-select
+        // re-enclosing it) still no-ops. This still needs to stay cheap
+        // per call: le_mouse_up's drag-select branch (api.cpp) calls
+        // select() once per enclosed piece, and a real design can put
+        // hundreds of thousands of pieces under one shared Obstruction's
+        // OBS block.
+        void select(ShapeId shape_id, PieceKind piece_kind = PieceKind::RECT, size_t piece_index = 0)
         {
-            if (!selected_ids_.insert(shape_id).second)
+            if (!selected_keys_.insert({shape_id, piece_kind, piece_index}).second)
                 return; // duplicate, no-op
 
-            selection_.push_back(SelectedObject{.shape_id = shape_id});
+            selection_.push_back(SelectedObject{.shape_id = shape_id, .piece_kind = piece_kind, .piece_index = piece_index});
             ++selection_version_;
         }
 
-        void deselect(ShapeId shape_id)
+        void deselect(ShapeId shape_id, PieceKind piece_kind = PieceKind::RECT, size_t piece_index = 0)
         {
-            if (selected_ids_.erase(shape_id) == 0)
+            if (selected_keys_.erase({shape_id, piece_kind, piece_index}) == 0)
                 return;
 
             std::erase_if(selection_,
                            [&](const SelectedObject &selected)
-                           { return selected.shape_id == shape_id; });
+                           { return selected.shape_id == shape_id && selected.piece_kind == piece_kind && selected.piece_index == piece_index; });
             ++selection_version_;
         }
 
@@ -898,21 +927,28 @@ namespace le
             if (!selection_.empty())
             {
                 selection_.clear();
-                selected_ids_.clear();
+                selected_keys_.clear();
                 ++selection_version_;
             }
         }
 
+        // True if *any* piece of `shape_id`'s own Shape is currently
+        // selected - a whole-shape convenience query (e.g. "is this
+        // object selected at all"), not piece-precise. A linear scan
+        // over the current selection - fine since, unlike select()
+        // itself, nothing performance-sensitive calls this today (no
+        // per-enclosed-piece loop reaches it).
         bool is_selected(ShapeId shape_id) const
         {
-            return selected_ids_.contains(shape_id);
+            return std::ranges::any_of(selection_, [&](const SelectedObject &selected)
+                                        { return selected.shape_id == shape_id; });
         }
 
         const std::vector<SelectedObject> &selection() const { return selection_; }
         uint64_t selection_version() const { return selection_version_; }
 
     private:
-        std::unordered_set<ShapeId> selected_ids_;
+        std::set<std::tuple<ShapeId, PieceKind, size_t>> selected_keys_;
         AbstractId current_abstract_;
         Point pan_{0, 0};
         double scale_ = 1.0;

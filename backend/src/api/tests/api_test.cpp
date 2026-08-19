@@ -3640,3 +3640,89 @@ TEST_F(ApiFixture, CancelMoveViaEscapeClearsArmedState)
     le_key_down(handle, LE_KEY_FINISH_RULER); // Escape - also cancels an in-progress move
     EXPECT_EQ(le_is_move_armed(handle), 0);
 }
+
+TEST_F(ApiFixture, ClickSelectsOnlyTheClickedRawPieceEvenWhenRenderedGeometryWasMergedIntoPolygons)
+{
+    // Regression: Pipeline's RenderedShape::shape is Geometry::
+    // merge_overlapping_fills-processed for any Shape bundling 2+ rects/
+    // polygons - for two disjoint rects, merge unconditionally converts
+    // both into POLYGON entries (rects cleared), a totally different
+    // kind/index space than Root's own raw storage (still 2 RECT
+    // entries). Selection/Move must resolve against the raw kind/index,
+    // not the rendered one, or Move would silently corrupt an unrelated
+    // piece.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+    const double rects_um[8] = {0.1, 0.1, 0.3, 0.4, 0.5, 0.1, 0.7, 0.4};
+    const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, nullptr, 0, 0, nullptr, 0, 1, rects_um, 8, 0, 0.0, 0, 0.0, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 2);
+
+    // scale 0.1 (10 dbu/px), pan (0,0) - same recipe as
+    // MoveTranslatesSelectedShapeGeometryAndIsUndoable above.
+    le_set_viewport_size(handle, 200, 200);
+    le_zoom(handle, -0.9, 0, 200);
+
+    // Click rect index 1's center - dbu (600, 250), device (60, 175)
+    // (pre-flip: x_px=dbu_x*scale, y_px=viewport_height-dbu_y*scale).
+    // Rect index 0 occupies device x 10-30; rect index 1 occupies device
+    // x 50-70 - unambiguous which one this hits.
+    le_mouse_down(handle, 60, 175);
+    le_mouse_up(handle, 60, 175);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_set_mode(handle, LE_MODE_EDIT);
+    le_arm_move(handle);
+
+    // Anchor at dbu (600,250), commit at dbu (650,250) - dx=50, dy=0.
+    le_set_mouse_position(handle, 60, 175);
+    le_mouse_down(handle, 60, 175);
+    le_mouse_up(handle, 60, 175);
+    le_set_mouse_position(handle, 65, 175);
+    le_mouse_down(handle, 65, 175);
+    le_mouse_up(handle, 65, 175);
+
+    // Only rect index 1 (the clicked piece) moved - rect index 0 is
+    // untouched, and both remain real rects (not silently converted to
+    // polygons or corrupted) - proves selection/Move resolved the *raw*
+    // piece, not whatever Pipeline's merged/rendered geometry reported.
+    ASSERT_EQ(le_shape_rect_count(handle, shape_id), 2);
+    const LeRectUm rect0 = le_shape_rect_at(handle, shape_id, 0);
+    EXPECT_DOUBLE_EQ(rect0.ll_x_um, 0.1); // untouched sibling rect
+    EXPECT_DOUBLE_EQ(rect0.ur_x_um, 0.3);
+    const LeRectUm rect1 = le_shape_rect_at(handle, shape_id, 1);
+    EXPECT_DOUBLE_EQ(rect1.ll_x_um, 0.55); // moved by +0.05 um (50 dbu)
+    EXPECT_DOUBLE_EQ(rect1.ur_x_um, 0.75);
+    EXPECT_EQ(le_shape_polygon_count(handle, shape_id), 0);
+}
+
+TEST_F(ApiFixture, DragSelectEnclosingTwoPiecesOfTheSameShapeSelectsBothAsSeparateEntries)
+{
+    // Regression: hit_test_rect returns one HoverTarget per *merged*
+    // piece, which for a multi-rect Shape can differ in count/kind from
+    // the raw rects/polygons/paths a drag actually encloses - drag-select
+    // must re-derive the raw enclosed pieces (UPDATES.md item 21), not
+    // just dedup down to one whole-shape entry.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+    const LeAbstractId abstract_id = testcell_abstract_id(handle);
+
+    const LeObstructionId obstruction_id = le_create_obstruction(handle, abstract_id);
+    const double rects_um[8] = {0.1, 0.1, 0.3, 0.4, 0.5, 0.1, 0.7, 0.4};
+    const LeShapeId shape_id = le_create_shape(handle, LeTerminalPortId{.index = UINT32_MAX, .generation = 0}, obstruction_id, "M4", 0, nullptr, 0, 0, nullptr, 0, 1, rects_um, 8, 0, 0.0, 0, 0.0, 0);
+    ASSERT_NE(shape_id.index, UINT32_MAX);
+
+    le_set_viewport_size(handle, 200, 200);
+    le_zoom(handle, -0.9, 0, 200); // scale 0.1, pan (0,0)
+
+    // Drag a rectangle enclosing both rects: device (0,200)-(80,0) - dbu
+    // (0,0)-(800,2000), comfortably containing both (100,100)-(300,400)
+    // and (500,100)-(700,400).
+    le_mouse_down(handle, 0, 200);
+    le_mouse_up(handle, 80, 0);
+
+    EXPECT_EQ(le_selection_count(handle), 2);
+}

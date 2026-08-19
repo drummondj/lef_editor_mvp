@@ -24,6 +24,20 @@ BOOST_GEOMETRY_REGISTER_LINESTRING(std::vector<le::Point>)
 
 namespace le
 {
+    /// @brief The result of a piece-level hit-test (find_hit_piece) - the
+    /// one rect/polygon/path (as its own one-piece Shape, matching
+    /// find_hit_piece's own return convention) under the query point,
+    /// plus `kind`/`index` identifying exactly where it lives in the
+    /// owning Shape's own rects/polygons/paths vector - needed so a
+    /// caller (Scene::select, Move) can address that same piece again
+    /// later, not just look at a disconnected copy of its geometry.
+    struct HitPiece
+    {
+        PieceKind kind;
+        size_t index;
+        Shape outline;
+    };
+
     /// @brief Boost.Geometry-backed operations over the database's Point/Rect/Polygon/Path/Shape types.
     class Geometry
     {
@@ -602,15 +616,17 @@ namespace le
             return best_width.value_or(0.0);
         }
 
-        /// @brief Like `contains`, but returns a copy of just the single
-        /// rect/polygon/path piece that contains `point` (as its own
-        /// one-piece Shape, same `layer_name`), not the whole `shape` -
-        /// `shape` can bundle several rects/polygons/paths together (e.g.
-        /// several RECT statements in one LEF PORT, or an OBS's array of
-        /// rects), and click/hover hit-testing must identify only the one
-        /// piece actually under `point`, not the whole group (UPDATES.md
-        /// 7.1 - highlighting every rect in the group when only one was
-        /// under the cursor was a real reported bug). nullopt if no piece
+        /// @brief Like `contains`, but returns the single rect/polygon/path
+        /// piece that contains `point` - both a copy of its geometry (as
+        /// its own one-piece Shape, same `layer_name`) and `kind`/`index`
+        /// identifying exactly where it lives in `shape`'s own rects/
+        /// polygons/paths vector (see HitPiece) - `shape` can bundle
+        /// several rects/polygons/paths together (e.g. several RECT
+        /// statements in one LEF PORT, or an OBS's array of rects), and
+        /// click/hover hit-testing must identify only the one piece
+        /// actually under `point`, not the whole group (UPDATES.md 7.1 -
+        /// highlighting every rect in the group when only one was under
+        /// the cursor was a real reported bug). nullopt if no piece
         /// contains `point`.
         ///
         /// Polygons/paths are pre-checked against a cheap bbox (see
@@ -626,32 +642,32 @@ namespace le
         /// pre-check, most candidates are rejected by four integer
         /// comparisons before any Boost.Geometry call - see
         /// BENCHMARKS.md for the before/after numbers.
-        static std::optional<Shape> find_hit_piece(const Shape &shape, const Point &point)
+        static std::optional<HitPiece> find_hit_piece(const Shape &shape, const Point &point)
         {
-            for (const auto &rect : shape.rects)
+            for (size_t i = 0; i < shape.rects.size(); ++i)
             {
-                if (point_in_rect(point, rect))
-                    return Shape{.layer_name = shape.layer_name, .rects = {rect}};
+                if (point_in_rect(point, shape.rects[i]))
+                    return HitPiece{.kind = PieceKind::RECT, .index = i, .outline = Shape{.layer_name = shape.layer_name, .rects = {shape.rects[i]}}};
             }
 
-            for (const auto &polygon : shape.polygons)
+            for (size_t i = 0; i < shape.polygons.size(); ++i)
             {
-                if (!point_in_rect(point, bbox_of(polygon)))
+                if (!point_in_rect(point, bbox_of(shape.polygons[i])))
                     continue;
 
-                if (bg::within(point, to_boost_polygon(polygon)))
-                    return Shape{.layer_name = shape.layer_name, .polygons = {polygon}};
+                if (bg::within(point, to_boost_polygon(shape.polygons[i])))
+                    return HitPiece{.kind = PieceKind::POLYGON, .index = i, .outline = Shape{.layer_name = shape.layer_name, .polygons = {shape.polygons[i]}}};
             }
 
-            for (const auto &path : shape.paths)
+            for (size_t i = 0; i < shape.paths.size(); ++i)
             {
-                if (!point_in_rect(point, bbox_of(path)))
+                if (!point_in_rect(point, bbox_of(shape.paths[i])))
                     continue;
 
-                for (const auto &part : path_to_polygons(path))
+                for (const auto &part : path_to_polygons(shape.paths[i]))
                 {
                     if (bg::within(point, to_boost_polygon(part)))
-                        return Shape{.layer_name = shape.layer_name, .paths = {path}};
+                        return HitPiece{.kind = PieceKind::PATH, .index = i, .outline = Shape{.layer_name = shape.layer_name, .paths = {shape.paths[i]}}};
                 }
             }
 
@@ -666,6 +682,84 @@ namespace le
         static bool contains(const Shape &shape, const Point &point)
         {
             return find_hit_piece(shape, point).has_value();
+        }
+
+        /// @brief Extracts just the one rect/polygon/path piece at
+        /// `index` within `kind`'s own vector of `shape`, as its own
+        /// one-piece Shape (same `layer_name`, same convention
+        /// find_hit_piece's own `outline` uses) - for rendering/moving a
+        /// single selected piece of a Shape that may bundle several
+        /// together, without pulling in its siblings. Returns an empty
+        /// (no rects/polygons/paths) one-piece Shape if `index` is out of
+        /// range for `kind` - e.g. a stale selection after the shape's
+        /// own geometry shrank since it was selected - drawing/moving
+        /// nothing rather than crashing or silently substituting a
+        /// different piece.
+        static Shape extract_piece(const Shape &shape, PieceKind kind, size_t index)
+        {
+            Shape piece{.layer_name = shape.layer_name};
+            switch (kind)
+            {
+            case PieceKind::RECT:
+                if (index < shape.rects.size())
+                    piece.rects = {shape.rects[index]};
+                break;
+            case PieceKind::POLYGON:
+                if (index < shape.polygons.size())
+                    piece.polygons = {shape.polygons[index]};
+                break;
+            case PieceKind::PATH:
+                if (index < shape.paths.size())
+                    piece.paths = {shape.paths[index]};
+                break;
+            }
+            return piece;
+        }
+
+        /// @brief True if `extract_piece(shape, kind, index)` would
+        /// return a real (non-empty) piece - i.e. `index` is in range for
+        /// `kind`'s own vector. Lets a caller distinguish "this piece
+        /// really has no geometry" from "the index is stale" without
+        /// extracting a whole Shape copy just to check.
+        static bool piece_in_range(const Shape &shape, PieceKind kind, size_t index)
+        {
+            switch (kind)
+            {
+            case PieceKind::RECT:
+                return index < shape.rects.size();
+            case PieceKind::POLYGON:
+                return index < shape.polygons.size();
+            case PieceKind::PATH:
+                return index < shape.paths.size();
+            }
+            return false;
+        }
+
+        /// @brief Translates just the one rect/polygon/path piece at
+        /// `index` within `kind`'s own vector of `data`, in place,
+        /// leaving every other piece (including other entries of the
+        /// same kind) untouched. A no-op if `index` is out of range for
+        /// `kind` (see piece_in_range - check first if the caller needs
+        /// to know whether anything actually happened). UPDATES.md item
+        /// 21's per-piece Move uses this to move exactly the selected
+        /// piece, not the whole Shape.
+        static void transform_piece_in_place(Shape &data, PieceKind kind, size_t index, const Point &offset)
+        {
+            switch (kind)
+            {
+            case PieceKind::RECT:
+                if (index < data.rects.size())
+                    data.rects[index] = transform(data.rects[index], offset);
+                break;
+            case PieceKind::POLYGON:
+                if (index < data.polygons.size())
+                    data.polygons[index] = transform(data.polygons[index], offset);
+                break;
+            case PieceKind::PATH:
+                if (index < data.paths.size())
+                    data.paths[index] = transform(data.paths[index], offset);
+                break;
+            }
         }
 
         /// @brief True if `shape`'s bbox is entirely inside `container` -
@@ -693,14 +787,14 @@ namespace le
         /// rect/polygon/path of `shape` whose *own* bbox is entirely inside
         /// `container` (same exact-for-axis-aligned-containment reasoning
         /// as fully_enclosed's own doc comment - no Boost calls needed
-        /// here either), each returned as its own single-piece Shape
-        /// (matching find_hit_piece's return convention). Needed because
-        /// one Shape can bundle several rects/polygons/paths together
-        /// (e.g. several RECT statements in one PORT) - a drag-select
-        /// needs to know *which* of them individually qualify, not just
-        /// whether the bundle's own combined bbox does (UPDATES.md 7.1
-        /// item 5's rule 5 rectangle-select).
-        static std::vector<Shape> fully_enclosed_pieces(const Rect &container, const Shape &shape)
+        /// here either), each returned as its own HitPiece (matching
+        /// find_hit_piece's return convention, including `kind`/`index`).
+        /// Needed because one Shape can bundle several rects/polygons/
+        /// paths together (e.g. several RECT statements in one PORT) - a
+        /// drag-select needs to know *which* of them individually
+        /// qualify, not just whether the bundle's own combined bbox does
+        /// (UPDATES.md 7.1 item 5's rule 5 rectangle-select).
+        static std::vector<HitPiece> fully_enclosed_pieces(const Rect &container, const Shape &shape)
         {
             auto bbox_enclosed = [&](const Rect &bbox)
             {
@@ -708,19 +802,19 @@ namespace le
                        bbox.ur.x <= container.ur.x && bbox.ur.y <= container.ur.y;
             };
 
-            std::vector<Shape> result;
+            std::vector<HitPiece> result;
 
-            for (const auto &rect : shape.rects)
-                if (bbox_enclosed(rect))
-                    result.push_back(Shape{.layer_name = shape.layer_name, .rects = {rect}});
+            for (size_t i = 0; i < shape.rects.size(); ++i)
+                if (bbox_enclosed(shape.rects[i]))
+                    result.push_back(HitPiece{.kind = PieceKind::RECT, .index = i, .outline = Shape{.layer_name = shape.layer_name, .rects = {shape.rects[i]}}});
 
-            for (const auto &polygon : shape.polygons)
-                if (bbox_enclosed(bbox_of(polygon)))
-                    result.push_back(Shape{.layer_name = shape.layer_name, .polygons = {polygon}});
+            for (size_t i = 0; i < shape.polygons.size(); ++i)
+                if (bbox_enclosed(bbox_of(shape.polygons[i])))
+                    result.push_back(HitPiece{.kind = PieceKind::POLYGON, .index = i, .outline = Shape{.layer_name = shape.layer_name, .polygons = {shape.polygons[i]}}});
 
-            for (const auto &path : shape.paths)
-                if (bbox_enclosed(bbox_of(path)))
-                    result.push_back(Shape{.layer_name = shape.layer_name, .paths = {path}});
+            for (size_t i = 0; i < shape.paths.size(); ++i)
+                if (bbox_enclosed(bbox_of(shape.paths[i])))
+                    result.push_back(HitPiece{.kind = PieceKind::PATH, .index = i, .outline = Shape{.layer_name = shape.layer_name, .paths = {shape.paths[i]}}});
 
             return result;
         }

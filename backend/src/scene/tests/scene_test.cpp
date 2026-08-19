@@ -1075,14 +1075,14 @@ TEST(Scene, ArmMoveWithEmptySelectionIsNoOp)
     Scene scene;
     scene.arm_move({});
     EXPECT_FALSE(scene.move().armed);
-    EXPECT_TRUE(scene.move().moving_ids.empty());
+    EXPECT_TRUE(scene.move().moving_pieces.empty());
 }
 
 TEST(Scene, ArmMoveSnapshotsSelectionAndGeometry)
 {
     Scene scene;
     ShapeId shape_id{3, 0};
-    scene.select(shape_id);
+    scene.select(shape_id, PieceKind::POLYGON, 2);
 
     Shape geometry;
     geometry.layer_name = "M1";
@@ -1090,8 +1090,10 @@ TEST(Scene, ArmMoveSnapshotsSelectionAndGeometry)
 
     scene.arm_move({geometry});
     EXPECT_TRUE(scene.move().armed);
-    ASSERT_EQ(scene.move().moving_ids.size(), 1u);
-    EXPECT_EQ(scene.move().moving_ids[0], shape_id);
+    ASSERT_EQ(scene.move().moving_pieces.size(), 1u);
+    EXPECT_EQ(scene.move().moving_pieces[0].shape_id, shape_id);
+    EXPECT_EQ(scene.move().moving_pieces[0].piece_kind, PieceKind::POLYGON);
+    EXPECT_EQ(scene.move().moving_pieces[0].piece_index, 2u);
     ASSERT_EQ(scene.move().moving_geometry.size(), 1u);
     EXPECT_EQ(scene.move().moving_geometry[0].layer_name, "M1");
     EXPECT_GT(scene.mouse_version(), before);
@@ -1228,7 +1230,7 @@ TEST(Scene, EndMoveClearsAllMoveState)
     scene.end_move();
     EXPECT_FALSE(scene.move().armed);
     EXPECT_FALSE(scene.move().anchor.has_value());
-    EXPECT_TRUE(scene.move().moving_ids.empty());
+    EXPECT_TRUE(scene.move().moving_pieces.empty());
 }
 
 TEST(Scene, SetModeLeavingEditCancelsAnInProgressMove)

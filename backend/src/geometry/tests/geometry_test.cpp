@@ -580,11 +580,13 @@ TEST(Geometry, FindHitPieceReturnsOnlyTheOneRectHitNotEveryRectInTheShape)
 
     const auto piece = Geometry::find_hit_piece(shape, Point{5, 5});
     ASSERT_TRUE(piece.has_value());
-    EXPECT_EQ(piece->layer_name, "M1");
-    ASSERT_EQ(piece->rects.size(), 1u);
-    EXPECT_EQ(piece->rects.front().ll.x, 0);
-    EXPECT_TRUE(piece->polygons.empty());
-    EXPECT_TRUE(piece->paths.empty());
+    EXPECT_EQ(piece->kind, PieceKind::RECT);
+    EXPECT_EQ(piece->index, 0u);
+    EXPECT_EQ(piece->outline.layer_name, "M1");
+    ASSERT_EQ(piece->outline.rects.size(), 1u);
+    EXPECT_EQ(piece->outline.rects.front().ll.x, 0);
+    EXPECT_TRUE(piece->outline.polygons.empty());
+    EXPECT_TRUE(piece->outline.paths.empty());
 }
 
 TEST(Geometry, FindHitPieceReturnsOnlyTheOnePolygonHitNotEveryPolygonInTheShape)
@@ -595,8 +597,10 @@ TEST(Geometry, FindHitPieceReturnsOnlyTheOnePolygonHitNotEveryPolygonInTheShape)
 
     const auto piece = Geometry::find_hit_piece(shape, Point{5, 5});
     ASSERT_TRUE(piece.has_value());
-    ASSERT_EQ(piece->polygons.size(), 1u);
-    EXPECT_TRUE(piece->rects.empty());
+    EXPECT_EQ(piece->kind, PieceKind::POLYGON);
+    EXPECT_EQ(piece->index, 0u);
+    ASSERT_EQ(piece->outline.polygons.size(), 1u);
+    EXPECT_TRUE(piece->outline.rects.empty());
 }
 
 TEST(Geometry, FindHitPieceReturnsNulloptOnAMiss)
@@ -657,10 +661,14 @@ TEST(Geometry, FullyEnclosedPiecesReturnsOnlyTheIndividuallyEnclosedPieces)
     const auto pieces = Geometry::fully_enclosed_pieces(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape);
 
     ASSERT_EQ(pieces.size(), 2u);
-    EXPECT_EQ(pieces[0].rects.size(), 1u);
-    EXPECT_EQ(pieces[0].rects.front().ll.x, 10);
-    EXPECT_EQ(pieces[1].polygons.size(), 1u);
-    EXPECT_EQ(pieces[0].layer_name, "M1"); // layer_name carried onto each single-piece Shape
+    EXPECT_EQ(pieces[0].kind, PieceKind::RECT);
+    EXPECT_EQ(pieces[0].index, 0u);
+    EXPECT_EQ(pieces[0].outline.rects.size(), 1u);
+    EXPECT_EQ(pieces[0].outline.rects.front().ll.x, 10);
+    EXPECT_EQ(pieces[1].kind, PieceKind::POLYGON);
+    EXPECT_EQ(pieces[1].index, 0u);
+    EXPECT_EQ(pieces[1].outline.polygons.size(), 1u);
+    EXPECT_EQ(pieces[0].outline.layer_name, "M1"); // layer_name carried onto each single-piece Shape
 }
 
 TEST(Geometry, FullyEnclosedPiecesIsEmptyWhenNoPieceFits)
@@ -669,4 +677,67 @@ TEST(Geometry, FullyEnclosedPiecesIsEmptyWhenNoPieceFits)
     shape.rects.push_back(Rect{.ll = {100, 100}, .ur = {110, 110}});
 
     EXPECT_TRUE(Geometry::fully_enclosed_pieces(Rect{.ll = {0, 0}, .ur = {30, 30}}, shape).empty());
+}
+
+TEST(Geometry, ExtractPieceReturnsOnlyTheOneIndexedRectNotItsSiblings)
+{
+    Shape shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {0, 0}, .ur = {10, 10}},
+            Rect{.ll = {100, 100}, .ur = {110, 110}},
+        },
+    };
+
+    const Shape piece = Geometry::extract_piece(shape, PieceKind::RECT, 1);
+    EXPECT_EQ(piece.layer_name, "M1");
+    ASSERT_EQ(piece.rects.size(), 1u);
+    EXPECT_EQ(piece.rects.front().ll.x, 100);
+    EXPECT_TRUE(piece.polygons.empty());
+    EXPECT_TRUE(piece.paths.empty());
+}
+
+TEST(Geometry, ExtractPieceOfAnOutOfRangeIndexReturnsAnEmptyPiece)
+{
+    Shape shape{.layer_name = "M1", .rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}};
+
+    const Shape piece = Geometry::extract_piece(shape, PieceKind::RECT, 5);
+    EXPECT_EQ(piece.layer_name, "M1");
+    EXPECT_TRUE(piece.rects.empty());
+}
+
+TEST(Geometry, PieceInRangeMatchesWhatExtractPieceWouldReturn)
+{
+    Shape shape{.polygons = {Polygon{.points = {{0, 0}, {10, 0}, {10, 10}}}}};
+
+    EXPECT_TRUE(Geometry::piece_in_range(shape, PieceKind::POLYGON, 0));
+    EXPECT_FALSE(Geometry::piece_in_range(shape, PieceKind::POLYGON, 1));
+    EXPECT_FALSE(Geometry::piece_in_range(shape, PieceKind::RECT, 0));
+}
+
+TEST(Geometry, TransformPieceInPlaceMovesOnlyTheAddressedPieceLeavingSiblingsUntouched)
+{
+    Shape shape{
+        .layer_name = "M1",
+        .rects = {
+            Rect{.ll = {0, 0}, .ur = {10, 10}},
+            Rect{.ll = {100, 100}, .ur = {110, 110}},
+        },
+        .polygons = {Polygon{.points = {{0, 0}, {10, 0}, {10, 10}}}},
+    };
+
+    Geometry::transform_piece_in_place(shape, PieceKind::RECT, 1, Point{5, -5});
+
+    expect_point_eq(shape.rects[0].ll, Point{0, 0}); // untouched sibling rect
+    expect_point_eq(shape.rects[1].ll, Point{105, 95}); // the addressed piece moved
+    expect_point_eq(shape.polygons[0].points[0], Point{0, 0}); // untouched, different kind entirely
+}
+
+TEST(Geometry, TransformPieceInPlaceOfAnOutOfRangeIndexIsANoOp)
+{
+    Shape shape{.rects = {Rect{.ll = {0, 0}, .ur = {10, 10}}}};
+
+    Geometry::transform_piece_in_place(shape, PieceKind::RECT, 5, Point{5, -5});
+
+    expect_point_eq(shape.rects[0].ll, Point{0, 0});
 }
