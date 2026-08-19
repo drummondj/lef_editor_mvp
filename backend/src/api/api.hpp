@@ -651,27 +651,33 @@ extern "C"
         /// double up on (LE_KEY_1..LE_KEY_9 already cover the first
         /// nine). Same VIA-pairing behavior as LE_KEY_1..LE_KEY_9.
         LE_KEY_0 = 20,
-        /// Switch to Select mode (UPDATES.md item 11) - not Ctrl-gated,
-        /// an "action" code like LE_KEY_ZOOM/LE_KEY_FIT: le_key_down()
-        /// calls Scene::set_mode(Scene::Mode::SELECT) immediately, every
-        /// call (including key-repeat - idempotent, so no special
-        /// one-shot handling is needed). See le_get_mode/le_set_mode for
-        /// the non-keyboard (Flutter UI event) path to the same state.
+        /// Switch to Select mode (UPDATES.md item 11) - an "action" code
+        /// like LE_KEY_ZOOM/LE_KEY_FIT: le_key_down() calls
+        /// Scene::set_mode(Scene::Mode::SELECT) immediately, every call
+        /// (including key-repeat - idempotent, so no special one-shot
+        /// handling is needed). Bare-only - fires only while neither
+        /// LE_KEY_CTRL nor LE_KEY_SHIFT is currently held, so e.g. a
+        /// Ctrl-S keystroke intended for something else doesn't also
+        /// switch modes as a side effect. See le_get_mode/le_set_mode for
+        /// the non-keyboard (Flutter UI event) path to the same state,
+        /// which is not modifier-gated (there's no physical key to
+        /// collide with there).
         LE_KEY_SELECT_MODE = 21,
         /// Switch to Edit mode (UPDATES.md item 11) - same shape as
-        /// LE_KEY_SELECT_MODE, calling Scene::set_mode(Scene::Mode::EDIT).
-        /// While in Edit mode, le_mouse_up no longer changes the current
-        /// selection - see its own doc comment.
+        /// LE_KEY_SELECT_MODE, including the bare-only modifier gating,
+        /// calling Scene::set_mode(Scene::Mode::EDIT). While in Edit
+        /// mode, le_mouse_up no longer changes the current selection -
+        /// see its own doc comment.
         LE_KEY_EDIT_MODE = 22,
-        /// Switch to Ruler mode (UPDATES.md item 13) - same idempotent
-        /// action-code shape as LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE, but
-        /// calls Scene::reset_ruler_mode() rather than a plain
-        /// set_mode(): every call - including when already in Ruler
-        /// mode, and including key-repeat - finishes whatever ruler was
-        /// in progress, so re-pressing 'r' doubles as an explicit
-        /// "abandon the current ruler" shortcut. While in Ruler mode,
-        /// le_mouse_up's clicks place ruler points instead of changing
-        /// the selection - see le_finish_ruler/le_clear_rulers.
+        /// Switch to Ruler mode (UPDATES.md item 13) - same idempotent,
+        /// bare-only action-code shape as LE_KEY_SELECT_MODE/
+        /// LE_KEY_EDIT_MODE, but calls Scene::reset_ruler_mode() rather
+        /// than a plain set_mode(): every call - including when already
+        /// in Ruler mode, and including key-repeat - finishes whatever
+        /// ruler was in progress, so re-pressing 'r' doubles as an
+        /// explicit "abandon the current ruler" shortcut. While in Ruler
+        /// mode, le_mouse_up's clicks place ruler points instead of
+        /// changing the selection - see le_finish_ruler/le_clear_rulers.
         LE_KEY_RULER_MODE = 23,
         /// Finishes the active ruler, if any (UPDATES.md item 13, see
         /// le_finish_ruler) - the Esc key. Idempotent/safe to fire on
@@ -684,9 +690,17 @@ extern "C"
         /// an in-progress (not yet committed) Move, if any (UPDATES.md
         /// item 21, le_cancel_move) - same "always safe to fire" reasoning,
         /// Scene::end_move() is a no-op once there's nothing to cancel.
+        /// Deliberately *not* modifier-gated, unlike every bare-only key
+        /// above - Escape is a pure cancel/finish gesture, and a real
+        /// ruler-drawing sequence routinely ends with LE_KEY_SHIFT (the
+        /// free-form toggle) still physically held right up to the Esc
+        /// press, so suppressing it while a modifier happens to be down
+        /// would make "finish the ruler" unreliable in exactly the
+        /// workflow that uses Shift the most.
         LE_KEY_FINISH_RULER = 24,
         /// Arms Move (UPDATES.md item 21, Ctrl-M) - see le_arm_move's own
-        /// doc comment. Ctrl-gated at the le_key_down call site, same as
+        /// doc comment. Fires only while Ctrl is held and Shift is not,
+        /// at the le_key_down call site, same shape as
         /// LE_KEY_SELECT_ALL/LE_KEY_DESELECT_ALL, even though the Move
         /// toolbox button calls le_arm_move() directly and bypasses this
         /// gate. No separate LE_KEY_UNDO/LE_KEY_REDO code exists -
@@ -724,44 +738,59 @@ extern "C"
     ///   combined bbox instead (same fixed padding, one Shape's own bbox
     ///   per selection entry - see api.cpp's fit_selected_unlocked),
     ///   leaving the view unchanged if nothing is selected rather than
-    ///   falling back to the whole-content fit.
+    ///   falling back to the whole-content fit. LE_KEY_SHIFT has no
+    ///   meaning for Fit - held at all (with or without Ctrl) is a
+    ///   no-op, not "same as unmodified".
     /// - LE_KEY_PAN_LEFT/RIGHT/UP/DOWN: le_pan() by a fixed
-    ///   viewport-fraction step in the corresponding direction.
+    ///   viewport-fraction step in the corresponding direction. Bare
+    ///   only - a no-op while either LE_KEY_CTRL or LE_KEY_SHIFT is held.
     /// - LE_KEY_SELECT_ALL (UPDATES.md 9.1): only while LE_KEY_CTRL is
-    ///   currently held *and* the current mode is LE_MODE_SELECT
-    ///   (UPDATES.md item 21 - Select-mode selection shortcuts are
-    ///   disabled in Edit/Ruler mode; switch back to Select mode to
-    ///   change the selection there) - clears the current selection,
-    ///   then selects every piece of every currently selectable shape in
-    ///   the current Abstract regardless of viewport (not just what's on
-    ///   screen), up to a fixed cap of 10,000 objects (pieces, not whole
-    ///   shapes - UPDATES.md item 21). If the design has more
-    ///   selectable pieces than that, the selection stops at the cap and
-    ///   a "WARNING: Selection capped..." entry is appended to the
-    ///   le_message_count()/le_message_at() queue (UPDATES.md item 3) -
-    ///   there's no separate "was it capped" return value, this is the
-    ///   same mechanism any other backend-originated message uses.
+    ///   currently held, LE_KEY_SHIFT is *not*, and the current mode is
+    ///   LE_MODE_SELECT (UPDATES.md item 21 - Select-mode selection
+    ///   shortcuts are disabled in Edit/Ruler mode; switch back to
+    ///   Select mode to change the selection there) - clears the current
+    ///   selection, then selects every piece of every currently
+    ///   selectable shape in the current Abstract regardless of viewport
+    ///   (not just what's on screen), up to a fixed cap of 10,000
+    ///   objects (pieces, not whole shapes - UPDATES.md item 21). If the
+    ///   design has more selectable pieces than that, the selection
+    ///   stops at the cap and a "WARNING: Selection capped..." entry is
+    ///   appended to the le_message_count()/le_message_at() queue
+    ///   (UPDATES.md item 3) - there's no separate "was it capped"
+    ///   return value, this is the same mechanism any other
+    ///   backend-originated message uses.
     /// - LE_KEY_1..LE_KEY_9 (UPDATES.md 9.4/9.7): toggles a ROUTING
     ///   layer's visibility - the 1st..9th if LE_KEY_CTRL is not
     ///   currently held, the 11th..19th if it is (a no-op if there's no
-    ///   ROUTING layer at that position) - then, either way, - only via
-    ///   this keyboard path, never from a direct
+    ///   ROUTING layer at that position); LE_KEY_SHIFT held at all (with
+    ///   or without Ctrl) is a no-op instead - then, either way, - only
+    ///   via this keyboard path, never from a direct
     ///   le_set_layer_name_visible() call - re-checks every pair of
     ///   adjacent ROUTING layers: if both are now visible, every CUT
     ///   layer between them (LEF has no distinct "VIA" layer type - vias
     ///   are TYPE CUT layers - see this header's own LeKeyCode comment)
     ///   becomes visible too; if not, those CUT layers become invisible.
     /// - LE_KEY_0 (UPDATES.md 9.7): toggles the 10th ROUTING layer's
-    ///   visibility, unconditional on LE_KEY_CTRL - same VIA-pairing
-    ///   re-check as LE_KEY_1..LE_KEY_9 above.
+    ///   visibility - bare only (a no-op while either LE_KEY_CTRL or
+    ///   LE_KEY_SHIFT is held; there's no digit slot left over for Ctrl
+    ///   to double up on the way LE_KEY_1..LE_KEY_9 do) - same
+    ///   VIA-pairing re-check as LE_KEY_1..LE_KEY_9 above.
     /// - LE_KEY_DESELECT_ALL (UPDATES.md 9.5): only while LE_KEY_CTRL is
-    ///   currently held *and* the current mode is LE_MODE_SELECT (same
-    ///   mode-gating as LE_KEY_SELECT_ALL above, UPDATES.md item 21) -
-    ///   clears the current selection. A no-op (not an error) if the
-    ///   selection was already empty.
+    ///   currently held, LE_KEY_SHIFT is not, and the current mode is
+    ///   LE_MODE_SELECT (same mode-gating as LE_KEY_SELECT_ALL above,
+    ///   UPDATES.md item 21) - clears the current selection. A no-op
+    ///   (not an error) if the selection was already empty.
     /// - LE_KEY_MOVE (UPDATES.md item 21): only while LE_KEY_CTRL is
-    ///   currently held - equivalent to le_arm_move(); a no-op outside
-    ///   Edit mode or with an empty selection, same as that function.
+    ///   currently held and LE_KEY_SHIFT is not - equivalent to
+    ///   le_arm_move(); a no-op outside Edit mode or with an empty
+    ///   selection, same as that function.
+    /// - LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE/LE_KEY_RULER_MODE
+    ///   (UPDATES.md item 11/13): bare only - a no-op while either
+    ///   LE_KEY_CTRL or LE_KEY_SHIFT is held, so e.g. a Ctrl-S keystroke
+    ///   meant for something else doesn't also switch modes.
+    /// - LE_KEY_FINISH_RULER: unconditional regardless of any modifier -
+    ///   see its own LeKeyCode doc comment for why Escape is the one
+    ///   bare-ish key that's deliberately exempt from modifier-gating.
     ///
     /// A no-op if handle is null.
     void le_key_down(LeHandle *handle, int32_t key_code);

@@ -883,6 +883,22 @@ TEST_F(ApiFixture, DigitKey0WithNullHandleDoesNotCrash)
     le_key_down(nullptr, LE_KEY_0);
 }
 
+TEST_F(ApiFixture, DigitKeysWithShiftHeldAreANoOp)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("via_pairing.lef").c_str()), 0);
+
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0); // unchanged
+
+    le_key_down(handle, LE_KEY_0);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M2"), 0); // unchanged
+
+    le_key_down(handle, LE_KEY_CTRL); // Ctrl+Shift both held
+    le_key_down(handle, LE_KEY_1);
+    EXPECT_NE(le_is_layer_name_visible(handle, "M1"), 0); // still unchanged
+}
+
 TEST_F(ApiFixture, DigitKeyWithNoTechnologyReadYetDoesNotCrash)
 {
     le_key_down(handle, LE_KEY_1); // no le_read_lef call at all
@@ -1442,6 +1458,33 @@ TEST_F(ApiFixture, KeyDownPanDirectionsAreEachOthersOpposite)
     EXPECT_TRUE(region_has_opaque_pixel(after, 21, 21, 79, 79));
 }
 
+TEST_F(ApiFixture, KeyDownPanWithCtrlOrShiftHeldIsANoOp)
+{
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    le_set_viewport_size(handle, 100, 100);
+    le_zoom(handle, 100.0 / 10000.0 - 1.0, 0, 100);
+
+    LePixelBuffer before = le_render_pixel_buffer(handle);
+    ASSERT_NE(before.data, nullptr);
+    ASSERT_TRUE(region_has_opaque_pixel(before, 21, 21, 79, 79));
+
+    le_key_down(handle, LE_KEY_CTRL);
+    for (int i = 0; i < 8; ++i)
+        le_key_down(handle, LE_KEY_PAN_LEFT);
+    le_key_down(handle, LE_KEY_SHIFT); // Ctrl+Shift both held
+    for (int i = 0; i < 8; ++i)
+        le_key_down(handle, LE_KEY_PAN_LEFT);
+    le_key_up(handle, LE_KEY_CTRL);
+    for (int i = 0; i < 8; ++i)
+        le_key_down(handle, LE_KEY_PAN_LEFT); // Shift alone
+
+    LePixelBuffer after = le_render_pixel_buffer(handle);
+    ASSERT_NE(after.data, nullptr);
+    EXPECT_TRUE(region_has_opaque_pixel(after, 21, 21, 79, 79)); // unchanged
+}
+
 // LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE (UPDATES.md item 11).
 TEST_F(ApiFixture, KeyDownEditModeSwitchesToEditMode)
 {
@@ -1457,6 +1500,56 @@ TEST_F(ApiFixture, KeyDownSelectModeSwitchesBackToSelectMode)
 
     le_key_down(handle, LE_KEY_SELECT_MODE);
     EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+}
+
+TEST_F(ApiFixture, KeyDownEditModeWithCtrlOrShiftHeldIsANoOp)
+{
+    // Regression: 'e'/'s'/'r' used to switch modes even with a modifier
+    // held (e.g. Ctrl-S), stealing the keystroke from whatever the
+    // modifier combo actually meant. Mode-switch keys are bare-only now.
+    ASSERT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_EDIT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+
+    le_key_down(handle, LE_KEY_SHIFT); // Ctrl+Shift both held
+    le_key_down(handle, LE_KEY_EDIT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+
+    le_key_up(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_EDIT_MODE); // Shift alone
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+}
+
+TEST_F(ApiFixture, KeyDownSelectModeWithCtrlOrShiftHeldIsANoOp)
+{
+    le_key_down(handle, LE_KEY_EDIT_MODE);
+    ASSERT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_SELECT_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_EDIT);
+}
+
+TEST_F(ApiFixture, KeyDownRulerModeWithCtrlOrShiftHeldIsANoOp)
+{
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_RULER_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_RULER_MODE);
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_SELECT);
+
+    le_key_up(handle, LE_KEY_CTRL);
+    le_key_up(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_RULER_MODE); // bare - actually switches
+    EXPECT_EQ(le_get_mode(handle), LE_MODE_RULER);
 }
 
 TEST_F(ApiFixture, RenderPixelBufferDrawsThePinRectAtItsExpectedLocation)
@@ -1713,6 +1806,17 @@ TEST_F(ApiFixture, SelectAllWithNullHandleDoesNotCrash)
     le_key_down(nullptr, LE_KEY_SELECT_ALL);
 }
 
+TEST_F(ApiFixture, SelectAllWithCtrlAndShiftBothHeldIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+
+    EXPECT_EQ(le_selection_count(handle), 0);
+}
+
 TEST_F(ApiFixture, CtrlDDeselectAllClearsTheSelection)
 {
     load_two_shapes_at_known_scale(handle);
@@ -1750,6 +1854,19 @@ TEST_F(ApiFixture, DeselectAllWhenNothingIsSelectedIsANoOp)
 TEST_F(ApiFixture, DeselectAllWithNullHandleDoesNotCrash)
 {
     le_key_down(nullptr, LE_KEY_DESELECT_ALL);
+}
+
+TEST_F(ApiFixture, DeselectAllWithCtrlAndShiftBothHeldIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SELECT_ALL);
+    ASSERT_EQ(le_selection_count(handle), 2);
+
+    le_key_down(handle, LE_KEY_SHIFT); // Ctrl+Shift both held
+    le_key_down(handle, LE_KEY_DESELECT_ALL);
+    EXPECT_EQ(le_selection_count(handle), 2); // unchanged
 }
 
 TEST_F(ApiFixture, CtrlFFitsTheViewportToOnlyTheSelectedShape)
@@ -3639,6 +3756,27 @@ TEST_F(ApiFixture, CancelMoveViaEscapeClearsArmedState)
 
     le_key_down(handle, LE_KEY_FINISH_RULER); // Escape - also cancels an in-progress move
     EXPECT_EQ(le_is_move_armed(handle), 0);
+}
+
+TEST_F(ApiFixture, KeyDownMoveWithoutCtrlOrWithShiftAlsoHeldIsANoOp)
+{
+    load_two_shapes_at_known_scale(handle);
+    le_mouse_down(handle, 25, 175);
+    le_mouse_up(handle, 25, 175);
+    le_set_mode(handle, LE_MODE_EDIT);
+    ASSERT_EQ(le_selection_count(handle), 1);
+
+    le_key_down(handle, LE_KEY_MOVE); // Ctrl never held
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+
+    le_key_down(handle, LE_KEY_CTRL);
+    le_key_down(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_MOVE); // Ctrl+Shift both held
+    EXPECT_EQ(le_is_move_armed(handle), 0);
+
+    le_key_up(handle, LE_KEY_SHIFT);
+    le_key_down(handle, LE_KEY_MOVE); // Ctrl alone - actually arms
+    EXPECT_NE(le_is_move_armed(handle), 0);
 }
 
 TEST_F(ApiFixture, ClickSelectsAndMovesOnlyOneRectOfATwoRectShapeNotBothOrTheWrongOne)

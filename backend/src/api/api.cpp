@@ -1583,9 +1583,23 @@ extern "C"
             return;
         std::lock_guard<std::mutex> lock(handle->mutex_);
         handle->scene.press_key(key_code);
-        handle->scene.set_ruler_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
-        handle->scene.set_move_free_form(handle->scene.is_key_held(LE_KEY_SHIFT));
+        const bool ctrl = handle->scene.is_key_held(LE_KEY_CTRL);
+        const bool shift = handle->scene.is_key_held(LE_KEY_SHIFT);
+        handle->scene.set_ruler_free_form(shift);
+        handle->scene.set_move_free_form(shift);
 
+        // Every case below fires only for the *exact* modifier
+        // combination its own action is actually defined for - an
+        // unexpected extra modifier (e.g. Shift held for a key with no
+        // Shift-specific meaning) is a no-op, not a silent fall-through
+        // to the bare/Ctrl behavior. Regression: pressing 's'/'e'/'r' to
+        // switch modes used to fire even with Ctrl or Shift held (e.g.
+        // Ctrl-S), stealing the keystroke from whatever the modifier was
+        // actually meant for. LE_KEY_ZOOM is the one exception that's
+        // deliberately exhaustive instead (Ctrl and Shift each already
+        // select a real, distinct action of their own - see below) and
+        // LE_KEY_FINISH_RULER, which is deliberately *not* modifier-
+        // gated at all (see its own case).
         switch (key_code)
         {
         case LE_KEY_ZOOM:
@@ -1593,10 +1607,13 @@ extern "C"
             // UPDATES.md item 21 - Ctrl-Z/Ctrl-Shift-Z undo/redo, branched
             // here rather than a separate key code (see LE_KEY_ZOOM's own
             // api.hpp doc comment for why). Falls through to the ordinary
-            // zoom action when Ctrl isn't held.
-            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            // zoom action when Ctrl isn't held. Every one of the four
+            // Ctrl/Shift combinations already has a real, distinct
+            // meaning (undo/redo, zoom in/out), unlike every other action
+            // key below - nothing to suppress here.
+            if (ctrl)
             {
-                if (handle->scene.is_key_held(LE_KEY_SHIFT))
+                if (shift)
                     handle->command_history.redo(handle->root);
                 else
                     handle->command_history.undo(handle->root);
@@ -1606,33 +1623,44 @@ extern "C"
             // Unlocked variants (see their own comment) - handle->mutex_
             // is already held above; le_zoom/le_fit_scene/le_pan
             // themselves would re-lock it and deadlock.
-            const double factor = handle->scene.is_key_held(LE_KEY_SHIFT) ? -kKeyZoomFactor : kKeyZoomFactor;
+            const double factor = shift ? -kKeyZoomFactor : kKeyZoomFactor;
             zoom_unlocked(handle, factor, handle->scene.mouse_x_px(), handle->scene.mouse_y_px());
             break;
         }
         case LE_KEY_FIT:
-            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            // Shift has no meaning for Fit - held at all (with or without
+            // Ctrl) suppresses the action rather than falling through to
+            // the bare/Ctrl behavior.
+            if (shift)
+                break;
+            if (ctrl)
                 fit_selected_unlocked(handle, kKeyFitPaddingPx);
             else
                 fit_scene_unlocked(handle, kKeyFitPaddingPx);
             break;
         case LE_KEY_PAN_LEFT:
-            pan_unlocked(handle, -kKeyPanFactor, 0.0);
+            if (!ctrl && !shift)
+                pan_unlocked(handle, -kKeyPanFactor, 0.0);
             break;
         case LE_KEY_PAN_RIGHT:
-            pan_unlocked(handle, kKeyPanFactor, 0.0);
+            if (!ctrl && !shift)
+                pan_unlocked(handle, kKeyPanFactor, 0.0);
             break;
         case LE_KEY_PAN_UP:
-            pan_unlocked(handle, 0.0, kKeyPanFactor);
+            if (!ctrl && !shift)
+                pan_unlocked(handle, 0.0, kKeyPanFactor);
             break;
         case LE_KEY_PAN_DOWN:
-            pan_unlocked(handle, 0.0, -kKeyPanFactor);
+            if (!ctrl && !shift)
+                pan_unlocked(handle, 0.0, -kKeyPanFactor);
             break;
         case LE_KEY_SELECT_ALL:
             // UPDATES.md item 21 - Select-mode-only, in addition to the
             // existing Ctrl-held gate (switch back to Select mode to
-            // change the selection from Edit/Ruler mode).
-            if (handle->scene.mode() == le::Scene::Mode::SELECT && handle->scene.is_key_held(LE_KEY_CTRL))
+            // change the selection from Edit/Ruler mode). Shift has no
+            // meaning here - Ctrl-Shift-A is a no-op, not "same as
+            // Ctrl-A".
+            if (handle->scene.mode() == le::Scene::Mode::SELECT && ctrl && !shift)
                 select_all_unlocked(handle);
             break;
         case LE_KEY_1:
@@ -1647,36 +1675,53 @@ extern "C"
         {
             // UPDATES.md 9.7 - the same physical 1-9 keys address the
             // 11th..19th ROUTING layer instead of the 1st..9th while Ctrl
-            // is held (LE_KEY_0, not gated on Ctrl, covers the 10th - see
-            // its own comment in api.hpp).
+            // is held (LE_KEY_0 covers the 10th - see its own case).
+            // Shift has no meaning for either - held at all suppresses
+            // the action.
+            if (shift)
+                break;
             const int base_index = key_code - LE_KEY_1; // 0-8
-            const int routing_index = handle->scene.is_key_held(LE_KEY_CTRL) ? base_index + 10 : base_index;
+            const int routing_index = ctrl ? base_index + 10 : base_index;
             toggle_routing_layer_visibility_unlocked(handle, routing_index);
             break;
         }
         case LE_KEY_0:
-            toggle_routing_layer_visibility_unlocked(handle, 9); // the 10th ROUTING layer
+            // Same "no modifier meaning at all" shape as the mode keys
+            // below - LE_KEY_1..9's own Ctrl-held branch has no digit
+            // left over to double up on for the 10th layer, so this key
+            // is bare-only, not Ctrl-gated.
+            if (!ctrl && !shift)
+                toggle_routing_layer_visibility_unlocked(handle, 9); // the 10th ROUTING layer
             break;
         case LE_KEY_DESELECT_ALL:
-            // UPDATES.md item 21 - same Select-mode-only gate as
-            // LE_KEY_SELECT_ALL above.
-            if (handle->scene.mode() == le::Scene::Mode::SELECT && handle->scene.is_key_held(LE_KEY_CTRL))
+            // UPDATES.md item 21 - same Select-mode-only gate and
+            // Shift-suppresses shape as LE_KEY_SELECT_ALL above.
+            if (handle->scene.mode() == le::Scene::Mode::SELECT && ctrl && !shift)
                 handle->scene.clear_selection();
             break;
         case LE_KEY_MOVE:
-            if (handle->scene.is_key_held(LE_KEY_CTRL))
+            if (ctrl && !shift)
                 arm_move_unlocked(handle);
             break;
         case LE_KEY_SELECT_MODE:
-            handle->scene.set_mode(le::Scene::Mode::SELECT);
+            if (!ctrl && !shift)
+                handle->scene.set_mode(le::Scene::Mode::SELECT);
             break;
         case LE_KEY_EDIT_MODE:
-            handle->scene.set_mode(le::Scene::Mode::EDIT);
+            if (!ctrl && !shift)
+                handle->scene.set_mode(le::Scene::Mode::EDIT);
             break;
         case LE_KEY_RULER_MODE:
-            handle->scene.reset_ruler_mode();
+            if (!ctrl && !shift)
+                handle->scene.reset_ruler_mode();
             break;
         case LE_KEY_FINISH_RULER:
+            // Deliberately *not* modifier-gated, unlike every other bare
+            // key above: Escape is a pure cancel/finish gesture, and a
+            // real ruler-drawing sequence routinely ends with Shift
+            // (free-form) still physically held right up to the Escape
+            // press - suppressing it here would make "finish the ruler"
+            // unreliable in exactly the workflow that uses Shift most.
             handle->scene.finish_active_ruler();
             handle->scene.end_move(); // UPDATES.md item 21 - Escape also cancels an in-progress move
             break;
