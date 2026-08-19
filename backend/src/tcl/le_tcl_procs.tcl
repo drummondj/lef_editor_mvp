@@ -174,12 +174,53 @@ proc complete_command {line} {
         return [join [lsort [lsearch -all -inline -glob [dict keys $::command_help] "${partial}*"]]]
     }
 
-    set command_name [lindex $tokens 0]
     set partial [expr {$ends_with_space ? "" : [lindex $tokens end]}]
     # Every already-complete token on the line, i.e. every token except
     # the partial one currently being typed - all of $tokens when
     # $ends_with_space (nothing partial yet), otherwise all but the last.
     set complete_tokens [expr {$ends_with_space ? $tokens : [lrange $tokens 0 end-1]}]
+    # $command_name is whichever command's own *arguments* the partial
+    # token is currently completing - not always $tokens' own first
+    # token: once a nested command's name has already been typed inside
+    # "[...]" (e.g. `set t [get_terminals -f`), -flag/dot-path
+    # completion below needs *that* command's own options, not the
+    # outer one's. _innermost_command_start finds where the innermost
+    # still-open bracket's own command name begins; with no bracket
+    # open at all it's just index 0, the outer command, unchanged from
+    # before this existed.
+    set command_name [string trimleft \
+        [lindex $complete_tokens [_innermost_command_start $complete_tokens]] "\["]
+
+    # A command name can also start right after "[" - Tcl command
+    # substitution nested inside another command's own argument, e.g.
+    # `set t [get_` (the leading bracket glues onto whatever follows it
+    # with no space, same as a -filter value's own leading brace
+    # character below) or `set t [ get_` (whitespace after the bracket
+    # makes it its own complete token instead). Either way this is the
+    # start of a brand new
+    # command, not a continuation of $command_name's own arguments, so
+    # it gets its own top-level command-name completion, same as the
+    # very first token of the whole line - checked before the -flag/
+    # dot-path branches below, since those only make sense once we're
+    # actually still inside $command_name's own argument list.
+    set bracket_prefix ""
+    set command_partial $partial
+    while {[string index $command_partial 0] eq "\["} {
+        append bracket_prefix "\["
+        set command_partial [string range $command_partial 1 end]
+    }
+    set after_lone_bracket [expr {
+        $bracket_prefix eq "" && [llength $complete_tokens] > 0
+        && [lindex $complete_tokens end] eq "\["
+    }]
+    if {$bracket_prefix ne "" || $after_lone_bracket} {
+        set matches [lsort [lsearch -all -inline -glob [dict keys $::command_help] "${command_partial}*"]]
+        set candidates {}
+        foreach match $matches {
+            lappend candidates "${bracket_prefix}${match}"
+        }
+        return [join $candidates]
+    }
 
     if {[string index $partial 0] eq "-"} {
         if {![dict exists $::command_help $command_name]} {
@@ -229,6 +270,52 @@ proc complete_command {line} {
     }
 
     return {}
+}
+
+# The index into complete_tokens where the innermost currently-open
+# "[...]" command-substitution scope's own command name begins (the
+# bracket character itself not included), for complete_command's own
+# $command_name above - a nested command's own -flag/dot-path
+# completion (e.g. `set t [get_terminals -f`) needs *its* options, not
+# the outer command's. 0 (the very first token, i.e. the outer command
+# itself) if no bracket is currently open.
+#
+# Scans char-by-char within each token, not just each token's first/
+# last character, so a bracket that opens and/or closes mid-token (e.g.
+# `[get_terminals]` fully self-contained in one token, or one appearing
+# inside a -filter expression's own value) is still tracked correctly -
+# every other part of complete_command already reasons at whole-token
+# granularity, so this only needs to know *which token* a scope starts/
+# ends in, not an exact character offset. A "[" glued to the front of
+# the token it opens in (no space) makes that same token the new scope's
+# own start; a "[" that's the very last character of its token (space
+# before the next word) makes the *next* token the start instead -
+# mirrors complete_command's own bracket_prefix/after_lone_bracket
+# handling for a partial token that itself opens a new command.
+proc _innermost_command_start {complete_tokens} {
+    set stack {}
+    set n [llength $complete_tokens]
+    for {set i 0} {$i < $n} {incr i} {
+        set token [lindex $complete_tokens $i]
+        set chars [split $token {}]
+        set clen [llength $chars]
+        for {set j 0} {$j < $clen} {incr j} {
+            set ch [lindex $chars $j]
+            if {$ch eq "\["} {
+                if {$j < $clen - 1} {
+                    lappend stack $i
+                } else {
+                    lappend stack [expr {$i + 1}]
+                }
+            } elseif {$ch eq "\]" && [llength $stack] > 0} {
+                set stack [lrange $stack 0 end-1]
+            }
+        }
+    }
+    if {[llength $stack] == 0} {
+        return 0
+    }
+    return [lindex $stack end]
 }
 
 # Whether the partial token currently being completed is inside a

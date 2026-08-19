@@ -106,12 +106,43 @@ check_true "complete_command completes get_t* to include get_terminals" \
 check_true "complete_command with no input suggests every command" \
     [expr {[llength [complete_command {}]] == [llength [dict keys $::command_help]]}]
 
+# Command-name completion also has to work right after "[" - Tcl command
+# substitution nested inside another command's own argument (e.g.
+# `set t [get_`) - both glued (no space after "[") and separated (a
+# space after "[" makes it its own token) forms. A glued candidate is
+# itself an unbalanced-bracket token (same reasoning as a -filter
+# candidate's own leading brace - see the dot-path tests below), so it's
+# compared as a plain string via `check`, not list membership.
+check "complete_command completes a command name glued right after \[" \
+    {[get_technologies} [complete_command "set t \[get_technol"]
+check_true "complete_command completes a command name after \[ with a space" \
+    [expr {"get_technologies" in [complete_command "set t \[ get_technol"]}]
+check_true "complete_command completes a command name nested inside another command's own argument" \
+    [expr {"\[get_terminals" in [complete_command "get_properties \[get_ter"]}]
+
 # --- complete_command: flag completion ---
 
 check_true "complete_command completes get_terminals -f* to include -filter" \
     [expr {"-filter" in [complete_command {get_terminals -f}]}]
 check "complete_command flag completion on an unregistered command" \
     {} [complete_command {no_such_command -f}]
+
+# Flag/dot-path completion for a *nested* command's own arguments (once
+# its name has already been typed, unlike the command-name-completion
+# cases above) needs that command's own options, not the outer command's
+# - both glued and separated bracket forms, and confirms a *closed*
+# bracket correctly falls back to the outer scope again.
+check_true "complete_command completes a nested command's own flag (glued bracket)" \
+    [expr {"-filter" in [complete_command "set t \[get_terminals -f"]}]
+check_true "complete_command completes a nested command's own flag (separated bracket)" \
+    [expr {"-filter" in [complete_command "set t \[ get_terminals -f"]}]
+# A brace-prefixed candidate (see the top-level -filter tests above) is
+# its own unbalanced-bracket-and-brace token, not a well-formed Tcl list
+# element - compared as a plain string via `check`, not list membership.
+check "complete_command completes a dot-path inside a nested command's own -filter value" \
+    "\{.direction" [complete_command "get_properties \[get_terminals -filter \{.dir"]
+check "complete_command flag completion returns to the outer scope once its bracket has closed" \
+    {} [complete_command "set t \[get_terminals\] -f"]
 
 # --- complete_command: dot-path completion (no LEF/live objects needed -
 # see this file's own header comment) ---
