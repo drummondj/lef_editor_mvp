@@ -310,13 +310,20 @@ by index — their `create_X`/per-field setters, and `Shape`'s former
 `add_shape_rect`/`_polygon`/`_path`, are all gone too, superseded by
 `create_<type>`/`update_<type>`, see below).
 `Klass.has_current_access = True` (`Technology`/`Abstract`/`Schematic`) marks
-a class with a generated "current instance" concept (`current_X`/
-`set_current_X` — independent of any other "current view" state elsewhere,
-e.g. `Scene::current_abstract()`, which drives GUI rendering) that every
-*other* readable class's `get_<type>` default scope (`-of` omitted) derives
-from automatically, purely from schema graph structure — see
+a class with a generated "current instance" concept — one command,
+`current_X ?id?` (with no argument, reads it back; given a friendly-id
+token, selects it first, then returns it) — that every *other* readable
+class's `get_<type>` default scope (`-of` omitted) derives from
+automatically, purely from schema graph structure — see
 `codegen/codegen/tcl_scope.py`'s own module docstring for the algorithm, and
-the `regen-tcl` skill for the full injection-point list.
+the `regen-tcl` skill for the full injection-point list. `le_set_current_design`/
+`le_set_current_design_by_id` (`api.cpp`) also move this alongside
+`Scene::current_abstract()` (the separate GUI-rendering "current view"),
+so selecting a Design means the same thing whether it came from a
+Dart-driven GUI or a TCL script's `open_design`; a script that builds an
+`Abstract` from scratch and calls `current_abstract <id>` directly (no
+`Design` to `open_design` into at all) still only touches this generated
+state, never `Scene`.
 
 `create_<type>` covers one flag per scalar field (`str`/`int`/`double`/
 `dbu`/`bool`/enum), one flag per *flattenable* embedded-struct field

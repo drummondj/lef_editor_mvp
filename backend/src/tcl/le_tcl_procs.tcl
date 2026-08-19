@@ -478,14 +478,15 @@ register_command_help set_viewport_size \
 # current_abstract - see codegen/codegen/tcl_scope.py's own module
 # docstring) is scoped to its Abstract, since a script's "give me the
 # terminals" means "in the view I have open", not "across every open
-# Library/Design". Sets the generated current_abstract independently of
-# Scene::current_abstract() (which drives GUI rendering and is untouched
-# here) - see backend/CLAUDE.md's TCL codegen section for why those two
-# are deliberately separate. `-view` is accepted but currently only
-# "abstract" is meaningful - every Design read via read_lef() has exactly
-# one Abstract view and no DEF/placement-driven Design exists in this
-# project yet (see le_tcl_shim.hpp's design_abstract_id comment for the
-# same caveat).
+# Library/Design". Also moves Scene::current_abstract() (GUI rendering)
+# the same way, via the shared le_set_current_design_by_id both this and
+# the GUI's own design-selection path (LeProvider.openDesign) call into -
+# selecting a Design means the same thing regardless of which side asked
+# (see that function's own comment in api.cpp). `-view` is accepted but
+# currently only "abstract" is meaningful - every Design read via
+# read_lef() has exactly one Abstract view and no DEF/placement-driven
+# Design exists in this project yet (see le_tcl_shim.hpp's
+# design_abstract_id comment for the same caveat).
 proc open_design {name args} {
     # $name is checked too, not just $args: open_design takes a
     # *mandatory* leading positional (name), so calling it as bare
@@ -512,15 +513,15 @@ proc open_design {name args} {
     if {[set_current_design_cmd $design_id] != 0} {
         error "open_design: failed to select design \"$name\""
     }
+    # set_current_design_cmd (le_set_current_design_by_id) already moves
+    # the generated current_abstract along with it - no separate
+    # get_abstracts/set_current_abstract step needed here anymore (see
+    # that function's own comment in api.cpp).
+    #
     # design:<name>, not the raw design_id, for consistency with UPDATES.md
     # item 19.1's own friendly-id convention - the caller already has
     # `name` literally, so this costs nothing to derive.
-    set design_token "design:$name"
-    set abstracts [get_abstracts -of $design_token]
-    if {[llength $abstracts] > 0} {
-        set_current_abstract [lindex $abstracts 0]
-    }
-    return $design_token
+    return "design:$name"
 }
 register_command_help open_design \
     "open_design <name> \[-view abstract\] \[-help\] - Selects <name>'s Design as this session's current view" \

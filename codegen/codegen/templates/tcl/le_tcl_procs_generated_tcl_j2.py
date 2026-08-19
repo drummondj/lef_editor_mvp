@@ -63,17 +63,35 @@ array set ::get_command_class {
 {%- endfor %}
 }
 
-# --- Current-instance access ---
+# --- Current-instance access - `current_<type> [<id>] [-help]`: with no
+# arguments, returns the current <type> (empty string if none is set
+# yet); with a friendly-id token given, selects it first (folding in
+# the old, now-removed set_current_<type>'s own job), then returns it -
+# every other readable class's get_<type> default (-of omitted) scope
+# derives from whichever instance this selects, see codegen/codegen/
+# tcl_scope.py's own module docstring. Reads and writes go through this
+# one command so a caller never has to remember which of two separate
+# commands does which. ---
 {% for klass in current_access_classes %}
-# Sets the current {{klass.name}} (see current_{{klass.to_snake_case()}} to read it back) - every
-# other readable class's get_<type> default (-of omitted) scope derives
-# from this, see codegen/codegen/tcl_scope.py's own module docstring.
-proc set_current_{{klass.to_snake_case()}} {id} {
-    if {[set_current_{{klass.to_snake_case()}}_cmd $id] != 0} {
-        error "set_current_{{klass.to_snake_case()}}: failed to select \\"$id\\""
+{%- set snake = klass.to_snake_case() %}
+proc current_{{snake}} {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "current_{{snake}} \\[<id>\\] \\[-help\\] - Returns the current {{klass.name}}, selecting it first if <id> is given"
     }
-    return {}
+    if {[llength $args] > 1} {
+        error "current_{{snake}}: at most one argument (a {{klass.name}} id) is allowed"
+    }
+    if {[llength $args] == 1} {
+        if {[set_current_{{snake}}_cmd [lindex $args 0]] != 0} {
+            error "current_{{snake}}: failed to select \\"[lindex $args 0]\\""
+        }
+    }
+    return [current_{{snake}}_cmd]
 }
+set current_{{snake}}_options {}
+lappend current_{{snake}}_options {<id> {type token required 0 description {A friendly-id token to select as current - omit to just read the current value}}}
+lappend current_{{snake}}_options {-help {type flag required 0 description {Show this usage message and return immediately}}}
+register_command_help current_{{snake}} "current_{{snake}} \\[<id>\\] \\[-help\\] - Returns the current {{klass.name}}, selecting it first if <id> is given" "Returns the current {{klass.name}} (empty string if none is set yet); with <id> given, selects it first (this is also every other readable class's own get_<type> default -of-omitted scope anchor), then returns it." $current_{{snake}}_options
 {% endfor %}
 
 # --- get_<type> search ---
@@ -146,7 +164,7 @@ register_command_help get_{{plural}} "{{usage_line}}" "{{klass.tcl_description_e
 # flag was also left empty, for a multi-parent class), the same way
 # get_<type>'s own default (-of omitted) scope already derives from
 # current_abstract - so create_terminal needs no explicit -abstract once
-# set_current_abstract/open_design has been called. A multi-parent class
+# current_abstract <id>/open_design has been called. A multi-parent class
 # (e.g. Shape's -terminal_port/-obstruction) requires exactly one of its
 # parent flags to resolve (after that default is applied), checked here
 # before calling down - same "exactly one" rule create_<type>_cmd's own

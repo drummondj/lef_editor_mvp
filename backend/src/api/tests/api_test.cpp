@@ -555,6 +555,41 @@ TEST_F(ApiFixture, SetCurrentDesignByIdWithNullHandleOrUnknownIdReturnsNonzero)
     EXPECT_NE(le_set_current_design_by_id(handle, LeDesignId{99, 0}), 0);
 }
 
+TEST_F(ApiFixture, SetCurrentDesignByIdAlsoSetsTheGeneratedCurrentAbstract)
+{
+    // le_set_current_design_by_id is the shared entry point both a
+    // Dart-driven GUI (LeProvider.openDesign) and a TCL script
+    // (open_design) select a Design through - both should mean the same
+    // thing: get_terminals/get_shapes/etc.'s own default -of-omitted
+    // scope (le_current_abstract - the generated has_current_access
+    // state, not Scene::current_abstract()) has to move too, not just
+    // whatever Scene renders.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    const LeDesignInfo design = le_library_design_at(handle, 0, 0);
+    EXPECT_EQ(le_current_abstract(handle).index, UINT32_MAX); // nothing selected yet
+
+    ASSERT_EQ(le_set_current_design_by_id(handle, design.id), 0);
+
+    const LeAbstractId current = le_current_abstract(handle);
+    EXPECT_EQ(current.index, design.abstract_id.index);
+    EXPECT_EQ(current.generation, design.abstract_id.generation);
+}
+
+TEST_F(ApiFixture, SetCurrentDesignAlsoSetsTheGeneratedCurrentAbstract)
+{
+    // Same as SetCurrentDesignByIdAlsoSetsTheGeneratedCurrentAbstract
+    // above, for the index-addressed sibling entry point.
+    ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
+
+    const LeDesignInfo design = le_library_design_at(handle, 0, 0);
+    ASSERT_EQ(le_set_current_design(handle, 0), 0);
+
+    const LeAbstractId current = le_current_abstract(handle);
+    EXPECT_EQ(current.index, design.abstract_id.index);
+    EXPECT_EQ(current.generation, design.abstract_id.generation);
+}
+
 TEST_F(ApiFixture, SetCurrentDesignByIdSelectsTheSameDesignAsSetCurrentDesign)
 {
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);

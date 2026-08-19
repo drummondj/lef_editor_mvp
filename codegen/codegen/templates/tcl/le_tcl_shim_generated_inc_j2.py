@@ -102,9 +102,14 @@ const char *{{klass.to_snake_case()}}_{{child_field.name}}(const char *id)
 {% endfor -%}
 {% endfor %}
 
-// --- Current-instance access ---
+// --- Current-instance access - current_<type>_cmd()/set_current_<type>_cmd()
+// back the single Tcl-level current_<type> [<id>] wrapper proc
+// (le_tcl_procs_generated_tcl_j2.py) - both suffixed _cmd for symmetry
+// (there is no bare current_<type> at this layer or SWIG's, unlike
+// before the two Tcl commands were folded into one - see that proc's
+// own comment). ---
 {% for klass in current_access_classes %}
-const char *current_{{klass.to_snake_case()}}()
+const char *current_{{klass.to_snake_case()}}_cmd()
 {
     Le{{klass.name}}Id id = le_current_{{klass.to_snake_case()}}(session());
     if (id.index == UINT32_MAX)

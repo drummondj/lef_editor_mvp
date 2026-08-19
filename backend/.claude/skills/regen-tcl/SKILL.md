@@ -105,16 +105,20 @@ moves the Terminal, but `<id>`'s own hand-written `resolve_terminal_id`
 stays scoped to whatever Abstract is *currently selected* - a caller that
 needs to address the just-reparented Terminal again by its own friendly
 id (e.g. to delete it) must switch the current view to its new Abstract
-first (`open_design`/`set_current_abstract`), the same way `get_terminals`
-already requires for search.
+first (`open_design`/`current_abstract <token>`), the same way
+`get_terminals` already requires for search.
 
 ## `has_current_access` and the `get_<type>` default-scope algorithm
 
 `Klass.has_current_access = True` (today: `Technology`, `Abstract`,
 `Schematic`) marks a class with a generated "current instance" concept -
-each gets independent `LeHandle` state (`current_X_id`), a
-`current_X`/`set_current_X_cmd` TCL command pair, and every *other*
-readable class's `get_<type>` default scope (when every `-of` is omitted)
+each gets independent `LeHandle` state (`current_X_id`), one TCL command
+(`current_X ?id?` - reads it back with no argument, selects then returns
+it when given a friendly-id token; `set_current_X_cmd` still exists one
+layer down, as the shim/SWIG-level command `current_X`'s own generated
+Tcl wrapper calls when an id is given, but is not itself a top-level TCL
+command a script would call directly), and every *other* readable
+class's `get_<type>` default scope (when every `-of` is omitted)
 is *derived automatically* from where that class sits in the schema graph
 relative to the nearest `has_current_access` anchor - no hand-picked
 per-class table. See `codegen/codegen/tcl_scope.py`'s own module
@@ -127,12 +131,19 @@ field - list or scalar, e.g. `Design.abstract` - on the parent class);
 the default-scope case only supplies the fallback used when every `-of`
 was omitted or invalid.
 
-This generated `current_X` state is deliberately **independent** of any
-other "current view" concept in the codebase (e.g. `Scene::current_abstract()`,
-which drives GUI rendering) - a TCL script must call `set_current_abstract`
-itself (or rely on a convenience caller like `open_design`, which does
-this for the script - see `le_tcl_procs.tcl`) before `get_terminals`/
-`get_shapes`/etc.'s default scope will resolve to anything.
+This generated `current_X` state is a distinct field from any other
+"current view" concept in the codebase (e.g. `Scene::current_abstract()`,
+which drives GUI rendering) - a TCL script must call `current_abstract
+<token>` itself (or rely on a convenience caller like `open_design`,
+which does this for the script - see `le_tcl_procs.tcl`) before
+`get_terminals`/`get_shapes`/etc.'s default scope will resolve to
+anything. Selecting a Design (`le_set_current_design`/
+`le_set_current_design_by_id`, `api.cpp`) moves both together now, so a
+Dart-driven GUI opening a Design and a TCL script's own `open_design`
+mean the same thing either way - the one remaining case where they
+diverge is a script that builds an `Abstract` from scratch and calls
+`current_abstract <id>` directly, with no `Design` to select at all;
+that still only touches this generated state, never `Scene`.
 
 ## The nine generated-code injection points
 
@@ -155,7 +166,7 @@ again on subsequent regenerations:
   `build_X_properties`, `to_c`/`from_c` overloads - never called from
   another translation unit); `#include "generated_tcl/property_accessors_public.inc"`
   *inside* `extern "C" { ... }` (the real `le_X_property_count/_at/_path`,
-  friendly-id-by-name lookups, `current_X`/`set_current_X`, and
+  friendly-id-by-name lookups, `le_current_X`/`le_set_current_X`, and
   `le_create_X`/`le_update_X` - external C linkage required since
   `le_tcl_shim.cpp` calls
   them; a function defined
@@ -176,7 +187,7 @@ again on subsequent regenerations:
   in scope).
 - `le_api.i` - `%include "generated/le_api_generated.i"`.
 - `le_tcl_procs.tcl` - `source [file join [file dirname [info script]] generated le_tcl_procs_generated.tcl]`
-  (`property_accessors_for_token`, `set_current_X`, every `get_<type>`
+  (`property_accessors_for_token`, `current_X`, every `get_<type>`
   proc - `parse_get_args`/`check_of_prefixes`/`default_to_unset` stay
   hand-written, shared/class-agnostic helpers the generated procs call
   into).

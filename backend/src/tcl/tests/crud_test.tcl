@@ -528,16 +528,16 @@ check "get_terminals default scope back in TESTCELL's view only sees TESTCELL's 
 
 # --- Building a Library/Design/Abstract entirely from scratch (no
 # read_lef'd Design to open_design into at all - just create_library/
-# create_design/create_abstract, then set_current_abstract directly) -
+# create_design/create_abstract, then current_abstract $id directly) -
 # a regression check for a real user-reported bug: le_terminal_by_name
 # (api.cpp), Terminal's own hand-written friendly-id resolver, used to
 # read handle->scene.current_abstract() - a separate GUI-rendering
 # "current view" only ever moved as a side effect of selecting a Design
 # (le_set_current_design/le_set_current_design_by_id) - instead of
-# handle->current_abstract_id, the same field set_current_abstract
-# itself sets and get_terminals' own default scope already derives
-# from. open_design happens to touch both together (it selects a
-# Design first), which is exactly why this went unnoticed until a
+# handle->current_abstract_id, the same field current_abstract itself
+# sets when given an id, and get_terminals' own default scope already
+# derives from. open_design happens to touch both together (it selects
+# a Design first), which is exactly why this went unnoticed until a
 # script had no existing Design to open_design into at all. ---
 
 set scratch_library [create_library -name SCRATCH_LIB]
@@ -549,8 +549,8 @@ check_true "create_design (from-scratch flow) returned a valid friendly id" [exp
 set scratch_abstract [create_abstract -design $scratch_design]
 check_true "create_abstract (from-scratch flow) returned a valid friendly id" [expr {$scratch_abstract ne {}}]
 
-set_current_abstract $scratch_abstract
-check "current_abstract reflects the from-scratch Abstract" $scratch_abstract [current_abstract]
+check "current_abstract $scratch_abstract selects it and returns it" $scratch_abstract [current_abstract $scratch_abstract]
+check "current_abstract with no argument reflects the from-scratch Abstract" $scratch_abstract [current_abstract]
 
 # create_terminal with no -abstract (defaults to current_abstract - see
 # Klass.create_tcl_current_defaults()), then create_terminal_port

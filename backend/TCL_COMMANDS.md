@@ -620,6 +620,39 @@ A VIA's own reference to a VIARULE with explicit cut geometry (LEF 5.6 VIARULE-i
 | `-top_enclosure` | `Point` | no | The top layer enclosure, in database units (LEF ENCLOSURE, top pair) - is_optional=True per cut_size's own note |
 | `-help` | `flag` | no | Show this usage message and return immediately |
 
+## current_abstract
+
+`current_abstract [<id>] [-help]`
+
+Returns the current Abstract (empty string if none is set yet); with <id> given, selects it first (this is also every other readable class's own get_<type> default -of-omitted scope anchor), then returns it.
+
+| Flag | Type | Required | Description |
+| --- | --- | --- | --- |
+| `<id>` | `token` | no | A friendly-id token to select as current - omit to just read the current value |
+| `-help` | `flag` | no | Show this usage message and return immediately |
+
+## current_schematic
+
+`current_schematic [<id>] [-help]`
+
+Returns the current Schematic (empty string if none is set yet); with <id> given, selects it first (this is also every other readable class's own get_<type> default -of-omitted scope anchor), then returns it.
+
+| Flag | Type | Required | Description |
+| --- | --- | --- | --- |
+| `<id>` | `token` | no | A friendly-id token to select as current - omit to just read the current value |
+| `-help` | `flag` | no | Show this usage message and return immediately |
+
+## current_technology
+
+`current_technology [<id>] [-help]`
+
+Returns the current Technology (empty string if none is set yet); with <id> given, selects it first (this is also every other readable class's own get_<type> default -of-omitted scope anchor), then returns it.
+
+| Flag | Type | Required | Description |
+| --- | --- | --- | --- |
+| `<id>` | `token` | no | A friendly-id token to select as current - omit to just read the current value |
+| `-help` | `flag` | no | Show this usage message and return immediately |
+
 ## get_abstracts
 
 `get_abstracts [-of <token>...] [-filter <expr>] [-help]`

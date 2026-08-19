@@ -24,7 +24,7 @@ const char *{{klass.to_snake_case()}}_{{child_field.name}}(const char *id);
 
 // --- Current-instance access (has_current_access classes only) ---
 {% for klass in current_access_classes %}
-const char *current_{{klass.to_snake_case()}}();
+const char *current_{{klass.to_snake_case()}}_cmd();
 int set_current_{{klass.to_snake_case()}}_cmd(const char *id);
 {% endfor %}
 
