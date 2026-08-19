@@ -32,27 +32,16 @@ namespace le
     /// `Scene::SelectedObject` doesn't carry its own geometry - just a
     /// `ShapeId` plus a `piece_kind`/`piece_index` identifying which one
     /// of that Shape's rects/polygons/paths is selected (see scene.hpp's
-    /// own comment): this stage resolves each selected id's *whole*
-    /// geometry from the Pipeline's own generated `shapes` map, the same
-    /// *merged* (Geometry::merge_overlapping_fills) geometry that's
-    /// actually rendered on screen - not a fresh `Root::get_shape`
-    /// lookup - so the highlight traces the shape as drawn, with no
-    /// seams where unmerged overlapping rects would otherwise show
-    /// internal edges, then extracts just the addressed piece from that
-    /// (Geometry::extract_piece) before outlining it. Note this means
-    /// the outlined piece is positioned/shaped as *rendered* (merged),
-    /// which can visually differ from the exact raw piece Move itself
-    /// would translate for a Shape with overlapping siblings - an
-    /// accepted, minor cosmetic gap (the raw piece is always what
-    /// actually moves; only the highlight's own shape can look
-    /// slightly different in that specific overlapping-siblings case).
+    /// own comment): this stage resolves each selected piece with a fresh
+    /// `Root::get_shape()` lookup plus `Geometry::extract_piece`, so the
+    /// highlight always traces the piece exactly as it's actually stored
+    /// - not a Pipeline-derived approximation - matching Move's own
+    /// commit path, which mutates that same raw piece.
     ///
     /// Key adds `Root::mutation_version()`/`Scene::current_abstract()`
-    /// (mirroring `TransformToPixelsStage`'s own key exactly) since this
-    /// stage now depends on a Pipeline-derived artifact (`shapes`) with no
-    /// upstream Renderer-linked `.version()` to compose from - without it,
-    /// editing a currently-selected shape's geometry (e.g. via TCL, no
-    /// selection change) would keep serving a stale cached highlight.
+    /// (mirroring `TransformToPixelsStage`'s own key exactly) - without
+    /// it, editing a currently-selected shape's geometry (e.g. via TCL,
+    /// no selection change) would keep serving a stale cached highlight.
     class BuildSelectionOverlayPictureStage
     {
     public:
@@ -62,13 +51,8 @@ namespace le
         // doesn't need to change): UPDATES.md item 21's piece-granular
         // selection resolves each selected piece straight from `root`
         // (Geometry::extract_piece against the real, raw stored
-        // geometry) rather than from Pipeline's *rendered*
-        // (merge_overlapping_fills-processed) `shapes` map, which the
-        // old whole-shape design used to resolve here - see this class's
-        // own header comment for why a merged lookup would silently
-        // fail to find a piece-level selection at all for any Shape
-        // bundling 2+ rects/polygons (merge changes both the piece count
-        // and kind).
+        // geometry) rather than from Pipeline's own generated geometry -
+        // see this class's own header comment.
         const sk_sp<SkPicture> &run(const Scene &scene, const Root &root, const std::map<ViewLayerId, std::vector<RenderedShape>> &shapes)
         {
             (void)shapes;

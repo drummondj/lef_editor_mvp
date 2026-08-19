@@ -64,12 +64,8 @@ namespace
     };
 
     // Whether any polygon in `polygons` has a point at exactly (x, y) -
-    // used below instead of indexing by position, since generate_shapes
-    // always calls Geometry::merge_overlapping_fills on a Shape with more
-    // than one rect/polygon (see that function's own doc comment - it
-    // runs whenever count > 1, not only on actual overlap), which
-    // re-orders geometry via a Boost.Geometry union even when the pieces
-    // are disjoint.
+    // an order-independent membership check, for tests that don't care
+    // which index a given expanded polygon landed at.
     bool any_polygon_has_point(const std::vector<Polygon> &polygons, int64_t x, int64_t y)
     {
         for (const Polygon &polygon : polygons)
@@ -162,8 +158,11 @@ TEST_F(PipelineFixture, GenerateShapesLeavesViewLayerInvalidForUnresolvableLayer
     EXPECT_FALSE(shapes.front().view_layer.valid());
 }
 
-TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinATerminalPortShape)
+TEST_F(PipelineFixture, GenerateShapesKeepsOverlappingRectsWithinATerminalPortShapeAsSeparateRects)
 {
+    // Rendered geometry always matches the raw database structure exactly
+    // (no shape-merging step) - overlapping rects stay as separate rects,
+    // not unioned into a polygon, even though they visually overlap.
     add_terminal_shape(Shape{
         .layer_name = "M1",
         .rects = {
@@ -174,11 +173,11 @@ TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinATerminalPortS
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
-    EXPECT_TRUE(shapes.front().shape.rects.empty());
-    ASSERT_EQ(shapes.front().shape.polygons.size(), 1u); // overlapping -> merged into one polygon
+    ASSERT_EQ(shapes.front().shape.rects.size(), 2u);
+    EXPECT_TRUE(shapes.front().shape.polygons.empty());
 }
 
-TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinAnObstructionShape)
+TEST_F(PipelineFixture, GenerateShapesKeepsOverlappingRectsWithinAnObstructionShapeAsSeparateRects)
 {
     add_obstruction_shape(Shape{
         .layer_name = "M1",
@@ -190,18 +189,17 @@ TEST_F(PipelineFixture, GenerateShapesMergesOverlappingRectsWithinAnObstructionS
 
     const auto &shapes = pipeline.generate_shapes(root, abstract_id, view_layers);
     ASSERT_EQ(shapes.size(), 1u);
-    EXPECT_TRUE(shapes.front().shape.rects.empty());
-    ASSERT_EQ(shapes.front().shape.polygons.size(), 1u); // overlapping -> merged into one polygon
+    ASSERT_EQ(shapes.front().shape.rects.size(), 2u);
+    EXPECT_TRUE(shapes.front().shape.polygons.empty());
 }
 
 TEST_F(PipelineFixture, GenerateShapesExpandsRectIteratesIntoConcreteRects)
 {
     // UPDATES.md 12 Phase 1's ITERATE rework - LEFReader stores RECT
     // ITERATE raw; generate_shapes is where it's expanded back into
-    // concrete Rects. 2x1, spaced far enough apart (100) that the two
-    // expanded rects (each 10x10) are disjoint - still merged into
-    // `polygons` by merge_overlapping_fills (any count > 1 triggers it),
-    // but as two separate polygon entries, not unioned into one.
+    // concrete Rects, appended directly to the Shape's own rects (no
+    // shape-merging step, so order is deterministic - the two expanded
+    // rects land at indices 0 and 1 in iteration order).
     add_obstruction_shape(Shape{
         .layer_name = "M1",
         .rect_iterates = {RectIterate{
@@ -217,10 +215,10 @@ TEST_F(PipelineFixture, GenerateShapesExpandsRectIteratesIntoConcreteRects)
     ASSERT_EQ(shapes.size(), 1u);
     const Shape &shape = shapes.front().shape;
     EXPECT_TRUE(shape.rect_iterates.empty()); // consumed by expansion
-    EXPECT_TRUE(shape.rects.empty());         // merged into polygons - see merge_overlapping_fills
-    ASSERT_EQ(shape.polygons.size(), 2u);
-    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 0, 0));
-    EXPECT_TRUE(any_polygon_has_point(shape.polygons, 100, 0));
+    ASSERT_EQ(shape.rects.size(), 2u);
+    EXPECT_EQ(shape.rects[0].ll.x, 0);
+    EXPECT_EQ(shape.rects[1].ll.x, 100);
+    EXPECT_TRUE(shape.polygons.empty());
 }
 
 TEST_F(PipelineFixture, GenerateShapesExpandsPathIteratesIntoConcretePaths)
@@ -885,13 +883,6 @@ TEST_F(PipelineFixture, HitTestPointHighlightsOnlyTheHitPieceNotEveryRectOnTheSa
     // reported bug had hovering one rect highlight every rect on the same
     // Terminal, because hit_test_point copied the whole RenderedShape
     // instead of just the piece under the cursor.
-    //
-    // generate_shapes runs Geometry::merge_overlapping_fills on every
-    // pushed Shape (pipeline.hpp), which unconditionally converts a
-    // multi-rect Shape into polygons (even disjoint ones, like these two)
-    // before hit-testing ever sees it - so the hit piece below is a
-    // single polygon, not a rect; that conversion is pre-existing,
-    // unrelated behavior this test isn't re-litigating.
     const TerminalId terminal_id = add_terminal_shape(Shape{
         .layer_name = "M1",
         .rects = {
@@ -910,8 +901,8 @@ TEST_F(PipelineFixture, HitTestPointHighlightsOnlyTheHitPieceNotEveryRectOnTheSa
     ASSERT_TRUE(hit.has_value());
     ASSERT_TRUE(std::holds_alternative<TerminalId>(hit->origin));
     EXPECT_EQ(std::get<TerminalId>(hit->origin), terminal_id);
-    EXPECT_TRUE(hit->outline.rects.empty());
-    ASSERT_EQ(hit->outline.polygons.size(), 1u); // only the hit piece, not both
+    ASSERT_EQ(hit->outline.rects.size(), 1u); // only the hit piece, not both
+    EXPECT_TRUE(hit->outline.polygons.empty());
 
     // Confirm it's the piece near (0,0), not the other one near (100,100).
     const auto bbox = Geometry::bbox(hit->outline);
@@ -996,12 +987,7 @@ TEST_F(PipelineFixture, HitTestRectReturnsOneHoverTargetPerEnclosedPieceOfTheSam
     // belonging to it, however many there are - the actual reported
     // bug). Constructed directly (not via add_obstruction_shape, which
     // only ever creates one Shape per Obstruction) so each rect lands in
-    // its own Shape/RenderedShape, matching that real structure -
-    // bundling all three rects into one Shape instead would exercise
-    // Geometry::merge_overlapping_fills (generate_shapes runs it per
-    // RenderedShape), which converts a multi-piece Shape's rects into
-    // polygons regardless of whether they actually overlap - a different
-    // scenario from this test's target.
+    // its own Shape/RenderedShape, matching that real structure.
     const ObstructionId obstruction_id = root.create_obstruction(ObstructionData{.abstract = abstract_id});
     root.create_shape(ShapeData{.obstruction = obstruction_id, .layer_name = "M1", .rects = {Rect{.ll = {10, 10}, .ur = {20, 20}}}});
     root.create_shape(ShapeData{.obstruction = obstruction_id, .layer_name = "M1", .rects = {Rect{.ll = {30, 30}, .ur = {40, 40}}}});

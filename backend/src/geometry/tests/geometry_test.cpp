@@ -239,68 +239,6 @@ TEST(Geometry, UnionShapesIncludesPolygonsAndPathsNotJustRects)
     EXPECT_EQ(result->size(), 2u); // disjoint -> stay as two separate polygons
 }
 
-TEST(Geometry, MergeOverlappingFillsNoOpBelowTwoParts)
-{
-    Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-
-    Geometry::merge_overlapping_fills(shape);
-
-    ASSERT_EQ(shape.rects.size(), 1u);
-    EXPECT_TRUE(shape.polygons.empty());
-}
-
-TEST(Geometry, MergeOverlappingFillsMergesOverlappingRectsIntoOnePolygon)
-{
-    Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    shape.rects.push_back(Rect{.ll = {5, 5}, .ur = {15, 15}});
-
-    Geometry::merge_overlapping_fills(shape);
-
-    EXPECT_TRUE(shape.rects.empty());
-    ASSERT_EQ(shape.polygons.size(), 1u);
-    expect_bounds(shape.polygons.front().points, Point{0, 0}, Point{15, 15});
-}
-
-TEST(Geometry, MergeOverlappingFillsKeepsDisjointRectsAsSeparatePolygons)
-{
-    Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    shape.rects.push_back(Rect{.ll = {100, 100}, .ur = {110, 110}});
-
-    Geometry::merge_overlapping_fills(shape);
-
-    EXPECT_TRUE(shape.rects.empty());
-    EXPECT_EQ(shape.polygons.size(), 2u);
-}
-
-TEST(Geometry, MergeOverlappingFillsIncludesExistingPolygons)
-{
-    Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    shape.polygons.push_back(Polygon{.points = {{5, 5}, {15, 5}, {15, 15}, {5, 15}, {5, 5}}});
-
-    Geometry::merge_overlapping_fills(shape);
-
-    EXPECT_TRUE(shape.rects.empty());
-    ASSERT_EQ(shape.polygons.size(), 1u);
-    expect_bounds(shape.polygons.front().points, Point{0, 0}, Point{15, 15});
-}
-
-TEST(Geometry, MergeOverlappingFillsLeavesPathsUntouched)
-{
-    Shape shape;
-    shape.rects.push_back(Rect{.ll = {0, 0}, .ur = {10, 10}});
-    shape.rects.push_back(Rect{.ll = {5, 5}, .ur = {15, 15}});
-    shape.paths.push_back(Path{.polygon = Polygon{.points = {{20, 0}, {20, 10}}}, .width = 4});
-
-    Geometry::merge_overlapping_fills(shape);
-
-    ASSERT_EQ(shape.paths.size(), 1u);
-    expect_point_eq(shape.paths.front().polygon.points.front(), Point{20, 0});
-}
-
 TEST(Geometry, LabelLocationOfEmptyShapeIsOrigin)
 {
     Shape shape;

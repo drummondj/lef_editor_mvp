@@ -410,53 +410,6 @@ namespace le
             return merged;
         }
 
-        /// @brief Merges this Shape's own rects and polygons into a
-        /// minimal, non-overlapping set of polygons via boost::geometry
-        /// union, replacing both in place. Paths are left untouched - they
-        /// carry their own width/stroke semantics a fill-polygon union
-        /// would lose, and aren't the source of the artifact this fixes.
-        /// A Terminal Port's or Obstruction's Shape can legitimately
-        /// contain several self-overlapping rects (e.g. LEF's OBS
-        /// ITERATE/DO/STEP array syntax generates copies that overlap each
-        /// other), and drawing each with a translucent fill double-blends
-        /// the overlap into a visibly darker patch - merging first means
-        /// each covered pixel is painted once. No-op if there's nothing to
-        /// merge (0 or 1 rect/polygon total).
-        static void merge_overlapping_fills(Shape &shape)
-        {
-            if (shape.rects.size() + shape.polygons.size() <= 1)
-                return;
-
-            using BgPolygon = bg::model::polygon<Point>;
-            using BgMultiPolygon = bg::model::multi_polygon<BgPolygon>;
-
-            std::vector<BgPolygon> parts;
-            parts.reserve(shape.rects.size() + shape.polygons.size());
-
-            for (const auto &rect : shape.rects)
-                parts.push_back(to_boost_polygon(rect_to_polygon(rect)));
-
-            for (const auto &polygon : shape.polygons)
-                parts.push_back(to_boost_polygon(polygon));
-
-            BgMultiPolygon result;
-            result.push_back(parts.front());
-
-            for (size_t i = 1; i < parts.size(); ++i)
-            {
-                BgMultiPolygon next;
-                bg::union_(result, parts[i], next);
-                result = std::move(next);
-            }
-
-            shape.rects.clear();
-            shape.polygons.clear();
-            shape.polygons.reserve(result.size());
-
-            for (const auto &poly : result)
-                shape.polygons.push_back(from_boost_polygon(poly));
-        }
-
         /// @brief Finds the largest candidate rect across `shape`'s own
         /// rects (used directly - no fracturing needed) and its
         /// polygons/paths (each fractured into approximating rects via

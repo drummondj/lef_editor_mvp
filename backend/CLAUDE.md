@@ -74,10 +74,14 @@ none of these are duplicated here.
   public method keeps its original signature, delegating to its stage in
   one line; reuse one `Pipeline` instance per `Scene`-equivalent
   lifetime. `GenerateShapesStage::run` resolves each `Shape` straight to
-  its `ViewLayerId` in the same pass (no separate resolve stage), merges
-  each Shape's own overlapping rects/polygons via
-  `Geometry::merge_overlapping_fills`, and attaches one text label per
-  distinct layer a Terminal has geometry on.
+  its `ViewLayerId` in the same pass (no separate resolve stage) and
+  attaches one text label per distinct layer a Terminal has geometry on.
+  Deliberately does *not* merge/union a Shape's own overlapping rects/
+  polygons for rendering (a `Geometry::merge_overlapping_fills` step
+  existed for this, removed - see BENCHMARKS.md's 2026-08-19 entry) -
+  the rendered picture always matches the database's actual stored
+  rect/polygon/path count, kind, and index exactly, which selection/Move
+  (UPDATES.md item 21) depend on.
   `FilterByLayerVisibilityStage`/`TinyShapesByLayerVisibilityStage` group
   into `std::map<ViewLayerId, ...>` (not `unordered_map`) — deliberate,
   since `ViewLayerId`'s ordering matches LEF-declared layer stacking

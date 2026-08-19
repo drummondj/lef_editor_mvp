@@ -932,3 +932,26 @@ map built once per recompute) instead of reading a `Shape` copy stored
 directly on `Scene`; not compared against a "before" number since the
 lookup structure itself is new, but scales linearly with selection size
 as expected, no quadratic behavior reintroduced.
+
+## 2026-08-19 — Removed shape-merging (`Geometry::merge_overlapping_fills`)
+
+Reverted the 2026-08-04 entry above: `merge_overlapping_fills` unioned a
+Shape's own overlapping rects/polygons into a minimal non-overlapping
+polygon set purely to avoid double-blended translucent fill on overlap.
+Removed at the user's request - it made the rendered picture diverge from
+the database's actual stored structure (rect count, kind, and index),
+which became actively confusing once selection/Move became piece-granular
+(UPDATES.md item 21's follow-up): a click on one raw rect could report a
+"merged" polygon with no addressable index back into `Root`'s own
+`rects`/`polygons`, and the render no longer matched what editing a piece
+actually changed. Selection/Move already re-derive pieces against `Root`'s
+raw geometry rather than trusting Pipeline's rendered output (see
+`HoverTarget`'s own comment in scene.hpp) specifically because that
+divergence is real for other reasons too (RECT/POLYGON/PATH ITERATE
+expansion still adds render-only pieces past the raw indices) - so this
+removal is a correctness/clarity win with no follow-up code change needed
+there. No fill-overlap regression measured on the 1M-shape stress design
+(same reasoning as the original entry: real designs rarely have deeply
+overlapping same-Shape rects) or on `Nangate45_stdcell.lef`; a real
+overlapping-pin macro will now show a visibly darker double-blended patch
+again, an accepted, deliberate tradeoff.

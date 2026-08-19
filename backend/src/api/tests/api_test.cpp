@@ -3641,16 +3641,13 @@ TEST_F(ApiFixture, CancelMoveViaEscapeClearsArmedState)
     EXPECT_EQ(le_is_move_armed(handle), 0);
 }
 
-TEST_F(ApiFixture, ClickSelectsOnlyTheClickedRawPieceEvenWhenRenderedGeometryWasMergedIntoPolygons)
+TEST_F(ApiFixture, ClickSelectsAndMovesOnlyOneRectOfATwoRectShapeNotBothOrTheWrongOne)
 {
-    // Regression: Pipeline's RenderedShape::shape is Geometry::
-    // merge_overlapping_fills-processed for any Shape bundling 2+ rects/
-    // polygons - for two disjoint rects, merge unconditionally converts
-    // both into POLYGON entries (rects cleared), a totally different
-    // kind/index space than Root's own raw storage (still 2 RECT
-    // entries). Selection/Move must resolve against the raw kind/index,
-    // not the rendered one, or Move would silently corrupt an unrelated
-    // piece.
+    // Regression: selection/Move are piece-granular (UPDATES.md item
+    // 21) - clicking one rect of a Shape that bundles 2+ rects together
+    // (e.g. several RECT statements under one LEF OBS LAYER line) must
+    // select and move only that raw piece, at its real stored index, not
+    // the whole Shape or the wrong sibling.
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     ASSERT_EQ(le_set_current_design(handle, 0), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);
@@ -3686,9 +3683,7 @@ TEST_F(ApiFixture, ClickSelectsOnlyTheClickedRawPieceEvenWhenRenderedGeometryWas
     le_mouse_up(handle, 65, 175);
 
     // Only rect index 1 (the clicked piece) moved - rect index 0 is
-    // untouched, and both remain real rects (not silently converted to
-    // polygons or corrupted) - proves selection/Move resolved the *raw*
-    // piece, not whatever Pipeline's merged/rendered geometry reported.
+    // untouched, and both remain real rects at their original indices.
     ASSERT_EQ(le_shape_rect_count(handle, shape_id), 2);
     const LeRectUm rect0 = le_shape_rect_at(handle, shape_id, 0);
     EXPECT_DOUBLE_EQ(rect0.ll_x_um, 0.1); // untouched sibling rect
@@ -3701,11 +3696,9 @@ TEST_F(ApiFixture, ClickSelectsOnlyTheClickedRawPieceEvenWhenRenderedGeometryWas
 
 TEST_F(ApiFixture, DragSelectEnclosingTwoPiecesOfTheSameShapeSelectsBothAsSeparateEntries)
 {
-    // Regression: hit_test_rect returns one HoverTarget per *merged*
-    // piece, which for a multi-rect Shape can differ in count/kind from
-    // the raw rects/polygons/paths a drag actually encloses - drag-select
-    // must re-derive the raw enclosed pieces (UPDATES.md item 21), not
-    // just dedup down to one whole-shape entry.
+    // Selection is piece-granular (UPDATES.md item 21) - a drag enclosing
+    // two rects that happen to belong to the same Shape must select both
+    // as independent entries, not dedup down to one whole-shape entry.
     ASSERT_EQ(le_read_lef(handle, fixture_path("testcell.lef").c_str()), 0);
     ASSERT_EQ(le_set_current_design(handle, 0), 0);
     const LeAbstractId abstract_id = testcell_abstract_id(handle);

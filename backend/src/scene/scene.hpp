@@ -41,18 +41,17 @@ namespace le
         ///
         /// Deliberately carries no piece index into `shape_id`'s own raw
         /// Root geometry (UPDATES.md item 21): `outline` here is copied
-        /// from the *Pipeline's* rendered geometry, which
-        /// Geometry::merge_overlapping_fills has restructured for any
-        /// Shape bundling 2+ rects/polygons (replaces them with a merged
-        /// union of polygons, purely to avoid double-blending overlap in
-        /// translucent fills) - so a piece index into *this* geometry
-        /// would not correspond to an index into the Shape's actual
-        /// stored rects/polygons/paths. Callers that need a piece
-        /// addressable in Root (Scene::select/Move) re-hit-test directly
-        /// against Root's own raw ShapeData instead (see api.cpp's
-        /// find_selected_piece_unlocked) - this struct's own `outline`
-        /// stays merged-geometry, fine for hover's purely visual
-        /// highlight.
+        /// from the *Pipeline's* rendered geometry, which can still have
+        /// more entries than Root's own raw rects/polygons/paths for a
+        /// Shape with RECT/POLYGON/PATH ITERATE statements (the expanded
+        /// concrete copies are appended past the raw indices at render
+        /// time - see generate_shapes_stage.hpp's expand_iterates) - so a
+        /// piece index into *this* geometry isn't always addressable in
+        /// Root. Callers that need a piece addressable in Root
+        /// (Scene::select/Move) re-hit-test directly against Root's own
+        /// raw ShapeData instead (see api.cpp's le_mouse_up) - this
+        /// struct's own `outline` stays the rendered geometry, fine for
+        /// hover's purely visual highlight.
         std::optional<ShapeId> shape_id;
     };
 

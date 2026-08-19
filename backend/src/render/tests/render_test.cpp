@@ -620,14 +620,10 @@ TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOnlyTheSelectedPieceNotTheWhole
 
 TEST_F(RenderFixture, ComposeWithOverlaysOutlinesOneSelectedPieceOfATwoRectShapeNotBothOrNeither)
 {
-    // Regression: a *single* Shape bundling 2+ rects/polygons gets its
-    // rendered geometry restructured by Geometry::merge_overlapping_fills
-    // (both rects replaced by merged polygons) - BuildSelectionOverlayPictureStage
-    // used to resolve a selected piece's outline from that *rendered*
-    // geometry, which for this exact case has no `rects` left at all, so
-    // a RECT-kind selection would silently draw nothing. It now resolves
-    // from Root's own raw (unmerged) geometry instead (UPDATES.md item
-    // 21), which still has both rects, at their original indices.
+    // Selection is piece-granular (UPDATES.md item 21) - a single Shape
+    // bundling 2+ rects together must highlight only the selected one,
+    // resolved from Root's own raw geometry (BuildSelectionOverlayPictureStage),
+    // which still has both rects at their original indices.
     const TerminalId terminal_id = root.create_terminal(TerminalData{.abstract = abstract_id});
     const Shape two_rect_piece{
         .layer_name = "M1",

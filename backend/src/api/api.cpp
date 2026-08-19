@@ -603,12 +603,13 @@ namespace
     // visibility/selectability), with no new traversal.
     //
     // hit_test_rect's own pieces (UPDATES.md item 21) are Pipeline's
-    // *rendered*, merge_overlapping_fills-processed geometry, not
-    // addressable in Root - only used here to find which ShapeIds are
-    // candidates at all; every raw rect/polygon/path of each candidate's
-    // actual Root::get_shape() data is then selected directly (select-all
-    // means "select everything", not a geometric containment test - no
-    // second fully_enclosed_pieces call needed, unlike drag-select).
+    // *rendered* geometry, not necessarily addressable in Root (e.g. an
+    // ITERATE-expanded piece has no raw index at all - see HoverTarget's
+    // own comment) - only used here to find which ShapeIds are candidates
+    // at all; every raw rect/polygon/path of each candidate's actual
+    // Root::get_shape() data is then selected directly (select-all means
+    // "select everything", not a geometric containment test - no second
+    // fully_enclosed_pieces call needed, unlike drag-select).
     void select_all_unlocked(LeHandle *handle)
     {
         const auto &generated = handle->pipeline.generate_shapes(handle->root, handle->scene.current_abstract(), handle->view_layers);
@@ -1779,16 +1780,18 @@ extern "C"
                 if (hit && hit->shape_id)
                 {
                     // UPDATES.md item 21 - hit_test_point's own piece is
-                    // Pipeline's *rendered* (merge_overlapping_fills-processed)
-                    // geometry, not addressable in Root - re-hit-test the
-                    // same point against the shape's real, raw geometry to
-                    // find the piece selection/Move actually operate on
-                    // (see HoverTarget's own comment). Selects the whole
-                    // shape id with the default piece (0) in the
-                    // vanishingly unlikely case the raw geometry doesn't
-                    // hit at the exact same point the rendered/merged
-                    // geometry did (e.g. a boundary rounding difference)
-                    // rather than silently selecting nothing.
+                    // Pipeline's *rendered* geometry, not always
+                    // addressable in Root (e.g. an ITERATE-expanded piece
+                    // has no raw index - see HoverTarget's own comment) -
+                    // re-hit-test the same point against the shape's real,
+                    // raw geometry to find the piece selection/Move
+                    // actually operate on. Selects the whole shape id with
+                    // the default piece (0) in the vanishingly unlikely
+                    // case the raw geometry doesn't hit at the exact same
+                    // point the rendered geometry did (e.g. a boundary
+                    // rounding difference, or a pure ITERATE-expanded hit
+                    // with no raw counterpart at all) rather than silently
+                    // selecting nothing.
                     if (const le::ShapeData *data = handle->root.get_shape(*hit->shape_id))
                     {
                         if (const auto raw_piece = le::Geometry::find_hit_piece(*data, dbu_point))

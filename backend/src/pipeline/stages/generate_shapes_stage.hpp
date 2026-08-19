@@ -106,10 +106,9 @@ namespace le
                 // Pipeline/Renderer code needs to know about that - expands
                 // each into concrete Rect/Path/Polygon entries appended to
                 // the same Shape's rects/paths/polygons, so everything below
-                // (label accumulation, merge_overlapping_fills,
-                // compute_path_outlines, RenderedShape itself) sees a
-                // conventional fully-expanded Shape exactly as before this
-                // rework. Bounds each statement's own num_x*num_y the same
+                // (label accumulation, compute_path_outlines, RenderedShape
+                // itself) sees a conventional fully-expanded Shape exactly
+                // as before this rework. Bounds each statement's own num_x*num_y the same
                 // way LEFReader::safe_iteration_count did at parse time -
                 // defense in depth, not just trusting the database's
                 // already-validated values.
@@ -216,16 +215,6 @@ namespace le
                             combined.paths.insert(combined.paths.end(), shape.paths.begin(), shape.paths.end());
 
                             shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::TERMINAL), .origin = SelectionRef{terminal_id}, .shape_id = shape_id, .path_outlines = compute_path_outlines(shape)});
-                            // Merges the pushed copy's own rects/polygons in
-                            // place (after combined's accumulated from the
-                            // pre-merge shape above - get_label_location
-                            // unions its own input either way, so which one
-                            // it sees doesn't change the label location) -
-                            // see Geometry::merge_overlapping_fills for why.
-                            // Paths (and therefore path_outlines, computed
-                            // from the pre-merge shape above) are left
-                            // untouched by this - see its own doc comment.
-                            Geometry::merge_overlapping_fills(shapes.back().shape);
                         }
                     }
 
@@ -255,7 +244,6 @@ namespace le
                             continue;
                         const Shape shape = expand_iterates(*raw_shape);
                         shapes.push_back(RenderedShape{.shape = shape, .view_layer = resolve(shape, ViewLayerPurpose::OBSTRUCTION), .origin = SelectionRef{obstruction_id}, .shape_id = shape_id, .path_outlines = compute_path_outlines(shape)});
-                        Geometry::merge_overlapping_fills(shapes.back().shape);
                     }
                 }
 
