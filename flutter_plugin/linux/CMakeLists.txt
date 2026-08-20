@@ -125,11 +125,33 @@ if(LE_LINK_BACKEND)
       "Path to the backend's own Debug CMake build directory, providing le_tcl.so")
   target_sources(${PLUGIN_NAME} PRIVATE "../src/le_tcl_bridge.cpp")
   target_include_directories(${PLUGIN_NAME} PRIVATE ../src ${TCL_INCLUDE_PATH})
-  target_compile_definitions(${PLUGIN_NAME} PRIVATE
-    LE_TCL_MODULE_PATH="${LE_BACKEND_TCL_BUILD}/le_tcl.so"
-    LE_TCL_PROCS_PATH="${LE_BACKEND_DIR}/src/tcl/le_tcl_procs.tcl"
-  )
   target_link_libraries(${PLUGIN_NAME} PRIVATE ${TCL_LIBRARY})
+
+  # le_tcl.so/le_tcl_procs.tcl need to be bundled into the app's own lib/
+  # directory too, not referenced via a compile-time absolute path baked
+  # into the binary the way LE_TCL_MODULE_PATH/LE_TCL_PROCS_PATH used to
+  # be - a bundle built on one machine and copied to another has no
+  # LE_BACKEND_DIR at all, so that path was never anything but this build
+  # machine's own local backend/build-linux tree. lef_editor_plugin.cc
+  # now resolves both files at runtime relative to the executable's own
+  # directory instead (see its own comment) - confirmed necessary by a
+  # real "cannot open shared object file" error running a release build
+  # on a different machine than it was built on.
+  #
+  # Collected here into LE_TCL_BUNDLED_FILES, not appended directly to
+  # lef_editor_plugin_bundled_libraries: that variable already gets its
+  # one and only `set()` call further down this file (Flutter's own
+  # generated template, bundling the separate FFI shared library) -
+  # a second, earlier `set(lef_editor_plugin_bundled_libraries ...
+  # PARENT_SCOPE)` here would silently overwrite it rather than add to
+  # it (confirmed by hitting exactly that - le_tcl.so never made it into
+  # a real built bundle until this was combined into the one call below
+  # instead). LE_TCL_BUNDLED_FILES stays unset (harmless, expands to
+  # nothing) when this if(LE_LINK_BACKEND) block doesn't run at all.
+  set(LE_TCL_BUNDLED_FILES
+    "${LE_BACKEND_TCL_BUILD}/le_tcl.so"
+    "${LE_BACKEND_DIR}/src/tcl/le_tcl_procs.tcl"
+  )
 endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin.
@@ -144,5 +166,9 @@ set(lef_editor_plugin_bundled_libraries
   # Defined in ../src/CMakeLists.txt.
   # This can be changed to accommodate different builds.
   $<TARGET_FILE:lef_editor_plugin>
+  # le_tcl.so/le_tcl_procs.tcl, when LE_LINK_BACKEND is ON - see the
+  # LE_TCL_BUNDLED_FILES comment above for why these are added here
+  # rather than in a separate set() call of their own.
+  ${LE_TCL_BUNDLED_FILES}
   PARENT_SCOPE
 )

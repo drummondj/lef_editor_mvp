@@ -14,7 +14,37 @@
 // class) - see that file's comment and TCL_EXPLORATION.md's show_gui
 // section for the full design rationale.
 #ifdef LE_LINK_BACKEND_ENABLED
+#include <limits.h>
+#include <unistd.h>
+
 #include "le_tcl_bridge.hpp"
+
+namespace {
+
+// le_tcl.so/le_tcl_procs.tcl are bundled into the app's own lib/
+// directory alongside this plugin's .so (CMakeLists.txt's
+// lef_editor_plugin_bundled_libraries - see its own comment), not
+// referenced by a compile-time absolute path baked into this binary -
+// that used to be this build machine's own backend/build-linux tree
+// (LE_TCL_MODULE_PATH/LE_TCL_PROCS_PATH), which doesn't exist at all on
+// a machine a built release bundle gets copied to. /proc/self/exe is
+// Linux-specific (this whole file already is - see lef_texture.cc's own
+// platform split), always resolves to the real executable path
+// regardless of cwd or how the bundle was invoked (a launcher script, a
+// relative ./lef_editor, a desktop file with an absolute Exec= path).
+std::string ExecutableDir() {
+  char buf[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+  if (len <= 0) {
+    return ".";
+  }
+  buf[len] = '\0';
+  std::string exe_path(buf);
+  size_t slash = exe_path.find_last_of('/');
+  return (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
+}
+
+}  // namespace
 #endif
 
 // Registers the "lef_editor_plugin" method channel used to bridge a
@@ -136,8 +166,10 @@ static FlMethodResponse* handle_create_tcl_console(LefEditorPlugin* self, FlValu
   }
 
   int64_t console_id = self->next_console_id++;
+  const std::string exe_dir = ExecutableDir();
   le::TclBridge* bridge = new le::TclBridge(fl_value_get_int(handle_address_value),
-                                             LE_TCL_MODULE_PATH, LE_TCL_PROCS_PATH);
+                                             exe_dir + "/lib/le_tcl.so",
+                                             exe_dir + "/lib/le_tcl_procs.tcl");
   g_hash_table_insert(self->tcl_consoles, GINT_TO_POINTER(console_id), bridge);
 
   g_autoptr(FlValue) result = fl_value_new_int(console_id);
