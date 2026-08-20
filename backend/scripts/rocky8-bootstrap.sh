@@ -73,13 +73,32 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # (RHEL8's harfbuzz/icu vs. a modern Skia commit) - "is something already
 # installed" isn't a good enough question for those; the actual version
 # matters, not just presence. ---
+# RPM package names whose closure gets pulled in transitively by basically
+# everything on a RHEL-family system (via "Requires: filesystem" et al) but
+# that ship nothing this toolchain actually needs - only the base OS
+# directory skeleton. Skipped entirely rather than extracted: `cpio -d`
+# already creates whatever real parent directories the packages we *do*
+# need require, on demand. `filesystem` specifically ships several legacy
+# placeholder directories (/usr/lib{,64}/tls, sse2, debug, games, locale,
+# modules, sysimage, X11, bpf, pm-utils) with an explicit, non-owner-writable
+# mode baked into the RPM's own file list - cpio applies that literal mode
+# on mkdir, so as a non-root user every subsequent attempt to create
+# anything under those paths (even by the owning user) fails EACCES. Add
+# another package name here if a future closure hits the same pattern.
+RPM_SKIP_PACKAGES=(filesystem)
+
 extract_rpm_closure() {
     local pkg="$1"; shift
     local extra_repo_args=("$@")
     local dest="$STAGE_DOWNLOADS/$pkg"
     mkdir -p "$dest"
-    log "dnf download --resolve --alldeps ${extra_repo_args[*]:-} $pkg"
-    if ! dnf download --resolve --alldeps --destdir="$dest" "${extra_repo_args[@]}" "$pkg" 2>&1; then
+    local exclude_args=()
+    local skip
+    for skip in "${RPM_SKIP_PACKAGES[@]}"; do
+        exclude_args+=(--exclude="$skip")
+    done
+    log "dnf download --resolve --alldeps ${exclude_args[*]} ${extra_repo_args[*]:-} $pkg"
+    if ! dnf download --resolve --alldeps "${exclude_args[@]}" --destdir="$dest" "${extra_repo_args[@]}" "$pkg" 2>&1; then
         fail "dnf download failed for $pkg - is it reachable? See this script's fail-fast checks in the plan this came from (dnf repo reachability, crb/PowerTools enablement)."
         return 1
     fi
@@ -92,6 +111,13 @@ extract_rpm_closure() {
     log "extracting $rpm_count RPM(s) for $pkg into $LE_ROOT"
     local rpm
     for rpm in "$dest"/*.rpm; do
+        local rpm_base
+        rpm_base="$(basename "$rpm")"
+        for skip in "${RPM_SKIP_PACKAGES[@]}"; do
+            if [[ "$rpm_base" == "$skip"-* ]]; then
+                continue 2
+            fi
+        done
         (cd "$LE_ROOT" && rpm2cpio "$rpm" | cpio -idmu --quiet) || {
             fail "rpm2cpio|cpio failed for $rpm"
             return 1
