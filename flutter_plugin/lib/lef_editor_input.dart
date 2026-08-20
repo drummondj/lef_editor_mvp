@@ -51,8 +51,11 @@ const double kScrollZoomFactor = 0.1;
 /// `setMousePosition`/`clearMousePosition`/`keyDown`/`keyUp`), so a caller
 /// doesn't have to hand-roll a `LogicalKeyboardKey` -> `LeKeyCode` mapping
 /// or pixel-space bookkeeping itself (see `example/lib/main.dart` for a
-/// working `Listener`/`MouseRegion`/`Focus` wiring).
-extension LeEditorInput on LeEditor {
+/// working `Listener`/`MouseRegion`/`Focus` wiring). Extends [LeEditorBase]
+/// (not the concrete [LeEditor]) so it's also callable on a test double
+/// implementing that interface - see [LeEditorBase]'s own doc comment for
+/// why that distinction exists.
+extension LeEditorInput on LeEditorBase {
   /// Converts a standard Flutter pointer event straight into the right
   /// low-level call - [x]/[y] come from [PointerEvent.localPosition],
   /// `.round()`'d, in the same raw-logical-pixel convention

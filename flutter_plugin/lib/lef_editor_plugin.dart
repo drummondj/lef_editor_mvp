@@ -283,11 +283,102 @@ class LeSelectedProperty {
   final Object value;
 }
 
+/// The subset of [LeEditor]'s public surface that [LeEditorInput]
+/// (`lef_editor_input.dart`) and the frontend app's own `LeProvider`
+/// (`frontend/lib/providers/le_provider.dart`) actually call - exists so
+/// `LeProvider` can depend on this interface instead of the concrete
+/// [LeEditor] directly, and take an injected test double instead
+/// (`frontend/test/fakes/fake_le_editor.dart`) in a plain `flutter test`.
+/// [LeEditor]'s own constructor calls `dart:ffi`'s `DynamicLibrary.open`
+/// eagerly, which only resolves inside a real built app bundle
+/// (`flutter run`/`flutter build`) - never under plain `flutter test`'s
+/// bare Dart VM - so merely *constructing* a real [LeEditor] crashes
+/// there regardless of which methods are actually called; a test double
+/// implementing this interface sidesteps that entirely. See each member's
+/// matching doc comment on [LeEditor] itself for the real behavior - not
+/// repeated here.
+abstract interface class LeEditorBase {
+  int get commandHistoryCount;
+  String commandHistoryAt(int index);
+  Future<LeTclConsoleBase> createTclConsole();
+  Future<LeTextureBase> createTexture();
+  void armMove();
+  void clearRulers();
+  void deselectAll();
+  void fitScene(int paddingPx);
+  bool isLayerNameSelectable(String layerName);
+  bool isLayerNameVisible(String layerName);
+  bool get isMoveArmed;
+  bool isPurposeSelectable(LeLayerPurpose purpose);
+  bool isPurposeVisible(LeLayerPurpose purpose);
+  LeLayer? layer(int rowIndex);
+  int get layerCount;
+  LeLibrary? library(int index);
+  int get libraryCount;
+  LeDesignEntry? libraryDesign(int libraryIndex, int designIndex);
+  int libraryDesignCount(int libraryIndex);
+  String? messageAt(int index);
+  int get messageCount;
+  LeMode get mode;
+  List<LeObjectRef> objectChildren(LeObjectRef ref);
+  LeObjectRef objectParent(LeObjectRef ref);
+  List<LeSelectedProperty> objectProperties(LeObjectRef ref);
+  LeLayerPurpose? purposeAt(int index);
+  int get purposeCount;
+  bool redo();
+  void selectAll();
+  LeObjectRef selectedObjectRef(int selectionIndex);
+  int get selectionCount;
+  int get selectionVersion;
+  bool setCurrentDesignById(LeDesignRef designId);
+  void setLayerNameSelectable(String layerName, bool selectable);
+  void setLayerNameVisible(String layerName, bool visible);
+  void setMode(LeMode mode);
+  void setPurposeSelectable(LeLayerPurpose purpose, bool selectable);
+  void setPurposeVisible(LeLayerPurpose purpose, bool visible);
+  void setViewportSize(int widthPx, int heightPx);
+  LeSnappedMouse? get snappedMousePosition;
+  String get tooltipMessage;
+  bool undo();
+
+  // Below: not called by LeProvider directly, but needed so
+  // LeEditorInput's extension methods (handlePointerEvent/
+  // handlePointerSignal/handleKeyEvent/handleFocusChange - also called
+  // directly by LeProvider) can be retargeted onto this interface instead
+  // of the concrete LeEditor.
+  void clearAllKeys();
+  void clearMousePosition();
+  void keyDown(LeKeyCode keyCode);
+  void keyUp(LeKeyCode keyCode);
+  void mouseDown(int x, int y);
+  void mouseUp(int x, int y);
+  void setMousePosition(int x, int y);
+  void zoom(double factor, int x, int y);
+  void zoomDragDown(int x, int y);
+}
+
+/// [LeTexture]'s public surface actually called by `LeProvider`/
+/// `layout_editor.dart` - same rationale and pairing as [LeEditorBase]
+/// (see its doc comment): a test double can implement just this, with no
+/// real `MethodChannel` involved at all, rather than needing
+/// [LeEditorBase.createTexture]'s test double to construct (and a test to
+/// mock the channel behind) a real [LeTexture].
+abstract interface class LeTextureBase {
+  int get textureId;
+  Future<void> markFrameAvailable();
+}
+
+/// [LeTclConsole]'s public surface actually called by `LeProvider` - same
+/// rationale as [LeTextureBase].
+abstract interface class LeTclConsoleBase {
+  Future<String> eval(String command);
+}
+
 /// One editor instance: owns a native `LeHandle*` (a Root/ViewLayerSet/
 /// Scene/Pipeline/Renderer, see api.hpp) that's reused across calls,
 /// matching the backend's own "one instance per Scene-equivalent lifetime"
 /// design - don't create a fresh [LeEditor] per frame.
-class LeEditor {
+class LeEditor implements LeEditorBase {
   LeEditor() : _handle = _bindings.le_create() {
     // le_create() is documented to never return null; this is a sanity
     // check against that contract changing, not an expected runtime path.
@@ -320,6 +411,7 @@ class LeEditor {
   /// entries are never removed, cleared, or reordered - so a caller can
   /// poll this like [selectionVersion] and only fetch [messageAt] for
   /// indices at or past what it last saw.
+  @override
   int get messageCount {
     _checkNotDisposed();
     return _bindings.le_message_count(_handle);
@@ -327,6 +419,7 @@ class LeEditor {
 
   /// The message at [index] (0..[messageCount] - 1), or null if [index]
   /// is out of range.
+  @override
   String? messageAt(int index) {
     _checkNotDisposed();
     final msgPtr = _bindings.le_message_at(_handle, index);
@@ -362,6 +455,7 @@ class LeEditor {
   /// so far (see [createTclConsole]).
   /// The top level of a Library -> Design -> Abstract browser widget; see
   /// [libraryDesignCount]/[libraryDesign] for the next level.
+  @override
   int get libraryCount {
     _checkNotDisposed();
     return _bindings.le_library_count(_handle);
@@ -369,6 +463,7 @@ class LeEditor {
 
   /// The Library at [index] (0..[libraryCount] - 1), or null if [index] is
   /// out of range.
+  @override
   LeLibrary? library(int index) {
     _checkNotDisposed();
     final info = _bindings.le_library_at(_handle, index);
@@ -381,6 +476,7 @@ class LeEditor {
 
   /// Number of Designs belonging to the Library at [libraryIndex] (into the
   /// same enumeration [library] uses).
+  @override
   int libraryDesignCount(int libraryIndex) {
     _checkNotDisposed();
     return _bindings.le_library_design_count(_handle, libraryIndex);
@@ -389,6 +485,7 @@ class LeEditor {
   /// The Design at [designIndex] within the Library at [libraryIndex]
   /// (0..[libraryDesignCount] - 1), or null if either index is out of
   /// range.
+  @override
   LeDesignEntry? libraryDesign(int libraryIndex, int designIndex) {
     _checkNotDisposed();
     final info = _bindings.le_library_design_at(
@@ -417,6 +514,7 @@ class LeEditor {
   /// instead of a position in the flat [designCount] list, the natural fit
   /// for a browser widget's row click. Returns true on success; the
   /// current selection is left unchanged on failure.
+  @override
   bool setCurrentDesignById(LeDesignRef designId) {
     _checkNotDisposed();
     final idPtr = pkg_ffi.calloc<LeDesignId>();
@@ -433,12 +531,14 @@ class LeEditor {
   /// `read_lef` Tcl command, since no ViewLayerSet has been built yet). Includes
   /// BOUNDARY and any future non-Technology-derived row, not just physical
   /// Layers. See [layer] for each row's contents.
+  @override
   int get layerCount {
     _checkNotDisposed();
     return _bindings.le_layer_count(_handle);
   }
 
   /// The row at [rowIndex] (0..[layerCount] - 1), or null if out of range.
+  @override
   LeLayer? layer(int rowIndex) {
     _checkNotDisposed();
     final row = _bindings.le_layer_at(_handle, rowIndex);
@@ -454,6 +554,7 @@ class LeEditor {
   /// Number of distinct purposes across the currently loaded ViewLayerSet -
   /// the layer widget's column axis, independent of any row. See
   /// [purposeAt] for each one.
+  @override
   int get purposeCount {
     _checkNotDisposed();
     return _bindings.le_purpose_count(_handle);
@@ -461,6 +562,7 @@ class LeEditor {
 
   /// The purpose at [index] (0..[purposeCount] - 1), or null if out of
   /// range.
+  @override
   LeLayerPurpose? purposeAt(int index) {
     _checkNotDisposed();
     return LeLayerPurpose.fromValue(_bindings.le_purpose_at(_handle, index));
@@ -470,6 +572,7 @@ class LeEditor {
   /// together, not one purpose-column) is currently visible - true by
   /// default until toggled with [setLayerNameVisible]. See
   /// [isPurposeVisible] for the other, row-independent axis.
+  @override
   bool isLayerNameVisible(String layerName) {
     _checkNotDisposed();
     final namePtr = layerName.toNativeUtf8();
@@ -482,6 +585,7 @@ class LeEditor {
 
   /// Sets the visibility of every ViewLayer named [layerName] - e.g. a
   /// layer-widget row-header checkbox. Affects rendering.
+  @override
   void setLayerNameVisible(String layerName, bool visible) {
     _checkNotDisposed();
     final namePtr = layerName.toNativeUtf8();
@@ -499,6 +603,7 @@ class LeEditor {
   /// Whether every ViewLayer whose purpose is [purpose] (a whole column,
   /// not one row) is currently visible - true by default until toggled
   /// with [setPurposeVisible].
+  @override
   bool isPurposeVisible(LeLayerPurpose purpose) {
     _checkNotDisposed();
     return _bindings.le_is_purpose_visible(_handle, purpose.index) != 0;
@@ -506,6 +611,7 @@ class LeEditor {
 
   /// Sets the visibility of every ViewLayer whose purpose is [purpose] -
   /// e.g. a layer-widget column-header checkbox. Affects rendering.
+  @override
   void setPurposeVisible(LeLayerPurpose purpose, bool visible) {
     _checkNotDisposed();
     _bindings.le_set_purpose_visible(_handle, purpose.index, visible ? 1 : 0);
@@ -515,6 +621,7 @@ class LeEditor {
   /// only mode where mouse clicks/drags ([mouseDown]/[mouseUp]) change
   /// the current selection - Edit mode restricts mouse interaction to
   /// editing whatever is already selected (behavior TBD, a later item).
+  @override
   LeMode get mode {
     _checkNotDisposed();
     return LeMode.fromValue(_bindings.le_get_mode(_handle));
@@ -523,6 +630,7 @@ class LeEditor {
   /// Switches the current interaction mode - see [mode]. Also reachable
   /// via [LeEditorInput.handleKeyEvent]'s 's'/'e'/'r' shortcuts
   /// (LE_KEY_SELECT_MODE/LE_KEY_EDIT_MODE/LE_KEY_RULER_MODE).
+  @override
   void setMode(LeMode mode) {
     _checkNotDisposed();
     _bindings.le_set_mode(_handle, mode.value);
@@ -561,6 +669,7 @@ class LeEditor {
   }
 
   /// Removes every ruler (finished or not).
+  @override
   void clearRulers() {
     _checkNotDisposed();
     _bindings.le_clear_rulers(_handle);
@@ -591,6 +700,7 @@ class LeEditor {
 
   /// Undoes the most recently recorded transaction, if any. Returns true
   /// if something was undone.
+  @override
   bool undo() {
     _checkNotDisposed();
     return _bindings.le_undo(_handle) != 0;
@@ -598,6 +708,7 @@ class LeEditor {
 
   /// Redoes the most recently undone transaction, if any. Returns true
   /// if something was redone.
+  @override
   bool redo() {
     _checkNotDisposed();
     return _bindings.le_redo(_handle) != 0;
@@ -618,12 +729,14 @@ class LeEditor {
   /// Number of recorded command-recall entries (only successfully
   /// executed commands - see [endCommand]) - indexes [commandHistoryAt]'s
   /// own `index` parameter.
+  @override
   int get commandHistoryCount {
     _checkNotDisposed();
     return _bindings.le_command_history_count(_handle);
   }
 
   /// The command text at [index] (0..[commandHistoryCount]-1).
+  @override
   String commandHistoryAt(int index) {
     _checkNotDisposed();
     final textPtr = _bindings.le_command_history_at(_handle, index);
@@ -635,6 +748,7 @@ class LeEditor {
   /// the Select-mode toolbox button's direct entry point (same underlying
   /// behavior as Ctrl-A - see [LeEditorInput.handleKeyEvent] - but not
   /// gated on a held Ctrl key).
+  @override
   void selectAll() {
     _checkNotDisposed();
     _bindings.le_select_all(_handle);
@@ -642,6 +756,7 @@ class LeEditor {
 
   /// Clears the current selection - the Select-mode toolbox button's
   /// direct entry point (same underlying behavior as Ctrl-D).
+  @override
   void deselectAll() {
     _checkNotDisposed();
     _bindings.le_deselect_all(_handle);
@@ -650,6 +765,7 @@ class LeEditor {
   /// Arms Move - equivalent to Ctrl-M. Only meaningful in Edit mode with
   /// a non-empty selection; a no-op otherwise. The next two [mouseUp]
   /// clicks in Edit mode set the move's anchor, then commit it.
+  @override
   void armMove() {
     _checkNotDisposed();
     _bindings.le_arm_move(_handle);
@@ -664,6 +780,7 @@ class LeEditor {
   /// True if Move is currently armed (whether or not its anchor has been
   /// set yet) - for the Move toolbox button's own pressed/armed visual
   /// state.
+  @override
   bool get isMoveArmed {
     _checkNotDisposed();
     return _bindings.le_is_move_armed(_handle) != 0;
@@ -673,6 +790,7 @@ class LeEditor {
   /// true by default until toggled with [setLayerNameSelectable]. Purely
   /// an interaction-layer concern (no hit-testing/click-to-select API
   /// exists yet to consult it) - doesn't affect rendering.
+  @override
   bool isLayerNameSelectable(String layerName) {
     _checkNotDisposed();
     final namePtr = layerName.toNativeUtf8();
@@ -685,6 +803,7 @@ class LeEditor {
   }
 
   /// Sets the selectability of every ViewLayer named [layerName].
+  @override
   void setLayerNameSelectable(String layerName, bool selectable) {
     _checkNotDisposed();
     final namePtr = layerName.toNativeUtf8();
@@ -702,12 +821,14 @@ class LeEditor {
   /// Whether every ViewLayer whose purpose is [purpose] is currently
   /// selectable - true by default until toggled with
   /// [setPurposeSelectable].
+  @override
   bool isPurposeSelectable(LeLayerPurpose purpose) {
     _checkNotDisposed();
     return _bindings.le_is_purpose_selectable(_handle, purpose.index) != 0;
   }
 
   /// Sets the selectability of every ViewLayer whose purpose is [purpose].
+  @override
   void setPurposeSelectable(LeLayerPurpose purpose, bool selectable) {
     _checkNotDisposed();
     _bindings.le_set_purpose_selectable(
@@ -726,6 +847,7 @@ class LeEditor {
   /// - safe to feed straight from a pointer/tap event on the rendered
   /// image. The backend owns pan/scale entirely - there is no direct
   /// setter; use [fitScene] to reset to a known view.
+  @override
   void zoom(double factor, int x, int y) {
     _checkNotDisposed();
     _bindings.le_zoom(_handle, factor, x, y);
@@ -742,6 +864,7 @@ class LeEditor {
 
   /// Sets the viewport size in pixels - also the size of the buffer
   /// [renderPixelBuffer] produces.
+  @override
   void setViewportSize(int widthPx, int heightPx) {
     _checkNotDisposed();
     _bindings.le_set_viewport_size(_handle, widthPx, heightPx);
@@ -754,6 +877,7 @@ class LeEditor {
   /// Design is selected or its Abstract has no shapes, rather than
   /// throwing. Call [setViewportSize] first - this fits to that viewport's
   /// current size, not a size set afterward.
+  @override
   void fitScene(int paddingPx) {
     _checkNotDisposed();
     _bindings.le_fit_scene(_handle, paddingPx);
@@ -815,6 +939,7 @@ class LeEditor {
   /// bounded by the number of shapes currently visible (already
   /// viewport-culled), not the whole design - see backend/BENCHMARKS.md
   /// for measured cost on a large design.
+  @override
   void setMousePosition(int x, int y) {
     _checkNotDisposed();
     _bindings.le_set_mouse_position(_handle, x, y);
@@ -823,6 +948,7 @@ class LeEditor {
   /// Clears the current mouse position (e.g. on a pointer-leave event) so
   /// the grid-snap indicator box and any hover outline stop showing at/for
   /// the last known position.
+  @override
   void clearMousePosition() {
     _checkNotDisposed();
     _bindings.le_clear_mouse_position(_handle);
@@ -833,6 +959,7 @@ class LeEditor {
   /// box is centered on. Null if no mouse position has been set (or
   /// [clearMousePosition] was called since), or no Technology has been
   /// read yet (`read_lef`) to convert dbu to microns with.
+  @override
   LeSnappedMouse? get snappedMousePosition {
     _checkNotDisposed();
     final result = _bindings.le_snapped_mouse_position(_handle);
@@ -843,12 +970,14 @@ class LeEditor {
   /// Marks [keyCode] as currently held, e.g. on a key-down event - queried
   /// internally by gesture commands (e.g. [mouseUp]'s shift-click/
   /// shift-drag behavior).
+  @override
   void keyDown(LeKeyCode keyCode) {
     _checkNotDisposed();
     _bindings.le_key_down(_handle, keyCode.value);
   }
 
   /// Marks [keyCode] as no longer held, e.g. on a key-up event.
+  @override
   void keyUp(LeKeyCode keyCode) {
     _checkNotDisposed();
     _bindings.le_key_up(_handle, keyCode.value);
@@ -869,6 +998,7 @@ class LeEditor {
   /// at that moment stays "held" indefinitely - silently turning every
   /// later plain click into a shift-click until that same key happens to
   /// be pressed and released again while focused.
+  @override
   void clearAllKeys() {
     _checkNotDisposed();
     _bindings.le_clear_all_keys(_handle);
@@ -879,6 +1009,7 @@ class LeEditor {
   /// gesture's anchor point; [mouseUp] later decides whether the gesture
   /// was a click or a rubber-band drag-select by comparing the down/up
   /// pixel distance against a small threshold.
+  @override
   void mouseDown(int x, int y) {
     _checkNotDisposed();
     _bindings.le_mouse_down(_handle, x, y);
@@ -888,6 +1019,7 @@ class LeEditor {
   /// [mouseDown]), e.g. on a right-button pointer-down event. Like
   /// [mouseDown], only records the gesture's anchor point - [mouseUp] is
   /// the shared endpoint for both gesture kinds (see its own doc for why).
+  @override
   void zoomDragDown(int x, int y) {
     _checkNotDisposed();
     _bindings.le_zoom_drag_down(_handle, x, y);
@@ -906,6 +1038,7 @@ class LeEditor {
   ///   rectangle (same math as [fitScene] with 0 padding), unless the drag
   ///   was click-sized, in which case nothing happens. Selection is
   ///   untouched either way.
+  @override
   void mouseUp(int x, int y) {
     _checkNotDisposed();
     _bindings.le_mouse_up(_handle, x, y);
@@ -916,6 +1049,7 @@ class LeEditor {
   /// bar below the texture - e.g. "Left click to select. Shift for
   /// multi-select. Left click and drag for rectangle multi-select." for
   /// the current (and, for now, only) interaction mode, Select.
+  @override
   String get tooltipMessage {
     _checkNotDisposed();
     final msgPtr = _bindings.le_tooltip_message(_handle);
@@ -926,6 +1060,7 @@ class LeEditor {
   /// Number of currently selected objects. Indexes [selectedObjectRef]'s
   /// own `selectionIndex` parameter, 0..this-1, in the same (insertion)
   /// order as the selection itself.
+  @override
   int get selectionCount {
     _checkNotDisposed();
     return _bindings.le_selection_count(_handle);
@@ -937,6 +1072,7 @@ class LeEditor {
   /// need re-fetching at all, instead of always re-fetching them (a real,
   /// measured cost that scales with how many objects are selected - see
   /// backend/BENCHMARKS.md).
+  @override
   int get selectionVersion {
     _checkNotDisposed();
     return _bindings.le_selection_version(_handle);
@@ -948,6 +1084,7 @@ class LeEditor {
   /// (selection is shape-granular, see backend/src/scene/scene.hpp's own
   /// comment on why). An invalid ref ([LeObjectRef.isValid] false) if
   /// [selectionIndex] is out of range.
+  @override
   LeObjectRef selectedObjectRef(int selectionIndex) {
     _checkNotDisposed();
     return _fromNativeRef(
@@ -992,6 +1129,7 @@ class LeEditor {
   }
 
   /// Every property row for [ref] - see [objectPropertyAt].
+  @override
   List<LeSelectedProperty> objectProperties(LeObjectRef ref) {
     _checkNotDisposed();
     final count = objectPropertyCount(ref);
@@ -1003,6 +1141,7 @@ class LeEditor {
   /// the same hop graph TCL's `-filter` DSL already uses internally.
   /// Read-only: never mutates the current canvas selection. An invalid
   /// ref if [ref] is a Library (no parent) or doesn't resolve.
+  @override
   LeObjectRef objectParent(LeObjectRef ref) {
     _checkNotDisposed();
     return _fromNativeRef(
@@ -1021,6 +1160,7 @@ class LeEditor {
   /// TerminalPort/Obstruction's own Shapes. Empty for Shape, the
   /// hierarchy's leaf. Read-only: never mutates the current canvas
   /// selection.
+  @override
   List<LeObjectRef> objectChildren(LeObjectRef ref) {
     _checkNotDisposed();
     switch (ref.kind) {
@@ -1199,6 +1339,7 @@ class LeEditor {
   /// through this Dart wrapper) whenever the engine pulls a frame, which
   /// only happens after a [LeTexture.markFrameAvailable] call - creating
   /// the texture does not render eagerly on its own.
+  @override
   Future<LeTexture> createTexture() async {
     _checkNotDisposed();
     final textureId = await _channel.invokeMethod<int>('createTexture', {
@@ -1217,6 +1358,7 @@ class LeEditor {
   /// through the returned [LeTclConsole] mutates the exact database this
   /// [LeEditor] is already rendering - call [LeTexture.markFrameAvailable]
   /// after each command to see the result, same as any other mutation.
+  @override
   Future<LeTclConsole> createTclConsole() async {
     _checkNotDisposed();
     final consoleId = await _channel.invokeMethod<int>('createTclConsole', {
@@ -1262,10 +1404,11 @@ class LeEditor {
 /// one. Not solved at this layer - a real fix needs a lock inside the C
 /// API itself, guarding every `le_*` call on a handle regardless of which
 /// thread it's called from.
-class LeTexture {
+class LeTexture implements LeTextureBase {
   LeTexture._(this.textureId);
 
   /// Pass to Flutter's `Texture(textureId: ...)` widget.
+  @override
   final int textureId;
 
   bool _disposed = false;
@@ -1274,6 +1417,7 @@ class LeTexture {
   /// after any change on the source [LeEditor] that should become visible.
   /// Cheap to call even when nothing actually changed (see
   /// `le_render_pixel_buffer`'s own caching note in api.hpp).
+  @override
   Future<void> markFrameAvailable() async {
     if (_disposed) return;
     await _channel.invokeMethod<void>('markTextureFrameAvailable', {
@@ -1305,7 +1449,7 @@ class LeTexture {
 /// **Lifetime:** the source [LeEditor] must outlive this [LeTclConsole] -
 /// same constraint as [LeTexture], and for the same reason (native code
 /// holds the raw handle address, not a reference keeping it alive).
-class LeTclConsole {
+class LeTclConsole implements LeTclConsoleBase {
   LeTclConsole._(this._consoleId);
 
   final int _consoleId;
@@ -1321,6 +1465,7 @@ class LeTclConsole {
   /// never reaches this app's real stdout/stderr (see macOS's
   /// LeTclBridge.evalTcl:), so this is the only place a script's own
   /// output is observable at all.
+  @override
   Future<String> eval(String command) async {
     if (_disposed) {
       throw StateError('eval called on a disposed LeTclConsole');

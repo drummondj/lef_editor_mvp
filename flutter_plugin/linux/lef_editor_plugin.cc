@@ -3,19 +3,34 @@
 #include <flutter_linux/flutter_linux.h>
 
 #include <cstring>
+#include <string>
 
 #include "lef_texture.h"
 
+// Only present when CMakeLists.txt's LE_LINK_BACKEND option is ON - see
+// lef_texture.cc's own comment on this same guard. le::TclBridge
+// (../src/le_tcl_bridge.hpp) is plain C++, shared verbatim with macOS's
+// own LeTclBridge.mm (a thin Objective-C++ wrapper around the same
+// class) - see that file's comment and TCL_EXPLORATION.md's show_gui
+// section for the full design rationale.
+#ifdef LE_LINK_BACKEND_ENABLED
+#include "le_tcl_bridge.hpp"
+#endif
+
 // Registers the "lef_editor_plugin" method channel used to bridge a
 // Dart-owned LeHandle* (see ../lib/lef_editor_plugin.dart's LeEditor) into
-// a native FlLeTexture (see lef_texture.h/.cc). Dart FFI can't reach the
-// texture registrar itself - only platform embedder code can - so this
-// channel exists purely to hand a texture id back and forth; the actual
-// per-frame pixel pull never crosses it. Mirrors
-// ../macos/Classes/LefEditorPlugin.swift's protocol exactly:
+// a native FlLeTexture (see lef_texture.h/.cc) and (see createTclConsole/
+// evalTclCommand/disposeTclConsole below) an embedded Tcl console. Dart FFI
+// can't reach the texture registrar itself - only platform embedder code
+// can - so this channel exists purely to hand ids back and forth; the
+// actual per-frame pixel pull and per-command Tcl eval never cross it.
+// Mirrors ../macos/Classes/LefEditorPlugin.swift's protocol exactly:
 //   createTexture({handleAddress: int}) -> int textureId
 //   markTextureFrameAvailable({textureId: int}) -> null
 //   disposeTexture({textureId: int}) -> null
+//   createTclConsole({handleAddress: int}) -> int consoleId
+//   evalTclCommand({consoleId: int, command: string}) -> string
+//   disposeTclConsole({consoleId: int}) -> null
 
 #define LEF_EDITOR_PLUGIN(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), lef_editor_plugin_get_type(), LefEditorPlugin))
@@ -28,6 +43,18 @@ struct _LefEditorPlugin {
   // FlLeTexture alive between createTexture and disposeTexture, mirroring
   // LefEditorPlugin.swift's own `textures` dictionary.
   GHashTable* textures;
+
+  // Tcl consoles (see le_tcl_bridge.hpp - the show_gui in-app console,
+  // TCL_EXPLORATION.md) keyed by an id this plugin hands back to Dart,
+  // same pattern as `textures` above. next_console_id mirrors how
+  // fl_texture_registrar_register_texture hands back its own id - there's
+  // no equivalent registry for Tcl consoles (they aren't Flutter engine
+  // objects), so this plugin owns the id space itself. Value type is
+  // le::TclBridge* when LE_LINK_BACKEND_ENABLED, unused (always empty)
+  // otherwise - no #ifdef needed on the field itself since GHashTable's
+  // value type is opaque gpointer either way.
+  GHashTable* tcl_consoles;
+  int64_t next_console_id;
 };
 
 G_DEFINE_TYPE(LefEditorPlugin, lef_editor_plugin, g_object_get_type())
@@ -93,6 +120,80 @@ static FlMethodResponse* handle_dispose_texture(LefEditorPlugin* self, FlValue* 
   return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
 }
 
+#ifdef LE_LINK_BACKEND_ENABLED
+static void delete_tcl_bridge(gpointer data) {
+  delete reinterpret_cast<le::TclBridge*>(data);
+}
+#endif
+
+static FlMethodResponse* handle_create_tcl_console(LefEditorPlugin* self, FlValue* args) {
+#ifdef LE_LINK_BACKEND_ENABLED
+  FlValue* handle_address_value = fl_value_lookup_string(args, "handleAddress");
+  if (handle_address_value == nullptr ||
+      fl_value_get_type(handle_address_value) != FL_VALUE_TYPE_INT) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "bad_args", "createTclConsole requires handleAddress", nullptr));
+  }
+
+  int64_t console_id = self->next_console_id++;
+  le::TclBridge* bridge = new le::TclBridge(fl_value_get_int(handle_address_value),
+                                             LE_TCL_MODULE_PATH, LE_TCL_PROCS_PATH);
+  g_hash_table_insert(self->tcl_consoles, GINT_TO_POINTER(console_id), bridge);
+
+  g_autoptr(FlValue) result = fl_value_new_int(console_id);
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+#else
+  return FL_METHOD_RESPONSE(fl_method_error_response_new(
+      "backend_not_linked", "built without LE_LINK_BACKEND - see this plugin's CLAUDE.md",
+      nullptr));
+#endif
+}
+
+static FlMethodResponse* handle_eval_tcl_command(LefEditorPlugin* self, FlValue* args) {
+#ifdef LE_LINK_BACKEND_ENABLED
+  FlValue* console_id_value = fl_value_lookup_string(args, "consoleId");
+  FlValue* command_value = fl_value_lookup_string(args, "command");
+  if (console_id_value == nullptr || fl_value_get_type(console_id_value) != FL_VALUE_TYPE_INT ||
+      command_value == nullptr || fl_value_get_type(command_value) != FL_VALUE_TYPE_STRING) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "bad_args", "evalTclCommand requires consoleId and command", nullptr));
+  }
+
+  int64_t console_id = fl_value_get_int(console_id_value);
+  le::TclBridge* bridge =
+      reinterpret_cast<le::TclBridge*>(g_hash_table_lookup(self->tcl_consoles, GINT_TO_POINTER(console_id)));
+  if (bridge == nullptr) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "unknown_console", "no Tcl console with that id", nullptr));
+  }
+
+  const std::string eval_result = bridge->evalTcl(fl_value_get_string(command_value));
+  g_autoptr(FlValue) result = fl_value_new_string(eval_result.c_str());
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+#else
+  return FL_METHOD_RESPONSE(fl_method_error_response_new(
+      "backend_not_linked", "built without LE_LINK_BACKEND - see this plugin's CLAUDE.md",
+      nullptr));
+#endif
+}
+
+static FlMethodResponse* handle_dispose_tcl_console(LefEditorPlugin* self, FlValue* args) {
+#ifdef LE_LINK_BACKEND_ENABLED
+  FlValue* console_id_value = fl_value_lookup_string(args, "consoleId");
+  if (console_id_value == nullptr || fl_value_get_type(console_id_value) != FL_VALUE_TYPE_INT) {
+    return FL_METHOD_RESPONSE(
+        fl_method_error_response_new("bad_args", "disposeTclConsole requires consoleId", nullptr));
+  }
+
+  int64_t console_id = fl_value_get_int(console_id_value);
+  // Destroy func (delete_tcl_bridge) frees the le::TclBridge itself.
+  g_hash_table_remove(self->tcl_consoles, GINT_TO_POINTER(console_id));
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+#else
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+#endif
+}
+
 static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
                            gpointer user_data) {
   LefEditorPlugin* self = LEF_EDITOR_PLUGIN(user_data);
@@ -110,6 +211,12 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
     response = handle_mark_texture_frame_available(self, args);
   } else if (strcmp(method, "disposeTexture") == 0) {
     response = handle_dispose_texture(self, args);
+  } else if (strcmp(method, "createTclConsole") == 0) {
+    response = handle_create_tcl_console(self, args);
+  } else if (strcmp(method, "evalTclCommand") == 0) {
+    response = handle_eval_tcl_command(self, args);
+  } else if (strcmp(method, "disposeTclConsole") == 0) {
+    response = handle_dispose_tcl_console(self, args);
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }
@@ -123,6 +230,7 @@ static void method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
 static void lef_editor_plugin_dispose(GObject* object) {
   LefEditorPlugin* self = LEF_EDITOR_PLUGIN(object);
   g_clear_pointer(&self->textures, g_hash_table_unref);
+  g_clear_pointer(&self->tcl_consoles, g_hash_table_unref);
   g_clear_object(&self->texture_registrar);
   G_OBJECT_CLASS(lef_editor_plugin_parent_class)->dispose(object);
 }
@@ -133,6 +241,19 @@ static void lef_editor_plugin_class_init(LefEditorPluginClass* klass) {
 
 static void lef_editor_plugin_init(LefEditorPlugin* self) {
   self->textures = g_hash_table_new_full(g_direct_hash, g_direct_equal, nullptr, g_object_unref);
+  // delete_tcl_bridge is only defined when LE_LINK_BACKEND_ENABLED - fine
+  // to pass nullptr (no destroy needed) otherwise, since
+  // handle_create_tcl_console never actually inserts anything into this
+  // table in that build configuration.
+  self->tcl_consoles = g_hash_table_new_full(
+      g_direct_hash, g_direct_equal, nullptr,
+#ifdef LE_LINK_BACKEND_ENABLED
+      delete_tcl_bridge
+#else
+      nullptr
+#endif
+  );
+  self->next_console_id = 0;
 }
 
 void lef_editor_plugin_register_with_registrar(FlPluginRegistrar* registrar) {

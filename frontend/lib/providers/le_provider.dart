@@ -33,15 +33,24 @@ class LePurposeInfo {
 class LeProvider extends ChangeNotifier {
   final Lock _lock = Lock();
 
-  LeProvider() {
+  // [LeEditor]'s own constructor eagerly calls dart:ffi's
+  // DynamicLibrary.open, which only resolves inside a real built app
+  // bundle - never under plain `flutter test`'s bare Dart VM (confirmed:
+  // simply constructing a default LeProvider() there throws before any
+  // test body even runs). Depending on LeEditorBase (LeEditor's own
+  // public interface - see its doc comment) instead of the concrete
+  // LeEditor lets a test inject a fake implementing that interface,
+  // sidestepping the real FFI/platform-channel calls entirely - see
+  // frontend/test/fakes/fake_le_editor.dart.
+  LeProvider({LeEditorBase? editor}) : _editor = editor ?? LeEditor() {
     _messageStream = _messageStreamController.stream;
   }
 
   final double panFactor = 0.25;
-  final LeEditor _editor = LeEditor();
+  final LeEditorBase _editor;
 
-  LeTexture? _texture;
-  LeTexture? get texture => _texture;
+  LeTextureBase? _texture;
+  LeTextureBase? get texture => _texture;
 
   final List<String> _openLefFiles = [];
 
@@ -122,7 +131,7 @@ class LeProvider extends ChangeNotifier {
   // a fresh LeTclConsole per command would mean a fresh Tcl_Interp per
   // command too (variables/state set by one command wouldn't survive to
   // the next), not what a console/REPL experience wants.
-  LeTclConsole? _tclConsole;
+  LeTclConsoleBase? _tclConsole;
 
   /// Runs one Tcl command against this provider's own editor (see
   /// TCL_EXPLORATION.md's show_gui design - LeTclConsole shares the same
@@ -326,21 +335,35 @@ class LeProvider extends ChangeNotifier {
   // short of one containing a literal, unescaped '{' or '}', which a real
   // filesystem path essentially never does.
   Future<void> readLef(String path) async {
-    _lock.synchronized(() async {
+    // Awaited (not fire-and-forget) so a caller can actually tell when the
+    // read finished, and wrapped in try/catch: without both, an exception
+    // thrown before runTclCommand's own refreshAndNotify runs (e.g. a
+    // MissingPluginException on a platform whose native side doesn't
+    // implement the Tcl console channel) used to vanish as a silently
+    // swallowed/unhandled async error - "INFO: Reading $path" would print
+    // and then nothing else ever would, with no error surfaced anywhere
+    // and the Browser/Layer Manager left permanently stale. Found via a
+    // real repro on Linux (createTclConsole not yet implemented there).
+    await _lock.synchronized(() async {
       if (_openLefFiles.contains(path)) {
         _messageStreamController.add("ERROR: $path already open");
         refreshAndNotify();
         return;
       }
       _messageStreamController.add("INFO: Reading $path");
-      final result = await runTclCommand('read_lef {$path}');
-      // On failure, the backend's own le_message_count/le_message_at
-      // queue already has a more specific error (e.g. "ERROR: Could not
-      // open LEF file ..." or a real parser diagnostic) - runTclCommand's
-      // own refreshAndNotify (via refreshMessages) already pulled it in,
-      // so no generic fallback message is added here.
-      if (int.tryParse(result) == 0) {
-        _openLefFiles.add(path);
+      try {
+        final result = await runTclCommand('read_lef {$path}');
+        // On failure, the backend's own le_message_count/le_message_at
+        // queue already has a more specific error (e.g. "ERROR: Could not
+        // open LEF file ..." or a real parser diagnostic) - runTclCommand's
+        // own refreshAndNotify (via refreshMessages) already pulled it in,
+        // so no generic fallback message is added here.
+        if (int.tryParse(result) == 0) {
+          _openLefFiles.add(path);
+        }
+      } catch (e) {
+        _messageStreamController.add("ERROR: $path: $e");
+        refreshAndNotify();
       }
     });
   }

@@ -2,20 +2,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Objective-C++ wrapper around one embedded Tcl interpreter, sharing the
-/// same `LeHandle*` (see backend/src/api/api.hpp) the Dart-owned `LeEditor`
-/// already created - see TCL_EXPLORATION.md's show_gui section for the
-/// full design rationale.
-///
-/// Unlike `backend/src/tcl/le_shell.cpp` (a `Tcl_Main`-based standalone
-/// binary, owning the whole process and its own blocking event loop),
-/// this class embeds Tcl as a plain library: one `Tcl_Interp*`, evaluated
-/// synchronously one command at a time via `-evalTcl:`, called from
-/// whatever thread the owning method channel handler already runs on
-/// (the platform thread - see `LefEditorPlugin.swift`). There is no
-/// second event loop here to reconcile with Cocoa's own run loop, which
-/// is exactly why this embedding direction was chosen over embedding a
-/// FlutterEngine inside a Tcl process instead.
+/// Thin Objective-C++ wrapper around `le::TclBridge` (`../../src/le_tcl_bridge.hpp`)
+/// - the actual embedded-Tcl-interpreter logic is plain C++, shared
+/// verbatim with Linux's own `lef_editor_plugin.cc` (see that file's
+/// createTclConsole/evalTclCommand/disposeTclConsole cases); this class
+/// only owns the NSString<->std::string marshaling and the
+/// LE_TCL_MODULE_PATH/LE_TCL_PROCS_PATH macOS-specific path injection (see
+/// `.mm`). See TCL_EXPLORATION.md's show_gui section for the full design
+/// rationale.
 @interface LeTclBridge : NSObject
 
 /// Creates a fresh `Tcl_Interp`, loads the SWIG-built `le_tcl` module,

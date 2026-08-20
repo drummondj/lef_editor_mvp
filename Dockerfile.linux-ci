@@ -167,3 +167,27 @@ CMD ["bash", "-c", "\
     flutter test && \
     flutter build linux \
 "]
+
+# ---- frontend-gui: runs the built app for real, visible via VNC - not a
+# CI stage. XQuartz (macOS host X server) can't be used directly: its GLX
+# implementation fails Flutter Linux's own OpenGL context creation
+# ("No matching fbConfigs or visuals found") regardless of
+# LIBGL_ALWAYS_SOFTWARE, so the compositor never initializes and the app
+# spins forever failing every fl_compositor_* call - confirmed by trying
+# it. Xvfb (a virtual X server *inside* this container) plus Mesa's own
+# llvmpipe software rasterizer sidesteps XQuartz's GLX entirely - x11vnc
+# then exposes that virtual display over the network so any VNC client
+# (macOS Screen Sharing: `open vnc://localhost:5900`) can view/interact
+# with it. ----
+FROM frontend AS frontend-gui
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb x11vnc \
+ && rm -rf /var/lib/apt/lists/*
+CMD ["bash", "-c", "\
+    Xvfb :99 -screen 0 1280x800x24 & \
+    sleep 1 && \
+    x11vnc -display :99 -forever -shared -nopw -quiet -rfbport 5900 & \
+    export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 && \
+    cd build/linux/*/release/bundle && \
+    ./lef_editor \
+"]

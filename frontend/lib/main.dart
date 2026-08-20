@@ -8,12 +8,24 @@ void main() {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  /// Overrides the real (production) [LeProvider] this widget would
+  /// otherwise construct itself - for tests only, so a widget test can
+  /// inject one built with a fake [LeEditorBase] (see
+  /// test/fakes/fake_le_editor.dart) instead of the real [LeEditor],
+  /// whose constructor isn't safe to call outside a real built app (see
+  /// LeEditorBase's own doc comment).
+  const MyApp({super.key, this.provider});
+
+  final LeProvider? provider;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
-      providers: [ChangeNotifierProvider(create: (context) => LeProvider())],
+      providers: [
+        provider != null
+            ? ChangeNotifierProvider<LeProvider>.value(value: provider!)
+            : ChangeNotifierProvider(create: (context) => LeProvider()),
+      ],
       child: MaterialApp(
         title: 'LEF Editor',
         home: const Home(),

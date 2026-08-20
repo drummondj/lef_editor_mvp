@@ -69,6 +69,32 @@ if(LE_LINK_BACKEND)
     spdlog::spdlog fmt::fmt
     z
   )
+
+  # ../src/le_tcl_bridge.{hpp,cpp} - the plain-C++ embedded-Tcl-console
+  # core shared verbatim with macOS's own LeTclBridge.mm (a thin
+  # Objective-C++ wrapper around the same class) - see that file's own
+  # comment and TCL_EXPLORATION.md's show_gui section. Only needed here
+  # (not by the FFI shared library in ../src/CMakeLists.txt) since it's
+  # this target's own method-channel handler
+  # (createTclConsole/evalTclCommand/disposeTclConsole below) that
+  # constructs le::TclBridge instances, not the FFI side. le_tcl.so/
+  # le_tcl_procs.tcl come from backend's own *Debug* tree (LE_BACKEND_TCL_BUILD,
+  # matching build-linux's own naming - see Dockerfile.linux-ci), not
+  # LE_BACKEND_BUILD (Release) like everything else above - unlike
+  # api/render/io (hot render-path code), le_tcl only interprets a
+  # handful of typed commands per keystroke, so Debug-build overhead here
+  # is irrelevant, and this avoids needing le_tcl added to the Release
+  # tree at all (mirrors ../macos/lef_editor_plugin.podspec's own choice).
+  find_package(TCL REQUIRED)
+  set(LE_BACKEND_TCL_BUILD "${LE_BACKEND_DIR}/build-linux" CACHE PATH
+      "Path to the backend's own Debug CMake build directory, providing le_tcl.so")
+  target_sources(${PLUGIN_NAME} PRIVATE "../src/le_tcl_bridge.cpp")
+  target_include_directories(${PLUGIN_NAME} PRIVATE ../src ${TCL_INCLUDE_PATH})
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE
+    LE_TCL_MODULE_PATH="${LE_BACKEND_TCL_BUILD}/le_tcl.so"
+    LE_TCL_PROCS_PATH="${LE_BACKEND_DIR}/src/tcl/le_tcl_procs.tcl"
+  )
+  target_link_libraries(${PLUGIN_NAME} PRIVATE ${TCL_LIBRARY})
 endif()
 
 # List of absolute paths to libraries that should be bundled with the plugin.
