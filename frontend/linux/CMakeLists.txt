@@ -13,6 +13,33 @@ set(APPLICATION_ID "com.synthosilicon.lef_editor")
 # versions of CMake.
 cmake_policy(SET CMP0063 NEW)
 
+# lef_editor_plugin's own default for this is OFF (see
+# ../../flutter_plugin/src/CMakeLists.txt's own comment) - it was written
+# before backend had a working Linux Skia checkout or fontconfig SkFontMgr,
+# so a plain `flutter build linux` could still succeed with an empty stub
+# rather than failing on a link that couldn't work yet anyway. Both of
+# those backend gaps are closed now (see Dockerfile.linux-ci/CI backend
+# fixes), so this actual consuming app should always link the real
+# backend on Linux, same as ../macos/lef_editor_plugin.podspec always does
+# unconditionally. LE_BACKEND_BUILD overridden to build_release-linux -
+# the plugin's own default (build_release) is the macOS-native tree name;
+# see backend/Dockerfile.linux-ci for why the Linux trees are named
+# differently. LE_BACKEND_DIR is *also* overridden, not left at the
+# plugin's own default - that default is relative to the plugin's own
+# CMAKE_CURRENT_SOURCE_DIR, but Flutter symlinks a consumed plugin in
+# under flutter/ephemeral/.plugin_symlinks/lef_editor_plugin/, which has
+# no `backend` sibling, so a relative `../../backend` computed from
+# *there* resolves to a path that doesn't exist (confirmed: "liblef.a
+# ... missing and no known rule to make it"). This file's own
+# CMAKE_CURRENT_SOURCE_DIR isn't symlinked, so computing the same
+# relative path from here instead works. LE_SKIA_DIR keeps the plugin's
+# own default ($ENV{SKIA_DIR}, set by Dockerfile.linux-ci's backend
+# stage) - unaffected by this, since it doesn't depend on
+# CMAKE_CURRENT_SOURCE_DIR at all.
+set(LE_LINK_BACKEND ON CACHE BOOL "" FORCE)
+set(LE_BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../backend" CACHE PATH "" FORCE)
+set(LE_BACKEND_BUILD "${CMAKE_CURRENT_SOURCE_DIR}/../../backend/build_release-linux" CACHE PATH "" FORCE)
+
 # Load bundled libraries from the lib/ directory relative to the binary.
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
 

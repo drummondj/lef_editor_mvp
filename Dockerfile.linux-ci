@@ -131,8 +131,16 @@ CMD ["bash", "-c", "\
 "]
 
 # ---- flutter-plugin: adds the Flutter SDK + GTK3 (needed to compile the
-# Linux embedder plugin) on top of the backend toolchain, and attempts the
-# native plugin link for the first time (LE_LINK_BACKEND=ON). ----
+# Linux embedder plugin) on top of the backend toolchain. Dart-level checks
+# only (pub get/analyze/test) - there's no such thing as a standalone
+# native build of this plugin's own linux/ folder: apply_standard_settings
+# (linux/CMakeLists.txt) is a function Flutter's tooling only injects when
+# a plugin is configured as a subdirectory of a real app's own
+# `flutter build linux` (confirmed by trying it directly here first - fails
+# with "Unknown CMake command apply_standard_settings"). The real native
+# link/texture verification happens in the frontend stage below, which
+# builds the actual consuming app - see flutter_plugin's own build-test
+# skill, step 3. ----
 FROM backend AS flutter-plugin
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-3-dev liblzma-dev \
@@ -145,12 +153,8 @@ RUN flutter config --enable-linux-desktop --no-analytics && flutter precache --l
 WORKDIR /workspace/flutter_plugin
 CMD ["bash", "-c", "\
     flutter pub get && \
-    cmake -S linux -B build/linux \
-        -DLE_LINK_BACKEND=ON \
-        -DLE_BACKEND_DIR=/workspace/backend \
-        -DLE_BACKEND_BUILD=/workspace/backend/build_release-linux \
-        -DLE_SKIA_DIR=${SKIA_DIR} && \
-    cmake --build build/linux -j ${BACKEND_BUILD_JOBS} \
+    dart analyze && \
+    flutter test \
 "]
 
 # ---- frontend: the actual Flutter app - pub get/analyze/test, then a

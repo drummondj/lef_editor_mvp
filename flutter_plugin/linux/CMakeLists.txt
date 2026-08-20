@@ -47,7 +47,17 @@ if(LE_LINK_BACKEND)
   # LE_LINK_BACKEND/LE_BACKEND_DIR/LE_BACKEND_BUILD/LE_SKIA_DIR are all
   # defined in ../src/CMakeLists.txt, already processed by the
   # add_subdirectory(../src) call above - CMake cache variables are
-  # global, not scoped to the directory that defined them.
+  # global, not scoped to the directory that defined them. The
+  # spdlog::spdlog/fmt::fmt IMPORTED targets those find_package() calls
+  # create are NOT global the same way, though - an imported target only
+  # propagates to the directory that called find_package() and *its own*
+  # subdirectories, never back up to a parent that add_subdirectory()'d
+  # it in (confirmed by trying it without this - "lef_editor_plugin_plugin
+  # links to spdlog::spdlog but the target was not found", even though
+  # ../src's own find_package(spdlog REQUIRED) already ran by this point).
+  # This directory needs its own find_package() calls.
+  find_package(spdlog REQUIRED)
+  find_package(fmt REQUIRED)
   target_compile_definitions(${PLUGIN_NAME} PRIVATE LE_LINK_BACKEND_ENABLED)
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     "-Wl,--whole-archive" "${LE_BACKEND_BUILD}/libapi.a" "-Wl,--no-whole-archive"

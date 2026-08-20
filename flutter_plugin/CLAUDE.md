@@ -148,20 +148,41 @@ Two separate paths call into the C API — not one:
 
 ## Open design questions
 
-- **Linux is a real, tracked gap, not just unwired.** `src/CMakeLists.txt`
-  and `linux/CMakeLists.txt` both have an `LE_LINK_BACKEND` option (default
-  `OFF`) that mirrors the macOS link recipe, but turning it on won't
-  actually work yet: backend's `Renderer::default_typeface()` is
-  CoreText-backed (macOS only — see backend/CLAUDE.md's `render` entry; a
-  Linux fontconfig/FreeType `SkFontMgr` is a tracked, not-yet-done backend
-  gap), and no Linux Skia checkout exists on this dev machine either (see
-  backend/CLAUDE.md's "Open gaps"). The Linux texture/plugin code itself
-  (`linux/lef_editor_plugin.cc`, `linux/lef_texture.cc`) is written against
-  the real vendored Flutter Linux embedder headers but has **never been
-  compiled** — there's no Linux toolchain/GTK on this dev machine, so it's
-  unverified structurally-correct-by-inspection, not proven. Revisit
-  `LE_LINK_BACKEND` once both backend gaps land, and build it for real on
-  an actual Linux machine before trusting it further.
+- **Linux native link: now built and verified (via Docker CI), not just
+  written.** Both backend gaps that used to block this (CoreText-only
+  `Renderer::default_typeface()`, no Linux Skia checkout) are closed — see
+  backend/CLAUDE.md's `render` entry and "Open gaps". `LE_LINK_BACKEND`
+  (`src/CMakeLists.txt`) still defaults `OFF` (a plain `flutter build
+  linux` from a bare checkout has no backend build/Skia checkout to link
+  against), but `../frontend/linux/CMakeLists.txt` forces it `ON` and
+  `docker compose run frontend` (repo root `Dockerfile.linux-ci`/
+  `docker-compose.yml`) now builds it for real: `flutter build linux`
+  succeeds, and `nm -D` on the built `liblef_editor_plugin_plugin.so`
+  shows the full `le_*()` surface, including `le_render_pixel_buffer`
+  itself (same verification standard as macOS's own `nm -gU` check below).
+  Getting there past "structurally plausible" surfaced three real bugs,
+  not found by inspection:
+  - `linux/CMakeLists.txt`'s own `apply_standard_settings` call only
+    resolves when this plugin is configured as a subdirectory of a real
+    app's `flutter build linux` — Flutter's tooling injects that function
+    from the app's own `flutter/CMakeLists.txt`, so there's no such thing
+    as configuring this plugin's `linux/` folder standalone.
+  - `linux/CMakeLists.txt`'s `LE_LINK_BACKEND` block links
+    `spdlog::spdlog`/`fmt::fmt` but never called `find_package()` for
+    either itself — `../src/CMakeLists.txt`'s own `find_package()` calls
+    don't propagate their imported targets back up from the child
+    `add_subdirectory` to this parent directory.
+  - `src/CMakeLists.txt`'s own `LE_BACKEND_DIR`/`LE_BACKEND_BUILD`
+    defaults are relative to *that file's* `CMAKE_CURRENT_SOURCE_DIR`,
+    which resolves through Flutter's `flutter/ephemeral/.plugin_symlinks/
+    lef_editor_plugin/` symlink when consumed by a real app — a relative
+    `../../backend` from there lands on a path that doesn't exist. A real
+    consuming app's own `linux/CMakeLists.txt` (not symlinked) has to
+    override both to an absolute-from-itself path instead.
+  Still true: the frontend app itself doesn't yet call `LeEditor`/display
+  a `Texture` from `home.dart` (see `../frontend/CLAUDE.md`'s "Current
+  state"), so a built-and-run Linux app has nothing to actually render
+  yet — this closes the *link*, not the end-to-end visual.
 - **Packaging.** Backend depends on a machine-specific Skia checkout plus
   Homebrew Boost/spdlog/fmt/harfbuzz/icu4c/jpeg/png/webp (see backend
   CLAUDE.md's "Open gaps") — none of that is redistributable as-is, and the
@@ -169,7 +190,7 @@ Two separate paths call into the C API — not one:
   Not a blocker for local dev; is a blocker before this plugin could ship
   to a machine that isn't this one.
 
-## Native linking (macOS — done and verified; Linux — gated, unverified)
+## Native linking (macOS — done and verified; Linux — done and verified via Docker CI)
 
 `api.hpp`'s `le_*()` functions are implemented in `backend/src/api/api.cpp`
 and compiled by backend's *own* CMake build (`../backend/build_release/libapi.a`
@@ -219,11 +240,11 @@ rebuilt before running `ctest`.
 - `src/CMakeLists.txt` / `linux/CMakeLists.txt` (Linux) — same recipe via
   `LE_LINK_BACKEND` (`--whole-archive` instead of `-force_load`;
   `pkg_check_modules` instead of hardcoded Homebrew paths; `LE_BACKEND_BUILD`
-  also defaults to `build_release`, same reasoning). Structurally
-  validated (`cmake -S src -B <dir> -DLE_LINK_BACKEND=ON` gets past syntax
-  and cache-variable setup and fails only at `find_package(PkgConfig)`,
-  which this macOS dev machine doesn't have) but not build-verified — see
-  Open design questions above.
+  also defaults to `build_release`, same reasoning). Build-verified via
+  Docker CI (`docker compose run frontend` at the repo root, forcing
+  `LE_LINK_BACKEND ON` from `../frontend/linux/CMakeLists.txt`) — see Open
+  design questions above for the three real bugs that surfaced getting
+  there and aren't visible from reading this file alone.
 
 ### Why macOS needs a pixel copy+swizzle, not just a copy
 
@@ -296,7 +317,8 @@ useful compile-time signal):
   `lef_editor_plugin.c` (the FFI forwarder, unrelated to the texture path).
 - `linux/` — `lef_editor_plugin.cc`/`include/lef_editor_plugin/lef_editor_plugin.h`
   (method channel), `lef_texture.cc`/`.h` (`FlPixelBufferTexture`) — same
-  protocol as macOS, **unverified** (see Open design questions).
+  protocol as macOS, **build-verified via Docker CI** (see Open design
+  questions).
 
 ## Skills
 

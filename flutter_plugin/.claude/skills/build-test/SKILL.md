@@ -70,19 +70,26 @@ rm -rf macos/Pods macos/Podfile.lock
 flutter build macos --debug
 ```
 
-## 4. Linux — cannot be built or run here
+## 4. Linux — build via Docker CI, not on this machine directly
 
-`src/CMakeLists.txt`/`linux/CMakeLists.txt`'s `LE_LINK_BACKEND` option is
-`OFF` by default and genuinely can't be turned on successfully yet — see
-this plugin's CLAUDE.md's "Open design questions" for the real upstream
-blockers (backend's CoreText-only font manager, no Linux Skia checkout).
-Beyond that, this dev machine has no Linux toolchain/GTK at all, so
-`linux/lef_editor_plugin.cc`/`lef_texture.cc` have never been compiled,
-only written against the real vendored Flutter Linux embedder headers
-(`/Users/john/Projects/flutter/engine/src/flutter/shell/platform/linux/public/flutter_linux/`
-on this machine, if that checkout is still present). Don't spend time
-debugging a Linux build failure here without first checking whether the
-backend gaps have landed *and* you're actually on a Linux machine.
+This dev machine has no Linux toolchain/GTK, so `linux/lef_editor_plugin.cc`/
+`lef_texture.cc` can't be compiled here directly. Use the repo root's
+`Dockerfile.linux-ci`/`docker-compose.yml` instead:
+`docker compose run --rm frontend` runs `frontend`'s own
+`flutter pub get && flutter analyze && flutter test && flutter build linux`
+inside a real Linux container with the backend already built there (see
+`backend`'s own `build-test` skill) — `LE_LINK_BACKEND` is forced `ON` by
+`../frontend/linux/CMakeLists.txt` (this plugin's own `LE_LINK_BACKEND`
+default is still `OFF`, since a bare checkout has nothing built to link
+against). This is build-verified as of this plugin's CLAUDE.md's "Open
+design questions" - see that section for the three real bugs (a
+standalone-vs-app-subdirectory CMake gotcha, missing `find_package()`
+calls, and a Flutter-plugin-symlink path gotcha) that only surfaced by
+actually building it, not by reading the CMake files. Don't attempt
+`cmake -S linux -B ...` directly against this plugin's own `linux/`
+folder — `apply_standard_settings` only exists when this plugin is
+configured as a subdirectory of a real app's `flutter build linux`, so a
+standalone configure of `linux/` always fails, app build or not.
 
 ## 5. Reporting
 
