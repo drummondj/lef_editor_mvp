@@ -61,7 +61,18 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # dependency closure) without root via `dnf download`, then rpm2cpio|cpio
 # every downloaded .rpm into $LE_ROOT without installing anything. Safe to
 # call more than once for the same package - re-downloads are cheap and
-# re-extraction is idempotent (cpio just overwrites the same files). ---
+# re-extraction is idempotent (cpio just overwrites the same files).
+# Unconditional - always fetches/extracts regardless of what's already on
+# the system. Only meant for packages where that's actually the right
+# call (see extract_rpm_closure_if_missing below for the alternative, and
+# stage_rpms's own comments for which packages need which): the compiler
+# and CMake/Skia's own vendored-vs-system choices are pinned to a *known*
+# version deliberately, because RHEL8's own stock versions of those are
+# either too old to work at all (GCC 8.5 has no real C++20/23 support) or
+# a real, specific version-skew risk already reasoned through elsewhere
+# (RHEL8's harfbuzz/icu vs. a modern Skia commit) - "is something already
+# installed" isn't a good enough question for those; the actual version
+# matters, not just presence. ---
 extract_rpm_closure() {
     local pkg="$1"; shift
     local extra_repo_args=("$@")
@@ -89,6 +100,28 @@ extract_rpm_closure() {
     ok "$pkg (+ dependency closure)"
 }
 
+# --- Same as extract_rpm_closure, but skips entirely if $pkg is already
+# installed on the system (`rpm -q`, works without root - just a query,
+# not an install). For version-stable packages where basically any
+# version RHEL8 would have packaged at all is good enough (GTK3 + its
+# closure, Tcl/Tk, the Skia system-linked subset) - unlike
+# extract_rpm_closure's own callers, there's no specific minimum version
+# these need beyond "exists". Checking only the top-level package, not
+# its transitive closure, is deliberately sufficient: dnf/rpm itself
+# already enforces that a properly-installed package's own declared
+# dependencies are satisfied, so if $pkg shows as installed at all, its
+# closure is already present too - no need to re-derive and re-check it
+# ourselves. If $pkg is missing OR too old for what's actually needed,
+# falls through to a real extract_rpm_closure call. ---
+extract_rpm_closure_if_missing() {
+    local pkg="$1"
+    if rpm -q "$pkg" >/dev/null 2>&1; then
+        ok "$pkg already installed on this system ($(rpm -q "$pkg")) - skipping download/extract"
+        return 0
+    fi
+    extract_rpm_closure "$@"
+}
+
 stage_check_tools() {
     log "checking for dnf/rpm2cpio/cpio/curl/git - required by this script itself"
     local missing=()
@@ -111,19 +144,36 @@ stage_check_tools() {
 stage_rpms() {
     log "Stage: RPM-extracted dependencies (compiler, Tcl/Tk, GTK3 + closure, Skia's system-linked subset)"
 
-    # --- Compiler: gcc-toolset-13 (self-contained under /opt/rh/gcc-toolset-13) ---
+    # --- Compiler: gcc-toolset-13 (self-contained under /opt/rh/gcc-toolset-13).
+    # Always extracted regardless of what's already installed - RHEL8's
+    # stock GCC (8.5) can't do C++20/23 at all, so "is a compiler already
+    # present" isn't the right question; it has to be *this* version. ---
     extract_rpm_closure gcc-toolset-13-gcc-c++ || return 1
     extract_rpm_closure gcc-toolset-13-libstdc++-devel || return 1
     extract_rpm_closure gcc-toolset-13-binutils || return 1
     extract_rpm_closure gcc-toolset-13-make || return 1
+
+    # --- Everything below this point is a version-stable package where
+    # "is it already installed" is a good enough question - basically any
+    # version RHEL8 would have packaged works fine for these, unlike the
+    # compiler above or Skia's harfbuzz/icu/libwebp/expat choice (a real,
+    # specific version-skew concern, handled separately via
+    # LE_SKIA_VENDORS_THIRD_PARTY - see backend/CMakeLists.txt's own
+    # comment). Checked via extract_rpm_closure_if_missing (see its own
+    # comment) rather than unconditionally extracting a redundant private
+    # copy on top of a perfectly good system one - a real, if harmless,
+    # waste this stage used to always pay regardless of what the machine
+    # already had, especially likely for GTK3's own large closure on a
+    # machine that (per its confirmed real display) probably already has
+    # a working desktop GTK3 stack. ---
 
     # --- Tcl/Tk (real runtime need - le_tcl_bridge.cpp #includes tcl.h
     # directly, and the le_tcl SWIG target links against it) - likely
     # behind the crb repo (Rocky's name for RHEL's
     # codeready-builder-for-rhel-8-*-rpms - verify the repo id on the real
     # machine if this fails; it varies by RHEL-family distro/variant). ---
-    extract_rpm_closure tcl-devel --enablerepo=crb || return 1
-    extract_rpm_closure tk-devel --enablerepo=crb || return 1
+    extract_rpm_closure_if_missing tcl-devel --enablerepo=crb || return 1
+    extract_rpm_closure_if_missing tk-devel --enablerepo=crb || return 1
 
     # --- GTK3 + transitive closure (Flutter's Linux embedder is
     # fundamentally GTK3-based). This hand list is a sanity check, not
@@ -132,11 +182,11 @@ stage_rpms() {
     # below cover things gtk3-devel's own closure may not pull in
     # directly (Mesa GL/EGL for Flutter's own compositor, separate from
     # this project's GPU-free Skia raster path). ---
-    extract_rpm_closure gtk3-devel || return 1
-    extract_rpm_closure mesa-libGL-devel || return 1
-    extract_rpm_closure mesa-libEGL-devel || return 1
-    extract_rpm_closure mesa-dri-drivers || return 1
-    extract_rpm_closure mesa-libgbm || return 1
+    extract_rpm_closure_if_missing gtk3-devel || return 1
+    extract_rpm_closure_if_missing mesa-libGL-devel || return 1
+    extract_rpm_closure_if_missing mesa-libEGL-devel || return 1
+    extract_rpm_closure_if_missing mesa-dri-drivers || return 1
+    extract_rpm_closure_if_missing mesa-libgbm || return 1
 
     # --- Skia's system-linked subset only (frozen/stable-ABI ones -
     # harfbuzz/icu/libwebp/expat are vendored from Skia's own third_party/
@@ -144,12 +194,14 @@ stage_rpms() {
     # those are old enough relative to a modern Skia commit to be a real
     # risk - see backend/CMakeLists.txt's LE_SKIA_VENDORS_THIRD_PARTY
     # comment). freetype-devel is the riskiest of this subset (RHEL8's is
-    # ~2.9.1) - first thing to also flip to vendored if Skia link/API
-    # errors mention it specifically. ---
-    extract_rpm_closure zlib-devel || return 1
-    extract_rpm_closure libpng-devel || return 1
-    extract_rpm_closure libjpeg-turbo-devel || return 1
-    extract_rpm_closure freetype-devel || return 1
+    # ~2.9.1) - if Skia link/API errors mention it specifically, that's
+    # the first thing to also flip to vendored (skia_use_system_freetype2
+    # isn't wired to LE_SKIA_VENDORS_THIRD_PARTY today - would need adding
+    # if it comes to that). ---
+    extract_rpm_closure_if_missing zlib-devel || return 1
+    extract_rpm_closure_if_missing libpng-devel || return 1
+    extract_rpm_closure_if_missing libjpeg-turbo-devel || return 1
+    extract_rpm_closure_if_missing freetype-devel || return 1
 
     ok "all RPM-extracted dependencies staged under $LE_ROOT"
 }
