@@ -5,6 +5,16 @@ cmake_minimum_required(VERSION 3.10)
 
 project(lef_editor_plugin_library VERSION 0.0.1 LANGUAGES C)
 
+# lef_editor_plugin below is already SHARED (inherently PIC), but the
+# FetchContent-built fmt/spdlog fallback further down (LE_LINK_BACKEND
+# block) builds STATIC libraries by default - linking a non-PIC static
+# archive into a shared object fails on Linux (GNU ld enforces this;
+# macOS's ld64 doesn't, so this went unnoticed there) - same class of
+# gotcha backend/CMakeLists.txt already works around globally for its own
+# targets. Must be set before those FetchContent_MakeAvailable calls
+# below, which is why it's here at the top, not next to them.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 add_library(lef_editor_plugin SHARED
   "lef_editor_plugin.c"
 )

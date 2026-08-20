@@ -270,8 +270,17 @@ target_include_directories(io
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/include
 )
 target_link_libraries(io
-    PUBLIC database geometry
-    PRIVATE spdlog::spdlog fmt::fmt lef_static
+    # spdlog PUBLIC (not PRIVATE): lef_reader.hpp - io's own PUBLIC header -
+    # #includes spdlog/spdlog.h directly, so any consumer of that header
+    # needs spdlog's include path too, not just io's own .cpp files. Went
+    # unnoticed on macOS/Ubuntu (system spdlog headers sit on a default
+    # compiler search path regardless of CMake link scope); surfaced for
+    # real on a FetchContent-built spdlog (Rocky 8, no system package) -
+    # lef_roundtrip_diff.cpp failed with spdlog/spdlog.h: No such file or
+    # directory until this was PUBLIC. fmt stays PRIVATE - only io's own
+    # .cpp files use it directly.
+    PUBLIC database geometry spdlog::spdlog
+    PRIVATE fmt::fmt lef_static
 )
 le_enable_coverage_instrumentation(io)
 

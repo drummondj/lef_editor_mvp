@@ -1,20 +1,35 @@
 # Building on Rocky Linux 8 (no root, no Docker)
 
-This is the build path for a locked-down machine with **no root access, no
-ability to install system packages, and no Docker** — concretely Rocky
-Linux 8, though the approach should carry over to other RPM-based RHEL-8
-family distros with adjustment. If you have Docker and just want a Linux
-build/test environment, use `docker compose` at the repo root instead (see
-`docker-compose.yml`'s own header comment) — that path is simpler and
-already verified working; this one is not (see the warning below).
+**Just want to run the app, not build it?** A prebuilt, portable Linux
+x86_64 release (glibc 2.28+, no build toolchain needed) is published on
+this repo's [GitHub Releases](../../releases) page — see
+`.github/workflows/release.yml`/`Dockerfile.linux-release` for how it's
+built. It still needs a desktop Linux system with GTK3/X11/Mesa/Tcl-Tk
+installed (see that workflow's own release notes) but skips everything
+below entirely, and — being built against the same glibc generation as
+Rocky 8 — will very likely run directly on this same locked-down machine.
+Worth trying first.
 
-**This has not been run against a real Rocky 8 machine.** Every RPM name,
-GN flag, and URL below is best-effort reasoning grounded in this repo's
-actual CMake/GN files, not empirical verification. Expect real failures —
-that's why every step below is logged. If you hit something you can't
-resolve yourself, send back the relevant log file(s) (paths given at each
-step) rather than just the terminal output you can see, since the logs
-capture more than what scrolls past.
+This is the build-from-source path for a locked-down machine with **no
+root access, no ability to install system packages, and no Docker** —
+concretely Rocky Linux 8, though the approach should carry over to other
+RPM-based RHEL-8 family distros with adjustment. If you have Docker and
+just want a Linux build/test environment, use `docker compose` at the repo
+root instead (see `docker-compose.yml`'s own header comment) — that path
+is simpler and already verified working; this one is closer to it but
+still being iterated on (see the warning below).
+
+**This is still being verified against a real Rocky 8 machine, in
+progress as of this writing.** Every RPM name, GN flag, and URL below
+started as best-effort reasoning grounded in this repo's actual CMake/GN
+files, not empirical verification — several real issues already found and
+fixed this way (a redundant `filesystem` RPM extraction, RHEL8's bison
+being too old for SWIG's grammar) — but it hasn't reached a full,
+confirmed end-to-end run yet. Expect real failures — that's why every step
+below is logged. If you hit something you can't resolve yourself, send
+back the relevant log file(s) (paths given at each step) rather than just
+the terminal output you can see, since the logs capture more than what
+scrolls past.
 
 All logs land under one place: `$LE_TOOLCHAIN_ROOT/logs/` (default
 `~/.local/lef_editor_toolchain/logs/`, see step 1). Each step below names
@@ -77,7 +92,7 @@ complete — go back and fix that first.
 ```
 cd backend
 
-cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Debug -DSKIA_DIR="${SKIA_DIR}" \
+cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Debug -DSKIA_DIR="${SKIA_DIR}" -DLE_SKIA_VENDORS_THIRD_PARTY=ON \
     2>&1 | tee "$LE_TOOLCHAIN_ROOT/logs/backend-configure-debug.log"
 
 cmake --build build-linux -j \
@@ -86,12 +101,21 @@ cmake --build build-linux -j \
 ctest --test-dir build-linux --output-on-failure \
     2>&1 | tee "$LE_TOOLCHAIN_ROOT/logs/backend-ctest.log"
 
-cmake -S . -B build_release-linux -DCMAKE_BUILD_TYPE=Release -DSKIA_DIR="${SKIA_DIR}" \
+cmake -S . -B build_release-linux -DCMAKE_BUILD_TYPE=Release -DSKIA_DIR="${SKIA_DIR}" -DLE_SKIA_VENDORS_THIRD_PARTY=ON \
     2>&1 | tee "$LE_TOOLCHAIN_ROOT/logs/backend-configure-release.log"
 
 cmake --build build_release-linux --target api render io -j \
     2>&1 | tee "$LE_TOOLCHAIN_ROOT/logs/backend-build-release.log"
 ```
+
+`-DLE_SKIA_VENDORS_THIRD_PARTY=ON` must be passed explicitly at configure
+time, both times — `rocky8-env.sh` also sets it as a shell `ENV` var, but
+that alone does nothing: `backend/CMakeLists.txt`'s `option(...)` never
+reads `$ENV{LE_SKIA_VENDORS_THIRD_PARTY}`, only an actual `-D` flag. Left
+off, CMake defaults it OFF and tries to link a system `libwebp`/`libjpeg`
+that Skia bundled instead — a real `-lwebp: No such file or directory`
+link failure, found via the new GitHub Releases build path (see
+`.github/workflows/release.yml`) hitting exactly this.
 
 Two trees on purpose: `build-linux` (Debug) is what `ctest` runs against;
 `build_release-linux` (Release) is what the actual GUI app links — see

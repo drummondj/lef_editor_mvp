@@ -7,6 +7,17 @@ cmake_minimum_required(VERSION 3.10)
 set(PROJECT_NAME "lef_editor_plugin")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
+# lef_editor_plugin_plugin below is SHARED (inherently PIC), but the
+# FetchContent-built fmt/spdlog fallback further down (LE_LINK_BACKEND
+# block) builds STATIC libraries by default - linking a non-PIC static
+# archive into a shared object fails on Linux (GNU ld enforces this;
+# confirmed via a real "relocation R_X86_64_32S against '.data' can not be
+# used when making a shared object; recompile with -fPIC" failure on
+# libspdlog.a without this). Must be set before those
+# FetchContent_MakeAvailable calls below, which is why it's here at the
+# top, not next to them.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Invoke the build for native code shared with the other target platforms.
 # This can be changed to accommodate different builds.
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../src" "${CMAKE_CURRENT_BINARY_DIR}/shared")
