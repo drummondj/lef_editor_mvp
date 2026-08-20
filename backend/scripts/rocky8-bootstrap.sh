@@ -85,7 +85,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # on mkdir, so as a non-root user every subsequent attempt to create
 # anything under those paths (even by the owning user) fails EACCES. Add
 # another package name here if a future closure hits the same pattern.
-RPM_SKIP_PACKAGES=(filesystem)
+RPM_SKIP_PACKAGES=()
 
 extract_rpm_closure() {
     local pkg="$1"; shift
@@ -97,8 +97,8 @@ extract_rpm_closure() {
     for skip in "${RPM_SKIP_PACKAGES[@]}"; do
         exclude_args+=(--exclude="$skip")
     done
-    log "dnf download --resolve --alldeps ${exclude_args[*]} ${extra_repo_args[*]:-} $pkg"
-    if ! dnf download --resolve --alldeps "${exclude_args[@]}" --destdir="$dest" "${extra_repo_args[@]}" "$pkg" 2>&1; then
+    log "dnf download --resolve ${exclude_args[*]} ${extra_repo_args[*]:-} $pkg"
+    if ! dnf download --resolve "${exclude_args[@]}" --destdir="$dest" "${extra_repo_args[@]}" "$pkg" 2>&1; then
         fail "dnf download failed for $pkg - is it reachable? See this script's fail-fast checks in the plan this came from (dnf repo reachability, crb/PowerTools enablement)."
         return 1
     fi
@@ -118,8 +118,8 @@ extract_rpm_closure() {
                 continue 2
             fi
         done
-        (cd "$LE_ROOT" && rpm2cpio "$rpm" | cpio -idmu --quiet) || {
-            fail "rpm2cpio|cpio failed for $rpm"
+        (cd "$LE_ROOT" && rpm2archive "$rpm" && tar -zxf $rpm.tgz --no-same-owner --no-same-permissions  ) || {
+            fail "rpm2archive|tar failed for $rpm"
             return 1
         }
     done
@@ -177,7 +177,7 @@ stage_rpms() {
     extract_rpm_closure gcc-toolset-13-gcc-c++ || return 1
     extract_rpm_closure gcc-toolset-13-libstdc++-devel || return 1
     extract_rpm_closure gcc-toolset-13-binutils || return 1
-    extract_rpm_closure gcc-toolset-13-make || return 1
+    # extract_rpm_closure gcc-toolset-13-make || return 1
 
     # --- Everything below this point is a version-stable package where
     # "is it already installed" is a good enough question - basically any
@@ -198,8 +198,10 @@ stage_rpms() {
     # behind the crb repo (Rocky's name for RHEL's
     # codeready-builder-for-rhel-8-*-rpms - verify the repo id on the real
     # machine if this fails; it varies by RHEL-family distro/variant). ---
-    extract_rpm_closure_if_missing tcl-devel --enablerepo=crb || return 1
-    extract_rpm_closure_if_missing tk-devel --enablerepo=crb || return 1
+    # extract_rpm_closure_if_missing tcl-devel --enablerepo=crb || return 1
+    # extract_rpm_closure_if_missing tk-devel --enablerepo=crb || return 1
+    extract_rpm_closure_if_missing tcl-devel || return 1
+    extract_rpm_closure_if_missing tk-devel || return 1
 
     # --- GTK3 + transitive closure (Flutter's Linux embedder is
     # fundamentally GTK3-based). This hand list is a sanity check, not
