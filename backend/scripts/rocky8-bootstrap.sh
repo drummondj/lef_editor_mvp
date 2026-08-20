@@ -289,30 +289,32 @@ stage_boost() {
 }
 
 stage_bison() {
-    local tag="v3.8.2"
-    local src_dir="$LE_TOOLCHAIN_ROOT/bison-src"
+    local version="3.8.2"
     if [ -x "$LE_ROOT/usr/bin/bison" ]; then
         ok "bison already present at $LE_ROOT/usr/bin/bison (skipping - remove that file to force a rebuild)"
         return 0
     fi
-    log "cloning/building GNU Bison $tag from https://github.com/akimd/bison.git (akimd is bison's actual upstream maintainer - used instead of ftp.gnu.org's release tarball since only github.com is reachable from this network). RHEL8's own bison is 3.0.4; SWIG 4.2.1's grammar declares '%require \"3.5\"' in Source/CParse/parser.y - confirmed by a real build failure: 'error: require bison 3.5, but have 3.0.4'. Unlike the official release tarball, a raw git clone has no pre-generated parser/configure files - ./bootstrap (run below) regenerates them, which itself needs network access for gnulib (typically a git submodule) plus autoconf/automake/gettext/makeinfo already on the system; if this stage fails specifically inside the bootstrap step, that combination is the likely cause - see this stage's own output for exactly what's missing or unreachable."
+    log "building GNU Bison $version from source (RHEL8's own bison is 3.0.4; SWIG 4.2.1's grammar declares '%require \"3.5\"' in Source/CParse/parser.y, and no newer bison ships in RHEL8's default or CRB repos - confirmed by a real build failure: 'error: require bison 3.5, but have 3.0.4')"
     if [ -z "${CC:-}" ] || [ -z "${CXX:-}" ]; then
         fail "CC/CXX not set - run the gcc-toolset stage (part of 'rpms') and 'source backend/scripts/rocky8-env.sh' before running this stage"
         return 1
     fi
-    if [ ! -d "$src_dir/.git" ]; then
-        git clone https://github.com/akimd/bison.git "$src_dir" || { fail "clone failed - is github.com reachable?"; return 1; }
+    local src_dir="$STAGE_DOWNLOADS/bison-$version"
+    if [ ! -d "$src_dir" ]; then
+        local tarball="$STAGE_DOWNLOADS/bison-$version.tar.gz"
+        curl -fL -o "$tarball" \
+            "https://ftp.gnu.org/gnu/bison/bison-$version.tar.gz" \
+            || { fail "download failed - is ftp.gnu.org reachable?"; return 1; }
+        mkdir -p "$src_dir"
+        tar -xzf "$tarball" -C "$src_dir" --strip-components=1 || { fail "extract failed"; return 1; }
     fi
     (
         cd "$src_dir" &&
-        git fetch --tags &&
-        git checkout "$tag" &&
-        { [ -x ./bootstrap ] && ./bootstrap || autoreconf -fi; } &&
         ./configure --prefix="$LE_ROOT/usr" &&
         make -j "$(nproc)" &&
         make install
     ) || { fail "bison build failed - see output above"; return 1; }
-    ok "bison $tag -> $LE_ROOT/usr/bin/bison"
+    ok "bison $version -> $LE_ROOT/usr/bin/bison"
 }
 
 stage_swig() {
@@ -366,10 +368,10 @@ stage_skia() {
         fail "CC/CXX not set - source backend/scripts/rocky8-env.sh (after the rpms/cmake/ninja/swig stages) before running this stage"
         return 1
     fi
-    log "cloning/building Skia (raster-only, no GPU backend - matches this project's macOS/Docker Skia builds exactly, see Dockerfile.linux-ci). Cloned from https://github.com/google/skia.git - Google's official read-only GitHub mirror, same commit SHAs as skia.googlesource.com - used since only github.com is reachable from this network. Note this only covers the top-level Skia repo: 'git-sync-deps' below still resolves third_party/ dependencies from whatever hosts Skia's own DEPS file points at (typically *.googlesource.com), so it may still fail here even though the clone itself succeeds - if so, that's a separate reachability question to raise, not a bug in this URL swap."
+    log "cloning/building Skia (raster-only, no GPU backend - matches this project's macOS/Docker Skia builds exactly, see Dockerfile.linux-ci)"
     mkdir -p "$dir"
     if [ ! -d "$skia_dir/.git" ]; then
-        git clone https://github.com/google/skia.git "$skia_dir" || { fail "clone failed - is github.com reachable?"; return 1; }
+        git clone https://skia.googlesource.com/skia.git "$skia_dir" || { fail "clone failed - is skia.googlesource.com reachable?"; return 1; }
     fi
     (
         cd "$skia_dir" &&
