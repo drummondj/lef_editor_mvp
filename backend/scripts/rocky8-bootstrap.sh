@@ -40,7 +40,7 @@ STAGE_DOWNLOADS="$LE_TOOLCHAIN_ROOT/.rpm-downloads"
 LE_ROOT="$LE_TOOLCHAIN_ROOT/root"
 LOG_DIR="$LE_TOOLCHAIN_ROOT/logs"
 
-STAGE_NAMES=(check-tools rpms cmake ninja boost swig skia)
+STAGE_NAMES=(check-tools rpms cmake ninja boost bison swig skia)
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  ok:\033[0m %s\n' "$*"; }
@@ -288,6 +288,35 @@ stage_boost() {
     ok "boost $version headers -> $dir (BOOST_ROOT)"
 }
 
+stage_bison() {
+    local version="3.8.2"
+    if [ -x "$LE_ROOT/usr/bin/bison" ]; then
+        ok "bison already present at $LE_ROOT/usr/bin/bison (skipping - remove that file to force a rebuild)"
+        return 0
+    fi
+    log "building GNU Bison $version from source (RHEL8's own bison is 3.0.4; SWIG 4.2.1's grammar declares '%require \"3.5\"' in Source/CParse/parser.y, and no newer bison ships in RHEL8's default or CRB repos - confirmed by a real build failure: 'error: require bison 3.5, but have 3.0.4')"
+    if [ -z "${CC:-}" ] || [ -z "${CXX:-}" ]; then
+        fail "CC/CXX not set - run the gcc-toolset stage (part of 'rpms') and 'source backend/scripts/rocky8-env.sh' before running this stage"
+        return 1
+    fi
+    local src_dir="$STAGE_DOWNLOADS/bison-$version"
+    if [ ! -d "$src_dir" ]; then
+        local tarball="$STAGE_DOWNLOADS/bison-$version.tar.gz"
+        curl -fL -o "$tarball" \
+            "https://ftp.gnu.org/gnu/bison/bison-$version.tar.gz" \
+            || { fail "download failed - is ftp.gnu.org reachable?"; return 1; }
+        mkdir -p "$src_dir"
+        tar -xzf "$tarball" -C "$src_dir" --strip-components=1 || { fail "extract failed"; return 1; }
+    fi
+    (
+        cd "$src_dir" &&
+        ./configure --prefix="$LE_ROOT/usr" &&
+        make -j "$(nproc)" &&
+        make install
+    ) || { fail "bison build failed - see output above"; return 1; }
+    ok "bison $version -> $LE_ROOT/usr/bin/bison"
+}
+
 stage_swig() {
     local version="4.2.1"
     if command -v "$LE_ROOT/usr/bin/swig" >/dev/null 2>&1; then
@@ -297,6 +326,16 @@ stage_swig() {
     log "building SWIG $version from source (not gambling on EPEL reachability - see this script's own header comment. --without-pcre2 avoids a whole extra library dependency and SWIG's core functionality doesn't need it)"
     if [ -z "${CC:-}" ] || [ -z "${CXX:-}" ]; then
         fail "CC/CXX not set - run the gcc-toolset stage (part of 'rpms') and 'source backend/scripts/rocky8-env.sh' before running this stage, so SWIG itself builds with the same modern compiler as everything else"
+        return 1
+    fi
+    if ! command -v bison >/dev/null 2>&1; then
+        fail "bison not found on PATH - run the bison stage first (backend/scripts/rocky8-bootstrap.sh bison), then re-source rocky8-env.sh"
+        return 1
+    fi
+    local bison_version
+    bison_version=$(bison --version | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+    if [ -z "$bison_version" ] || ! printf '%s\n%s\n' "3.5" "$bison_version" | sort -C -V; then
+        fail "bison on PATH is $bison_version, but SWIG's grammar requires >=3.5 (RHEL8's stock bison is 3.0.4, too old). Run the bison stage (backend/scripts/rocky8-bootstrap.sh bison), then re-source rocky8-env.sh so \$LE_ROOT/usr/bin's newer bison shadows the system one on PATH."
         return 1
     fi
     local src_dir="$STAGE_DOWNLOADS/swig-$version"
@@ -381,6 +420,7 @@ run_stage() {
         cmake)       stage_cmake ;;
         ninja)       stage_ninja ;;
         boost)       stage_boost ;;
+        bison)       stage_bison ;;
         swig)        stage_swig ;;
         skia)        stage_skia ;;
         *)
