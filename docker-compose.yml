@@ -1,0 +1,49 @@
+# Linux build/test for this repo's three components. See
+# Dockerfile.linux-ci for the underlying image stages, and each
+# component's own CLAUDE.md/build-test skill for the macOS-native
+# equivalent of what each service's CMD runs.
+#
+# Usage:
+#   docker compose build backend            # image only, no run
+#   docker compose run --rm backend         # build + ctest
+#   docker compose run --rm flutter-plugin  # first real Linux plugin compile
+#   docker compose run --rm frontend        # flutter analyze/test/build linux
+#   docker compose up --build                # all three, in dependency order
+#
+# The repo is bind-mounted read-write at /workspace, so build artifacts
+# (backend/build, backend/build_release, flutter_plugin/build, .dart_tool,
+# etc.) land in the real working tree, same as a native build would -
+# expect a `git status` to show them as untracked, same as today.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux-ci
+      target: backend
+    volumes:
+      - .:/workspace
+
+  flutter-plugin:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux-ci
+      target: flutter-plugin
+    volumes:
+      - .:/workspace
+      - flutter-pub-cache:/root/.pub-cache
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux-ci
+      target: frontend
+    volumes:
+      - .:/workspace
+      - flutter-pub-cache:/root/.pub-cache
+    depends_on:
+      - flutter-plugin
+
+volumes:
+  flutter-pub-cache:

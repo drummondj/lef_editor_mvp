@@ -1,0 +1,17 @@
+# Keeps the docker-compose build context small - source is bind-mounted at
+# runtime anyway (see docker-compose.yml), so none of this ever needs to
+# reach the Docker daemon at build time. Mirrors the various .gitignore
+# files' build-artifact entries.
+.git
+**/build
+**/build_release
+**/.dart_tool
+**/.pub-cache
+**/generated
+**/generated_tcl
+**/__pycache__
+backend/src/lefdef/**/lib
+backend/src/lefdef/**/include
+backend/src/lefdef/**/bin
+frontend/.flutter-plugins-dependencies
+flutter_plugin/.flutter-plugins-dependencies

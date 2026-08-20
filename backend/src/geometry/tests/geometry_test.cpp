@@ -587,12 +587,12 @@ TEST(Geometry, FullyEnclosedPiecesReturnsOnlyTheIndividuallyEnclosedPieces)
     // fully_enclosed, which only ever answers for the whole bundle.
     Shape shape{
         .layer_name = "M1",
+        .polygons = {
+            Polygon{.points = {{15, 15}, {18, 15}, {18, 18}, {15, 18}}}, // inside
+        },
         .rects = {
             Rect{.ll = {10, 10}, .ur = {20, 20}},   // inside
             Rect{.ll = {100, 100}, .ur = {110, 110}}, // outside
-        },
-        .polygons = {
-            Polygon{.points = {{15, 15}, {18, 15}, {18, 18}, {15, 18}}}, // inside
         },
     };
 
@@ -657,11 +657,11 @@ TEST(Geometry, TransformPieceInPlaceMovesOnlyTheAddressedPieceLeavingSiblingsUnt
 {
     Shape shape{
         .layer_name = "M1",
+        .polygons = {Polygon{.points = {{0, 0}, {10, 0}, {10, 10}}}},
         .rects = {
             Rect{.ll = {0, 0}, .ur = {10, 10}},
             Rect{.ll = {100, 100}, .ur = {110, 110}},
         },
-        .polygons = {Polygon{.points = {{0, 0}, {10, 0}, {10, 10}}}},
     };
 
     Geometry::transform_piece_in_place(shape, PieceKind::RECT, 1, Point{5, -5});

@@ -6,6 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 cmake_policy(SET CMP0135 NEW)
 
+# le_tcl (below) is a shared module (le_tcl.so) that statically links
+# io/render/api/lef_lib - on Linux, a static library linked into a .so
+# needs to have been compiled with -fPIC, or the final link fails with
+# "relocation ... can not be used when making a shared object; recompile
+# with -fPIC" (ld64 on macOS doesn't enforce this the same way, so this
+# went unnoticed there). Applying it globally is simplest and has no real
+# cost - PIC is already macOS's default for everything.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 option(ENABLE_COVERAGE "Instrument io/backend_tests with Clang source-based line+branch coverage" OFF)
 
 if(ENABLE_COVERAGE)
@@ -47,7 +56,12 @@ ExternalProject_Add(
     # Makefile's `all: install release` traverses the same subdirectories
     # twice and isn't safe under an inherited parallel jobserver (races on
     # shared bison-generated lef.tab.c and on liblef.a itself).
-    BUILD_COMMAND ${CMAKE_COMMAND} -E env --unset=MAKEFLAGS --unset=MFLAGS make -j1
+    # CXXFLAGS/CFLAGS=-fPIC: template.mk's Linux branch doesn't set either,
+    # so they pass through from this env untouched, same as the
+    # CMAKE_POSITION_INDEPENDENT_CODE setting above and for the same
+    # reason - le_tcl.so statically links liblef.a, which GNU ld (Linux)
+    # refuses without -fPIC object code (ld64/macOS doesn't enforce this).
+    BUILD_COMMAND ${CMAKE_COMMAND} -E env --unset=MAKEFLAGS --unset=MFLAGS CXXFLAGS=-fPIC CFLAGS=-fPIC make -j1
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 1
     # lefdiff (UPDATES.md 12 Phase 1's round-trip fidelity check) is also a
@@ -59,6 +73,20 @@ ExternalProject_Add(
         "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/lib/liblef.a"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/bin/lefdiff"
 )
+
+# Wrapping liblef.a as a proper IMPORTED target (rather than a raw file path
+# in target_link_libraries) lets CMake re-order/re-emit it correctly for
+# each generator's actual linker - a raw path is just inserted verbatim
+# wherever it falls in topological order. Apple's ld64 tolerates a static
+# archive appearing "out of order" relative to the objects that need its
+# symbols; GNU ld (Linux) does one left-to-right pass and does not, so a
+# raw path silently linked fine on macOS while failing on Linux with
+# "undefined reference" for every LefDefParser:: symbol - found via a real
+# Linux build (see docker-compose.yml), not anticipated in advance.
+add_library(lef_static STATIC IMPORTED)
+set_target_properties(lef_static PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/lib/liblef.a")
+add_dependencies(lef_static lef_lib)
 
 # --- Third-party dependencies ---
 find_package(spdlog REQUIRED)
@@ -123,22 +151,31 @@ target_include_directories(pipeline INTERFACE src)
 target_link_libraries(pipeline INTERFACE database geometry scene view_style core)
 
 # --- Skia (not vendored/built by this project - a pre-built checkout on
-# this machine). SKIA_DIR must contain out/MacStatic/{libskia.a,...} built
-# with is_component_build=false (static). Link set (include path, libskia.a,
-# Homebrew harfbuzz/icu4c, CoreText/CoreFoundation/CoreGraphics frameworks)
-# was determined empirically by linking a minimal SkPictureRecorder/
-# SkSurface program against this exact checkout - see BENCHMARKS.md/
-# CLAUDE.md for why no GPU (Ganesh/Metal) frameworks are needed: we only
-# use the raster (CPU) surface APIs, and static linking never pulls in the
-# unused GPU object files. Machine-specific - not portable/committed;
-# override -DSKIA_DIR=... to point at a different checkout.
-set(SKIA_DIR "/Volumes/Docking/Projects/synthosilicon/skia/skia" CACHE PATH
-    "Path to a built Skia checkout (must contain out/MacStatic/libskia.a)")
+# this machine). SKIA_DIR must contain out/MacStatic/{libskia.a,...} on
+# macOS or out/Linux/{libskia.a,...} on Linux (see docker-compose.yml /
+# Dockerfile.linux-ci for how the Linux checkout is built - raster-only,
+# no GPU backend, matching the macOS build), each built with
+# is_component_build=false (static). Link set (include path, libskia.a,
+# system harfbuzz/icu, plus platform-specific font-manager libs) was
+# determined empirically by linking a minimal SkPictureRecorder/SkSurface
+# program against the macOS checkout - see BENCHMARKS.md/CLAUDE.md for why
+# no GPU (Ganesh/Metal) frameworks are needed: we only use the raster (CPU)
+# surface APIs, and static linking never pulls in the unused GPU object
+# files. Machine-specific - not portable/committed; override -DSKIA_DIR=...
+# to point at a different checkout.
+if(APPLE)
+    set(SKIA_DIR "/Volumes/Docking/Projects/synthosilicon/skia/skia" CACHE PATH
+        "Path to a built Skia checkout (must contain out/MacStatic/libskia.a)")
+    set(SKIA_OUT_DIR "${SKIA_DIR}/out/MacStatic")
+else()
+    set(SKIA_DIR "/skia/skia" CACHE PATH
+        "Path to a built Skia checkout (must contain out/Linux/libskia.a)")
+    set(SKIA_OUT_DIR "${SKIA_DIR}/out/Linux")
+endif()
 add_library(skia INTERFACE)
 target_include_directories(skia INTERFACE ${SKIA_DIR})
-target_link_directories(skia INTERFACE /opt/homebrew/lib /opt/homebrew/opt/icu4c/lib)
 target_link_libraries(skia INTERFACE
-    ${SKIA_DIR}/out/MacStatic/libskia.a
+    ${SKIA_OUT_DIR}/libskia.a
     harfbuzz
     icuuc
     icudata
@@ -149,12 +186,19 @@ target_link_libraries(skia INTERFACE
     webpdemux
 )
 if(APPLE)
+    target_link_directories(skia INTERFACE /opt/homebrew/lib /opt/homebrew/opt/icu4c/lib)
     target_link_libraries(skia INTERFACE
         "-framework CoreText"
         "-framework CoreFoundation"
         "-framework CoreGraphics"
         "-framework CoreServices"
     )
+else()
+    # Linux Skia is built with skia_use_fontconfig=true/skia_use_freetype=true
+    # (see Dockerfile.linux-ci) - those aren't statically bundled into
+    # libskia.a the way the platform frameworks are on macOS, so the final
+    # consumer (render, below) needs to link them explicitly.
+    target_link_libraries(skia INTERFACE fontconfig freetype)
 endif()
 
 # --- render: dbu->pixel transform + Skia SkPicture generation. Compiled
@@ -174,8 +218,7 @@ target_include_directories(io
 )
 target_link_libraries(io
     PUBLIC database geometry
-    PRIVATE spdlog::spdlog fmt::fmt
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/lefdef/lef/lib/liblef.a
+    PRIVATE spdlog::spdlog fmt::fmt lef_static
 )
 le_enable_coverage_instrumentation(io)
 
@@ -321,9 +364,19 @@ if(SWIG_FOUND AND TCL_FOUND)
     # unrelated to this fix and reproducible identically without it. Use
     # `ctest --test-dir build -R SessionHandle`, not the raw binary, to
     # get a real signal - confirmed clean (4/4) with this fix applied.
-    target_link_options(le_tcl PRIVATE
-        "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_unexported_symbols.txt"
-    )
+    # -unexported_symbols_list is an Apple ld64 flag, and the list file
+    # above uses Mach-O's underscore-prefixed symbol names - both specific
+    # to the macOS dyld flat-namespace coalescing bug this works around
+    # (see the comment block above), which only arises when this module
+    # and lef_editor_plugin.framework separately link the same static
+    # libraries into one macOS process. Linux CI never does that (le_tcl.so
+    # here is only ever loaded standalone, by ctest/tclsh), so there's no
+    # GNU-ld equivalent to wire up.
+    if(APPLE)
+        target_link_options(le_tcl PRIVATE
+            "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/tcl/le_tcl_unexported_symbols.txt"
+        )
+    endif()
 
     # Regression check for the spike itself (src/tcl/tests/smoke_test.tcl) -
     # loads the built module under tclsh, sources le_tcl_procs.tcl, and

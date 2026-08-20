@@ -2008,7 +2008,7 @@ namespace le
                 }
                 auto lef_path = geometries->getPath(j);
                 auto polygon = polygon_from_parser(reader, lef_path->numPoints, lef_path->x, lef_path->y);
-                auto path = Path{.width = width, .polygon = polygon};
+                auto path = Path{.polygon = polygon, .width = width};
                 shape.value().paths.push_back(path);
                 shape.value().path_masks.push_back(lef_path->colorMask);
                 geo_count++;
@@ -2027,7 +2027,7 @@ namespace le
 
                 auto polygon = polygon_from_parser(reader, lef_path_iter->numPoints, lef_path_iter->x, lef_path_iter->y);
                 PathIterate path_iter{
-                    .path = Path{.width = width, .polygon = polygon},
+                    .path = Path{.polygon = polygon, .width = width},
                     .num_x = static_cast<int>(lef_path_iter->xStart),
                     .num_y = static_cast<int>(lef_path_iter->yStart),
                     .space_x = reader->microns_to_dbu(lef_path_iter->xStep),

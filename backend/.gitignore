@@ -4,6 +4,14 @@ build/
 # now, not a throwaway benchmarking artifact.
 build_release/
 
+# Linux equivalents of the above, built inside a container via
+# docker-compose.yml/Dockerfile.linux-ci - kept separate from build/
+# build_release since those hold macOS-native CMakeCache.txt state
+# (absolute host paths) that can't be shared with the bind-mounted
+# container's own path layout.
+build-linux/
+build_release-linux/
+
 # lefdef produces these during `make`; not source, don't commit them.
 # Every subdirectory (lef/, clef/, clefzlib/, lefdiff/, lefrw/, lefwrite/,
 # and the def/ equivalents) compiles its own .o files and some their own
