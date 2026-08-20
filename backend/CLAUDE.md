@@ -432,8 +432,23 @@ opt-out, not because the mechanism can't reach them.
   `CoreText`/`CoreFoundation`/`CoreGraphics`/`CoreServices` frameworks — no
   GPU (Ganesh/Metal) frameworks needed, only raster (CPU) surface APIs are
   used.
-- Linux build needs a fontconfig/FreeType-backed `SkFontMgr` — `render`'s
-  default typeface is CoreText-backed (macOS-only) right now.
+- ~~Linux build needs a fontconfig/FreeType-backed `SkFontMgr`~~ — done
+  (Docker/Ubuntu Linux CI session), then revised again: `render.cpp`'s
+  Linux `default_typeface()` now loads from a bundled font directory
+  (`SkFontMgr_New_Custom_Directory`, `LE_FONT_DIR` — defaults to
+  `assets/fonts/`, committed to the repo) rather than system fontconfig —
+  a locked-down rootless-build target machine (see the Rocky 8 bullet
+  below) can't be assumed to have any fonts installed or fontconfig
+  configured at all, and a missing font under the fontconfig path failed
+  silently (blank labels, no error).
+- **Rootless Rocky Linux 8 build** (no root, no system package installs,
+  no Docker) — `backend/scripts/rocky8-bootstrap.sh`/`rocky8-env.sh`
+  assemble a toolchain (gcc-toolset-13, CMake/Ninja/Boost/SWIG, GTK3 +
+  closure, Skia's own third-party-vendored build) entirely via rootless
+  RPM extraction (`rpm2cpio`/`cpio`, no `dnf install`) and upstream
+  release tarballs into `~/.local/lef_editor_toolchain`. Unverified
+  against a real Rocky 8 machine as of this writing — expect real
+  iteration, same as the Docker/Ubuntu path needed.
 
 ## Build
 
@@ -453,10 +468,15 @@ persistent tree, not a throwaway benchmarking artifact. See the
 section.
 
 Dependencies: `spdlog`, `fmt`, `Boost` (headers only, for `geometry`) via
-`find_package` — installed on this dev machine via Homebrew; GoogleTest and
-GoogleBenchmark via `FetchContent` (no system install needed). `src/lefdef/lef`
-is built as an `ExternalProject_Add` step that shells out to its own vendored
-`Makefile`.
+`find_package` — installed on this dev machine via Homebrew, falling back to
+`FetchContent` for `spdlog`/`fmt` when no system install is found (needed for
+the rootless Rocky 8 build below, where neither ships by default); GoogleTest
+and GoogleBenchmark via `FetchContent` (no system install needed).
+`src/lefdef/lef` is built as an `ExternalProject_Add` step that shells out to
+its own vendored `Makefile`. For a rootless Linux build with no system
+package installs available at all (e.g. a locked-down Rocky Linux 8
+machine), see `scripts/rocky8-bootstrap.sh`/`rocky8-env.sh` and the Open
+gaps entry above.
 
 **Gotcha:** that vendored Makefile's `all: install release` target is not
 safe under a parallel/inherited `make` jobserver — both traversals touch the

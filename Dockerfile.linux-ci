@@ -58,10 +58,10 @@ RUN GN_CPU=$( [ "${TARGETARCH}" = "arm64" ] && echo arm64 || echo x64 ) && \
     skia_use_gl=false \
     skia_use_vulkan=false \
     skia_use_egl=false \
-    skia_enable_fontmgr_custom_directory=false \
+    skia_enable_fontmgr_custom_directory=true \
     skia_enable_fontmgr_custom_embedded=false \
     skia_enable_fontmgr_custom_empty=false \
-    skia_use_fontconfig=true \
+    skia_use_fontconfig=false \
     skia_use_freetype=true \
     skia_use_system_freetype2=true \
     skia_use_system_harfbuzz=true \

@@ -55,9 +55,24 @@ if(LE_LINK_BACKEND)
   # it in (confirmed by trying it without this - "lef_editor_plugin_plugin
   # links to spdlog::spdlog but the target was not found", even though
   # ../src's own find_package(spdlog REQUIRED) already ran by this point).
-  # This directory needs its own find_package() calls.
-  find_package(spdlog REQUIRED)
-  find_package(fmt REQUIRED)
+  # This directory needs its own find_package() calls. Same
+  # find_package-then-FetchContent fallback as ../src/CMakeLists.txt/
+  # backend/CMakeLists.txt (see their own comments) - a rootless Rocky 8
+  # build has no system spdlog/fmt, and this directory's own scope can't
+  # see ../src's FetchContent-built copy either, for the same reason it
+  # can't see its find_package()-found one.
+  include(FetchContent)
+  find_package(fmt CONFIG QUIET)
+  if(NOT fmt_FOUND)
+    FetchContent_Declare(fmt URL https://github.com/fmtlib/fmt/archive/refs/tags/11.0.2.zip)
+    FetchContent_MakeAvailable(fmt)
+  endif()
+  find_package(spdlog CONFIG QUIET)
+  if(NOT spdlog_FOUND)
+    set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(spdlog URL https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip)
+    FetchContent_MakeAvailable(spdlog)
+  endif()
   target_compile_definitions(${PLUGIN_NAME} PRIVATE LE_LINK_BACKEND_ENABLED)
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     "-Wl,--whole-archive" "${LE_BACKEND_BUILD}/libapi.a" "-Wl,--no-whole-archive"
@@ -65,10 +80,19 @@ if(LE_LINK_BACKEND)
     "${LE_BACKEND_BUILD}/libio.a"
     "${LE_BACKEND_DIR}/src/lefdef/lef/lib/liblef.a"
     "${LE_SKIA_DIR}/out/Linux/libskia.a"
-    ${LE_HARFBUZZ_LIBRARIES} ${LE_ICU_LIBRARIES} ${LE_JPEG_LIBRARIES} ${LE_PNG_LIBRARIES} ${LE_WEBP_LIBRARIES}
+    ${LE_JPEG_LIBRARIES} ${LE_PNG_LIBRARIES}
     spdlog::spdlog fmt::fmt
     z
   )
+  # Mirrors ../src/CMakeLists.txt's own LE_SKIA_VENDORS_THIRD_PARTY gate
+  # (see that file's comment) - both targets link the same SKIA_DIR
+  # checkout, so both must agree on whether it bundles harfbuzz/icu/webp
+  # internally or expects them linked separately.
+  if(NOT LE_SKIA_VENDORS_THIRD_PARTY)
+    target_link_libraries(${PLUGIN_NAME} PRIVATE
+      ${LE_HARFBUZZ_LIBRARIES} ${LE_ICU_LIBRARIES} ${LE_WEBP_LIBRARIES}
+    )
+  endif()
 
   # ../src/le_tcl_bridge.{hpp,cpp} - the plain-C++ embedded-Tcl-console
   # core shared verbatim with macOS's own LeTclBridge.mm (a thin

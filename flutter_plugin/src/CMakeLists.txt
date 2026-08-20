@@ -53,15 +53,42 @@ if(LE_LINK_BACKEND)
       "Path to the backend's own Release CMake build directory")
   set(LE_SKIA_DIR "$ENV{SKIA_DIR}" CACHE PATH
       "Path to a built Linux Skia checkout (must contain out/<config>/libskia.a) - unset by default since none exists yet")
+  # Mirrors backend/CMakeLists.txt's own LE_SKIA_VENDORS_THIRD_PARTY option
+  # (see that file's comment) - both must agree on whether the SKIA_DIR
+  # checkout bundles its own harfbuzz/icu/libwebp internally or expects
+  # them linked separately. Forwarded from the environment by
+  # ../../frontend/linux/CMakeLists.txt when this plugin is consumed by
+  # the real app; defaults OFF (unset) here too for a standalone configure.
+  option(LE_SKIA_VENDORS_THIRD_PARTY
+      "Skia was built with skia_use_system_harfbuzz/icu/libwebp=false (bundles its own copies into libskia.a) - don't link system harfbuzz/icu/webp separately"
+      OFF)
 
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(LE_HARFBUZZ REQUIRED harfbuzz)
-  pkg_check_modules(LE_ICU REQUIRED icu-uc)
   pkg_check_modules(LE_JPEG REQUIRED libjpeg)
   pkg_check_modules(LE_PNG REQUIRED libpng)
-  pkg_check_modules(LE_WEBP REQUIRED libwebp libwebpdemux)
-  find_package(spdlog REQUIRED)
-  find_package(fmt REQUIRED)
+  if(NOT LE_SKIA_VENDORS_THIRD_PARTY)
+    pkg_check_modules(LE_HARFBUZZ REQUIRED harfbuzz)
+    pkg_check_modules(LE_ICU REQUIRED icu-uc)
+    pkg_check_modules(LE_WEBP REQUIRED libwebp libwebpdemux)
+  endif()
+
+  # Same find_package-then-FetchContent-fallback as backend/CMakeLists.txt
+  # (see that file's own comment) - this is a separate CMake configure
+  # from backend's own, so it can't discover whatever backend's build
+  # produced spdlog/fmt from; it needs its own fallback for a rootless
+  # Rocky 8 build with no system spdlog/fmt available.
+  include(FetchContent)
+  find_package(fmt CONFIG QUIET)
+  if(NOT fmt_FOUND)
+    FetchContent_Declare(fmt URL https://github.com/fmtlib/fmt/archive/refs/tags/11.0.2.zip)
+    FetchContent_MakeAvailable(fmt)
+  endif()
+  find_package(spdlog CONFIG QUIET)
+  if(NOT spdlog_FOUND)
+    set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(spdlog URL https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip)
+    FetchContent_MakeAvailable(spdlog)
+  endif()
 
   # api.cpp's le_*() functions are never referenced by this plugin's own
   # compiled sources (Dart only finds them via dlsym at runtime) - without
@@ -74,8 +101,13 @@ if(LE_LINK_BACKEND)
     "${LE_BACKEND_BUILD}/libio.a"
     "${LE_BACKEND_DIR}/src/lefdef/lef/lib/liblef.a"
     "${LE_SKIA_DIR}/out/Linux/libskia.a"
-    ${LE_HARFBUZZ_LIBRARIES} ${LE_ICU_LIBRARIES} ${LE_JPEG_LIBRARIES} ${LE_PNG_LIBRARIES} ${LE_WEBP_LIBRARIES}
+    ${LE_JPEG_LIBRARIES} ${LE_PNG_LIBRARIES}
     spdlog::spdlog fmt::fmt
     z
   )
+  if(NOT LE_SKIA_VENDORS_THIRD_PARTY)
+    target_link_libraries(lef_editor_plugin PRIVATE
+      ${LE_HARFBUZZ_LIBRARIES} ${LE_ICU_LIBRARIES} ${LE_WEBP_LIBRARIES}
+    )
+  endif()
 endif()

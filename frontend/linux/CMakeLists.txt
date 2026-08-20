@@ -40,6 +40,17 @@ set(LE_LINK_BACKEND ON CACHE BOOL "" FORCE)
 set(LE_BACKEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../backend" CACHE PATH "" FORCE)
 set(LE_BACKEND_BUILD "${CMAKE_CURRENT_SOURCE_DIR}/../../backend/build_release-linux" CACHE PATH "" FORCE)
 
+# Forwards backend/CMakeLists.txt's own LE_SKIA_VENDORS_THIRD_PARTY option
+# (see that file's comment) into this plugin's own equivalent - both must
+# agree on whether the SKIA_DIR checkout being linked bundles its own
+# harfbuzz/icu/libwebp or expects them linked separately as system libs.
+# Read from the environment (set by backend/scripts/rocky8-env.sh for a
+# rootless Rocky 8 build), not forced ON/OFF here - defaults to OFF
+# (unset), matching the Docker/Ubuntu CI Skia checkout's own system-linked
+# configuration, same as this file's other env-sourced value (LE_SKIA_DIR,
+# via flutter_plugin/src/CMakeLists.txt's own $ENV{SKIA_DIR} default).
+set(LE_SKIA_VENDORS_THIRD_PARTY "$ENV{LE_SKIA_VENDORS_THIRD_PARTY}" CACHE BOOL "" FORCE)
+
 # Load bundled libraries from the lib/ directory relative to the binary.
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
 

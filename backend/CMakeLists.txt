@@ -89,8 +89,28 @@ set_target_properties(lef_static PROPERTIES
 add_dependencies(lef_static lef_lib)
 
 # --- Third-party dependencies ---
-find_package(spdlog REQUIRED)
-find_package(fmt REQUIRED)
+# spdlog/fmt fall back to FetchContent (same pattern as googletest/
+# googlebenchmark below) when no system install is found - neither ships in
+# RHEL8 BaseOS/AppStream/CRB by default, needed for a rootless Rocky 8
+# build with no system package installs available at all (see
+# backend/scripts/rocky8-bootstrap.sh). macOS/Ubuntu (where find_package
+# already succeeds via Homebrew/apt) are unaffected - this only activates
+# when the system copy is missing, on any platform.
+find_package(fmt CONFIG QUIET)
+if(NOT fmt_FOUND)
+    FetchContent_Declare(fmt URL https://github.com/fmtlib/fmt/archive/refs/tags/11.0.2.zip)
+    FetchContent_MakeAvailable(fmt)
+endif()
+
+find_package(spdlog CONFIG QUIET)
+if(NOT spdlog_FOUND)
+    # Without this, spdlog vendors its own internal fmt copy, conflicting
+    # with the many targets in this file that link fmt::fmt directly.
+    set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(spdlog URL https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.zip)
+    FetchContent_MakeAvailable(spdlog)
+endif()
+
 find_package(Boost REQUIRED)
 
 FetchContent_Declare(
@@ -172,19 +192,35 @@ else()
         "Path to a built Skia checkout (must contain out/Linux/libskia.a)")
     set(SKIA_OUT_DIR "${SKIA_DIR}/out/Linux")
 endif()
+# A Rocky-8-rootless-build Skia checkout is configured with
+# skia_use_system_harfbuzz=false/skia_use_system_icu=false/
+# skia_use_system_libwebp=false/skia_use_system_expat=false (see
+# backend/scripts/rocky8-bootstrap.sh) - RHEL8's own harfbuzz (~1.7.5) and
+# icu (~60) are old enough relative to a modern Skia commit that linking
+# against them as system libs (what the existing Docker/Ubuntu Linux CI
+# recipe still does, Dockerfile.linux-ci's skia_use_system_harfbuzz=true
+# etc.) is a real version-skew risk there, and libwebp-devel's presence on
+# a locked-down RHEL8 box at all is uncertain - so that build instead lets
+# libskia.a bundle its own copies of all four internally, statically, and
+# this target must not *also* link separate copies of them in that case.
+# Default OFF: unconditionally linking these has been this project's own
+# working Docker/Ubuntu Linux CI setup all along - don't change that
+# path's behavior, only add a new opt-in for the rootless one.
+option(LE_SKIA_VENDORS_THIRD_PARTY
+    "Skia was built with skia_use_system_harfbuzz/icu/libwebp/expat=false (bundles its own copies into libskia.a) - don't link system harfbuzz/icu/webp separately"
+    OFF)
+
 add_library(skia INTERFACE)
 target_include_directories(skia INTERFACE ${SKIA_DIR})
 target_link_libraries(skia INTERFACE
     ${SKIA_OUT_DIR}/libskia.a
-    harfbuzz
-    icuuc
-    icudata
     jpeg
     png
     z
-    webp
-    webpdemux
 )
+if(NOT LE_SKIA_VENDORS_THIRD_PARTY)
+    target_link_libraries(skia INTERFACE harfbuzz icuuc icudata webp webpdemux)
+endif()
 if(APPLE)
     target_link_directories(skia INTERFACE /opt/homebrew/lib /opt/homebrew/opt/icu4c/lib)
     target_link_libraries(skia INTERFACE
@@ -194,11 +230,16 @@ if(APPLE)
         "-framework CoreServices"
     )
 else()
-    # Linux Skia is built with skia_use_fontconfig=true/skia_use_freetype=true
-    # (see Dockerfile.linux-ci) - those aren't statically bundled into
-    # libskia.a the way the platform frameworks are on macOS, so the final
-    # consumer (render, below) needs to link them explicitly.
-    target_link_libraries(skia INTERFACE fontconfig freetype)
+    # Linux Skia is built with skia_use_freetype=true (see
+    # Dockerfile.linux-ci / rocky8-bootstrap.sh) - not statically bundled
+    # into libskia.a the way the platform frameworks are on macOS, so the
+    # final consumer (render, below) needs to link it explicitly.
+    # fontconfig is deliberately NOT linked here (both Dockerfile.linux-ci
+    # and rocky8-bootstrap.sh now build Skia with skia_use_fontconfig=false
+    # too) - default_typeface() (render.cpp) uses a bundled font directory
+    # instead, not system fontconfig, so the app doesn't depend on the
+    # target machine having any fonts installed at all.
+    target_link_libraries(skia INTERFACE freetype)
 endif()
 
 # --- render: dbu->pixel transform + Skia SkPicture generation. Compiled
@@ -207,7 +248,19 @@ endif()
 # that can't be a header-only detail. ---
 add_library(render STATIC src/render/render.cpp)
 target_include_directories(render PUBLIC src)
-target_link_libraries(render PUBLIC database geometry scene view_style core skia fmt::fmt)
+target_link_libraries(render PUBLIC database geometry scene view_style core skia fmt::fmt spdlog::spdlog)
+
+# LE_FONT_DIR: Linux's default_typeface() (render.cpp) loads its default
+# font from this bundled directory (backend/assets/fonts, committed to the
+# repo - DejaVu Sans, Bitstream-Vera licensed) instead of system fontconfig,
+# so rendering doesn't depend on the target machine having any fonts
+# installed at all - see render.cpp's own comment. Not used on macOS
+# (CoreText path). Override for a different bundled font set.
+if(NOT APPLE)
+    set(LE_FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts" CACHE PATH
+        "Directory of .ttf/.ttc/.otf/.pfb files default_typeface() loads from on Linux")
+    target_compile_definitions(render PRIVATE LE_FONT_DIR="${LE_FONT_DIR}")
+endif()
 
 # --- io: LEF/DEF file readers ---
 add_library(io STATIC src/io/lef_reader.cpp src/io/lef_writer.cpp)
