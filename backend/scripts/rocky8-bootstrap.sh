@@ -118,10 +118,11 @@ extract_rpm_closure() {
                 continue 2
             fi
         done
-        (cd "$LE_ROOT" && rpm2archive "$rpm" && tar -zxf $rpm.tgz --no-same-owner --no-same-permissions  ) || {
+        (cd "$LE_ROOT" && rpm2archive -n "$rpm" && tar -xf $rpm.tar --no-same-owner --no-same-permissions  ) || {
             fail "rpm2archive|tar failed for $rpm"
             return 1
         }
+        chmod -R ug+rw $LE_ROOT
     done
     ok "$pkg (+ dependency closure)"
 }
@@ -149,9 +150,9 @@ extract_rpm_closure_if_missing() {
 }
 
 stage_check_tools() {
-    log "checking for dnf/rpm2cpio/cpio/curl/git - required by this script itself"
+    log "checking for dnf/rpm2archive/tar/curl/git - required by this script itself"
     local missing=()
-    for tool in dnf rpm2cpio cpio curl git tar; do
+    for tool in dnf rpm2archive curl git tar; do
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     if [ "${#missing[@]}" -gt 0 ]; then
