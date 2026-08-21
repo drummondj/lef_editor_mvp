@@ -255,4 +255,39 @@ proc update_{{snake}} {id args} {
 }
 register_command_help update_{{snake}} "{{klass.update_tcl_usage()}}" "{{klass.tcl_description_escaped()}}" {{'{'}}{{klass.update_tcl_help_options()}} {-help {type flag required 0 description {Show this usage message and return immediately}}}{{'}'}}
 {% endfor %}
+
+# --- delete_<type> - `delete_<type> <id> [-help]` - deletes an existing
+# object, cascading to every owned pool-backed child reachable through
+# Klass.tcl_child_list_fields() (however many schema-graph levels deep
+# that goes for this class - see Klass.delete_api_body()'s own docstring
+# for the full mechanism). Unlike create_<type>/update_<type>, there are
+# no flags at all here - delete_<type> takes exactly one positional `<id>`
+# argument, nothing else to specify - so, unlike those two families'
+# `array set opts {...}`/`foreach {flag value} $args` flag parsing, this
+# is just an argument-count check. `-help` is checked the same way
+# create_<type>'s own is (before the argument-count check, so
+# `delete_<type> -help` works with no real id supplied at all). Returns 0
+# on success (raises a Tcl error otherwise) - matches the plain SWIG-bound
+# `int` return value the 4 formerly hand-written delete_X commands this
+# replaces (le_tcl_shim.cpp/le_api.i) already returned directly with no
+# Tcl-level wrapper proc at all, so existing callers checking `delete_X
+# $id == 0` keep working unchanged even though every delete_<type> now
+# goes through a real Tcl proc (needed for -help/register_command_help,
+# neither of which a bare SWIG binding can provide). ---
+{% for klass in classes %}
+{%- set snake = klass.to_snake_case() %}
+proc delete_{{snake}} {args} {
+    if {[lsearch -exact $args "-help"] >= 0} {
+        return "{{klass.delete_tcl_usage()}}"
+    }
+    if {[llength $args] != 1} {
+        error "delete_{{snake}}: exactly one argument (a {{klass.name}} id) is required"
+    }
+    if {[delete_{{snake}}_cmd [lindex $args 0]] != 0} {
+        error "delete_{{snake}}: failed to delete \\"[lindex $args 0]\\""
+    }
+    return 0
+}
+register_command_help delete_{{snake}} "{{klass.delete_tcl_usage()}}" "{{klass.tcl_description_escaped()}}" {{'{'}}{{klass.delete_tcl_help_options()}} {-help {type flag required 0 description {Show this usage message and return immediately}}}{{'}'}}
+{% endfor %}
 """

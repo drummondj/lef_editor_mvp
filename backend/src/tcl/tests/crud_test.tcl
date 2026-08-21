@@ -487,11 +487,25 @@ check "delete_terminal (reparent fixture) return code" 0 [delete_terminal $repar
 open_design TESTCELL
 
 # --- Cascade delete: deleting the Terminal must take its TerminalPort
-# (and that port's Shape) with it, since neither is reachable any other
-# way (see le_delete_terminal's own doc comment in api.hpp). ---
+# *and that port's own Shape* with it (a real 2-level cascade), since
+# neither is reachable any other way once the Terminal is gone - see
+# Klass.delete_api_body()'s own docstring (codegen/codegen/schema.py) for
+# the recursive-cascade mechanism this exercises. $port/$shape were
+# created earlier in this file (Terminal $in0 -> TerminalPort $port ->
+# Shape $shape) - this is a regression check for a real bug in the
+# formerly hand-written le_delete_terminal, which only ever cascaded one
+# level deep (deleting each TerminalPort but never that port's own
+# Shapes, leaving them as permanently-unreachable orphaned pool entries).
+# get_properties on a deleted object's own now-stale friendly id degrades
+# to an empty dict (0 properties - same "unknown id -> 0 rows" contract
+# every property-table accessor already has), which only holds for
+# $shape too if the cascade actually reached two levels deep, not just
+# one. ---
 
 check "delete_terminal return code" 0 [delete_terminal $in0]
 check "get_terminal_ports after cascade delete" {} [get_terminal_ports -filter {.terminal.name == IN0}]
+check "get_properties on the cascade-deleted TerminalPort is empty (also deleted)" {} [get_properties $port]
+check "get_properties on the cascade-deleted Shape is empty (also deleted - the 2-level cascade bug fix)" {} [get_properties $shape]
 
 check "delete_terminal (out0) return code" 0 [delete_terminal $out0]
 

@@ -177,4 +177,15 @@ const char *update_{{klass.to_snake_case()}}_cmd({{klass.update_shim_params()}})
     return return_string(format_{{klass.to_snake_case()}}_id(typed_id));
 }
 {% endfor %}
+
+// --- delete_<type> - resolves the friendly-id token the same way every
+// other shim function does, then forwards straight to le_delete_<type>
+// (api.hpp/api.cpp), which does the actual cascade - see that function's
+// own comment for why the cascade lives at the api.cpp layer, not here. ---
+{% for klass in classes %}
+int delete_{{klass.to_snake_case()}}_cmd(const char *id)
+{
+    return le_delete_{{klass.to_snake_case()}}(session(), resolve_{{klass.to_snake_case()}}_id(id));
+}
+{% endfor %}
 """

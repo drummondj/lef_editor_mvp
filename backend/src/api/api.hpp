@@ -354,13 +354,12 @@ extern "C"
 
     // --- Editing / undo-redo (UPDATES.md item 21) ---
     // A command-pattern undo/redo stack (le::editing::CommandHistory, one
-    // per LeHandle) that every generated le_create_X/le_update_X and the
-    // 4 hand-written le_delete_X functions record themselves into
-    // whenever a transaction is currently recording - see
-    // le_begin_command/le_end_command below, and le_repl_eval
-    // (le_tcl_procs.tcl), the single bracket point that wraps every
-    // typed Tcl console command with them so a typed command is exactly
-    // as undoable as a GUI edit like Move (le_arm_move below).
+    // per LeHandle) that every generated le_create_X/le_update_X/le_delete_X
+    // function records itself into whenever a transaction is currently
+    // recording - see le_begin_command/le_end_command below, and
+    // le_repl_eval (le_tcl_procs.tcl), the single bracket point that wraps
+    // every typed Tcl console command with them so a typed command is
+    // exactly as undoable as a GUI edit like Move (le_arm_move below).
 
     /// @brief Begins recording a new undo/redo transaction labeled
     /// `label` (e.g. the raw text of a command a user just typed, or a
@@ -1226,18 +1225,6 @@ extern "C"
     /// for the full grammar/validation/error contract.
     LeProperty le_abstract_property_path(LeHandle *handle, LeAbstractId id, const char *path);
 
-    /// @brief Delete the Terminal at `id`, cascading to every
-    /// TerminalPort it owns first - unlike Root::delete_terminal's own
-    /// no-cascade default (see its doc comment), a orphaned port here
-    /// would be permanently unreachable garbage (TerminalPorts are only
-    /// ever enumerated through their parent Terminal's own port list, no
-    /// top-level "every TerminalPort" API exists), not just a stale
-    /// reference that degrades gracefully elsewhere - a deliberate,
-    /// domain-specific exception at this API layer, not a generic Root
-    /// behavior. Returns 0 on success, nonzero if handle is null or id
-    /// doesn't name a Terminal on this handle.
-    int le_delete_terminal(LeHandle *handle, LeTerminalId id);
-
     /// @brief Search every Terminal on this handle for
     /// `filter_expression` (UPDATES.md item 15's `-filter {...}`, e.g.
     /// ".name =~ IN*" - see backend/src/database/filter.hpp for the full
@@ -1319,16 +1306,6 @@ extern "C"
     /// for the full grammar/validation/error contract.
     LeProperty le_terminal_port_property_path(LeHandle *handle, LeTerminalPortId id, const char *path);
 
-    /// @brief Delete the TerminalPort at `id`, cascading to every Shape
-    /// it owns first - same reasoning as le_delete_terminal's own cascade
-    /// to TerminalPorts (see its doc comment): a Shape is pooled
-    /// (TCL_EXPLORATION.md Phase 3) and only ever reachable through its
-    /// parent's shape list, so leaving it behind would be permanently
-    /// unreachable garbage, not just a dangling reference. Returns 0 on
-    /// success, nonzero if handle is null or id doesn't name a
-    /// TerminalPort on this handle.
-    int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id);
-
     /// @brief Search every TerminalPort on this handle for
     /// `filter_expression` - see le_search_terminal's own comment for the
     /// full contract (grammar, error/caching behavior); identical here,
@@ -1375,12 +1352,6 @@ extern "C"
     /// validation/error contract.
     LeProperty le_obstruction_property_path(LeHandle *handle, LeObstructionId id, const char *path);
 
-    /// @brief Delete the Obstruction at `id`, cascading to every Shape it
-    /// owns first - same reasoning as le_delete_terminal_port. Returns 0
-    /// on success, nonzero if handle is null or id doesn't name an
-    /// Obstruction on this handle.
-    int le_delete_obstruction(LeHandle *handle, LeObstructionId id);
-
     /// @brief Search every Obstruction on this handle for
     /// `filter_expression` - see le_search_terminal's own comment for the
     /// full contract. Returns the match count, or -1 on a parse error.
@@ -1411,9 +1382,9 @@ extern "C"
     // takes both a LeTerminalPortId and a LeObstructionId, exactly one of
     // which must resolve, replacing this API's own former
     // le_create_terminal_port_shape/le_create_obstruction_shape split)
-    // returns one directly; after that, every le_shape_*/le_add_shape_*/
-    // le_remove_shape_*/le_delete_shape call below only needs the
-    // LeShapeId itself.
+    // returns one directly; after that, every le_shape_*/le_remove_shape_*
+    // call below, and the generated le_delete_shape (generated_tcl/
+    // declarations.inc), only needs the LeShapeId itself.
     //
     // Rects/polygons/paths are all treated the same way: none are
     // privileged, each has its own count/read/add/remove functions
@@ -1529,13 +1500,6 @@ extern "C"
     /// Shape on this handle.
     const char *le_shape_layer_name(LeHandle *handle, LeShapeId id);
 
-    /// @brief Delete the Shape at `id`. Its parent (TerminalPort or
-    /// Obstruction) is untouched - le_terminal_port_shape_count/
-    /// le_obstruction_shape_count on it simply reports one fewer
-    /// afterward. Returns 0 on success, nonzero if handle is null or id
-    /// doesn't name a Shape on this handle.
-    int le_delete_shape(LeHandle *handle, LeShapeId id);
-
     /// @brief Number of rects on the Shape at `id` - indexes
     /// `le_shape_rect_at`'s own `index` parameter, 0..this-1. Returns 0
     /// if handle is null or id doesn't name a Shape on this handle.
@@ -1620,17 +1584,22 @@ extern "C"
     /// this handle, or path_index is out of range.
     int le_remove_shape_path(LeHandle *handle, LeShapeId id, int32_t path_index);
 
-    // --- Generated TCL property-reading and create_<type> surface (see
-    // backend/CLAUDE.md's TCL section) - one Id typedef, friendly-id-by-
-    // name lookup, property table accessors, is_child-field enumeration
-    // pairs, get_<type> search, and create_<type> (le_create_terminal/
-    // le_create_terminal_port/le_create_obstruction/le_create_shape
-    // included - the last unifies the former hand-written
-    // le_create_terminal_port_shape/le_create_obstruction_shape split
-    // into one function taking both parent ids, exactly one of which
-    // must resolve), for every TCL-readable class. Never edit
-    // generated_tcl/declarations.inc directly - regenerate via the
-    // regen-tcl skill instead. ---
+    // --- Generated TCL property-reading, create_<type>, update_<type>,
+    // and delete_<type> surface (see backend/CLAUDE.md's TCL section) -
+    // one Id typedef, friendly-id-by-name lookup, property table
+    // accessors, is_child-field enumeration pairs, get_<type> search,
+    // create_<type> (le_create_terminal/le_create_terminal_port/
+    // le_create_obstruction/le_create_shape included - the last unifies
+    // the former hand-written le_create_terminal_port_shape/
+    // le_create_obstruction_shape split into one function taking both
+    // parent ids, exactly one of which must resolve), update_<type>, and
+    // delete_<type> (le_delete_terminal/le_delete_terminal_port/
+    // le_delete_obstruction/le_delete_shape included - these four used to
+    // be hand-written here; see Klass.delete_api_body(),
+    // codegen/codegen/schema.py, for the cascade-to-owned-children
+    // mechanism their generated replacements use), for every TCL-readable
+    // class. Never edit generated_tcl/declarations.inc directly -
+    // regenerate via the regen-tcl skill instead. ---
 #include "generated_tcl/declarations.inc"
 
     /// @brief The singleton Technology's friendly id (see

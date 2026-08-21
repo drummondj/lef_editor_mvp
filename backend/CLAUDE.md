@@ -180,35 +180,43 @@ none of these are duplicated here.
   `le_shell` (Tcl_Main-based) and any `tclsh` can both load `le_tcl.so` and
   source `le_tcl_procs.tcl`. Property *reading* (property tables,
   friendly-id resolution, `is_child` enumeration), `get_<type>` search,
-  `create_<type>`, and `update_<type>` are all generated uniformly for every
-  TCL-readable class — see "TCL codegen" below. `update_<type>` is the
-  *only* way any field is ever mutated after creation — there is no
-  generated or hand-written per-field setter reachable from TCL (a
-  narrower, pre-existing generated `Root::set_<klass>_<field>()` still
-  exists at the C++ `Root` layer for fields with `.parent`/`.index` set,
-  but nothing calls it — see "Database codegen" below). Only `delete_X`
-  stays hand-written, currently for `Terminal`/`TerminalPort`/
-  `Obstruction`/`Shape` — the classes this MVP actually edits at all beyond
-  creation, not read-only LEF technology reference data (`Technology`/
-  `Layer`/`Via`/...), which nonetheless still gets a generated
-  `create_<type>`/`update_<type>` pair like every other class (nothing calls
-  either today, but it costs nothing extra to generate uniformly).
-  `create_<type>`/`update_<type>` also cover a *list* of flattenable
-  embedded structs (`Field.list_compound_kind()`, e.g. `Shape.rects`/
-  `.polygons`/`.paths` — a `-rects {{ll_x ll_y ur_x ur_y} ...}`-shaped
-  flag per field), not just a single one — the former hand-written
-  `add_shape_rect`/`_polygon`/`_path` are gone, superseded by
+  `create_<type>`, `update_<type>`, and `delete_<type>` are all generated
+  uniformly for every TCL-readable class — see "TCL codegen" below.
+  `update_<type>` is the *only* way any field is ever mutated after
+  creation — there is no generated or hand-written per-field setter
+  reachable from TCL (a narrower, pre-existing generated
+  `Root::set_<klass>_<field>()` still exists at the C++ `Root` layer for
+  fields with `.parent`/`.index` set, but nothing calls it — see "Database
+  codegen" below). `delete_<type>` cascades to every owned pool-backed
+  child reachable through `Klass.tcl_child_list_fields()`, however many
+  schema-graph levels deep that goes for a given class (recursively
+  expanded at Python codegen time, not a runtime-recursive C++ helper —
+  see `Klass.delete_api_body()`'s own docstring, `codegen/codegen/schema.py`);
+  a class with no such fields (most of the ~35) gets a trivial,
+  non-cascading delete instead. `delete_<type>` used to be the last
+  hand-written CRUD surface, for `Terminal`/`TerminalPort`/`Obstruction`/
+  `Shape` — the classes this MVP actually edits at all beyond creation —
+  but is generated uniformly now too, including for read-only LEF
+  technology reference data (`Technology`/`Layer`/`Via`/...), which
+  nonetheless still gets a generated `create_<type>`/`update_<type>`/
+  `delete_<type>` triple like every other class (nothing calls any of the
+  three for those classes today, but it costs nothing extra to generate
+  uniformly). `create_<type>`/`update_<type>` also cover a *list* of
+  flattenable embedded structs (`Field.list_compound_kind()`, e.g.
+  `Shape.rects`/`.polygons`/`.paths` — a `-rects {{ll_x ll_y ur_x ur_y}
+  ...}`-shaped flag per field), not just a single one — the former
+  hand-written `add_shape_rect`/`_polygon`/`_path` are gone, superseded by
   `create_shape`/`update_shape`'s own generated flags (`update_shape`'s
   own flag replaces the *whole* list, it doesn't append — a script
   updating one entry among several reads the current list via
   `get_properties`/`shape_rects` etc. and passes the full replacement).
-  `remove_shape_rect`/`_polygon`/`_path` (remove one entry by index)
-  still stay hand-written, alongside `delete_X`, since neither is
-  per-class flag-driven CRUD in the same sense. `Abstract.boundary` (a
-  list field structurally eligible the same way, but out of this round's
-  scope) has no update path yet — see `Field.create_excluded` in
-  `codegen/codegen/schema.py` for the deliberately-deferred fields.
-  Fully covered by
+  `remove_shape_rect`/`_polygon`/`_path` (remove one entry by index) are
+  the sole remaining hand-written CRUD-ish leftover, since removing one
+  geometry entry by index isn't per-class flag-driven CRUD in the same
+  sense `delete_<type>` is. `Abstract.boundary` (a list field structurally
+  eligible the same way, but out of this round's scope) has no update
+  path yet — see `Field.create_excluded` in `codegen/codegen/schema.py`
+  for the deliberately-deferred fields. Fully covered by
   `src/tcl/tests/smoke_test.tcl`/`crud_test.tcl`/`shell_test.tcl` (run via
   `tclsh8.6`, not the generic `tclsh` — see the `build-test` skill).
 - `src/lefdef/` — vendored LEF/DEF 6.0.62-p004 C parser source (Si2 distribution).
@@ -303,16 +311,18 @@ skill, not `regen-database`) — covers `src/tcl/`'s property-*reading*,
 `le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`). Every pool-backed
 `Klass` gets a generated property table, friendly-id resolution,
 `is_child`-field enumeration, a `get_<type>` search command, and a
-`create_<type>` command by default (`Klass.tcl_readable`/`Klass.tcl_id_field`
-in `codegen/codegen/schema.py` — see the `regen-tcl` skill for the opt-out/
-override mechanics and the full list of injection points) — uniformly
-across all ~35 classes today, including `Terminal`/`TerminalPort`/
-`Obstruction`/`Shape`, the only four classes that still have any
-hand-written CRUD elsewhere (`delete_X`, plus `Shape`'s own
-`remove_shape_rect`/`_polygon`/`_path` for removing one geometry entry
-by index — their `create_X`/per-field setters, and `Shape`'s former
-`add_shape_rect`/`_polygon`/`_path`, are all gone too, superseded by
-`create_<type>`/`update_<type>`, see below).
+`create_<type>`/`update_<type>`/`delete_<type>` triple by default
+(`Klass.tcl_readable`/`Klass.tcl_id_field` in `codegen/codegen/schema.py`
+— see the `regen-tcl` skill for the opt-out/override mechanics and the
+full list of injection points) — uniformly across all ~35 classes today,
+including `Terminal`/`TerminalPort`/`Obstruction`/`Shape`, whose
+`create_X`/per-field setters/`delete_X` (and `Shape`'s own former
+`add_shape_rect`/`_polygon`/`_path`) all used to be hand-written and are
+now fully generated too, superseded by `create_<type>`/`update_<type>`/
+`delete_<type>`, see below. `Shape`'s own `remove_shape_rect`/`_polygon`/
+`_path` (removing one geometry entry by index) is the sole remaining
+hand-written CRUD-ish surface — not per-class flag-driven CRUD in the
+same sense.
 `Klass.has_current_access = True` (`Technology`/`Abstract`/`Schematic`) marks
 a class with a generated "current instance" concept — one command,
 `current_X ?id?` (with no argument, reads it back; given a friendly-id
@@ -413,10 +423,32 @@ flag *replaces* the whole list when provided (matching every other
 field's "provide it, apply it" semantics), not appends — a caller adding
 one entry among several already-present ones reads the current list
 first (`get_properties`/`shape_rects` etc.) and passes the full
-replacement. `delete_X` stays a separate, hand-written concern;
-`Field.create_excluded` fields (`Abstract.boundary`, `Layer.min_sizes`,
-...) stay a separate, not-yet-enabled effort — deferred by explicit
-opt-out, not because the mechanism can't reach them.
+replacement.
+
+`delete_<type>` (`Klass.delete_api_body()`) needs no flags at all — just
+the object's own friendly id — but does the most work of the three:
+every owned pool-backed child reachable through
+`Klass.tcl_child_list_fields()` is deleted along with it, cascading
+however many schema-graph levels deep that goes for a given class (e.g.
+`Technology`'s own `non_default_rules` → `vias` → `layers` chain is 3
+levels deep). The cascade is planned recursively at *Python codegen
+time* (one flat, unrolled loop per schema-graph depth level in the
+emitted C++, not a generic recursive C++ helper — this codebase's own
+"flat generated code" aesthetic), and every cascaded object is recorded
+into a currently-recording transaction (UPDATES.md item 21) deepest-first,
+this object itself last — the reverse of `Transaction::undo_all`'s own
+replay order, so undo recreates the top-level object before its
+descendants, and each descendant's own undo-recreate lambda can then read
+its immediate parent's already-recreated live id back out of a shared
+`IdCellPtr` captured while it was still being collected as a "child" one
+level up (see `Transaction::id_cell_for`, `src/editing/transaction.hpp`).
+A class with no `tcl_child_list_fields()` at all (most of the ~35) gets a
+trivial, non-cascading delete instead — snapshot, erase, record, nothing
+else. `Field.create_excluded` fields (`Abstract.boundary`,
+`Layer.min_sizes`, ...) stay a separate, not-yet-enabled effort for
+`create_<type>`/`update_<type>` — deferred by explicit opt-out, not
+because the mechanism can't reach them; this has no bearing on
+`delete_<type>`, which doesn't touch individual fields at all.
 
 ## Open gaps (tracked in README's Plan checklist)
 

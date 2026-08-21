@@ -271,40 +271,18 @@ void set_session_handle(long long handle_address)
     injected_handle() = reinterpret_cast<LeHandle *>(static_cast<uintptr_t>(handle_address));
 }
 
-// --- Terminal (create_terminal_cmd/update_terminal_cmd are generated) ---
+// --- Terminal/TerminalPort/Obstruction CRUD is fully generated now
+// (create_X_cmd/update_X_cmd/delete_X_cmd - le_tcl_shim_generated.inc) ---
 
-int delete_terminal(const char *id)
-{
-    return le_delete_terminal(session(), resolve_terminal_id(id));
-}
-
-// --- TerminalPort (create_terminal_port_cmd is generated) ---
-
-int delete_terminal_port(const char *id)
-{
-    return le_delete_terminal_port(session(), resolve_terminal_port_id(id));
-}
-
-// --- Obstruction (create_obstruction_cmd is generated) ---
-
-int delete_obstruction(const char *id)
-{
-    return le_delete_obstruction(session(), resolve_obstruction_id(id));
-}
-
-// --- Shape (create_shape_cmd/update_shape_cmd are generated - unify the
-// former create_terminal_port_shape_cmd/create_obstruction_shape_cmd
-// split into one function taking both parent tokens, exactly one of
-// which must resolve) ---
+// --- Shape (create_shape_cmd/update_shape_cmd/delete_shape_cmd are
+// generated - create_shape_cmd unifies the former
+// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split into
+// one function taking both parent tokens, exactly one of which must
+// resolve) ---
 
 const char *shape_layer_name(const char *id)
 {
     return le_shape_layer_name(session(), resolve_shape_id(id));
-}
-
-int delete_shape(const char *id)
-{
-    return le_delete_shape(session(), resolve_shape_id(id));
 }
 
 int shape_rect_count(const char *id)

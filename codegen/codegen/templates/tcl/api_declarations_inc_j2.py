@@ -7,10 +7,12 @@ TEMPLATE = """// GENERATED - do not edit by hand. Regenerate via the regen-tcl s
 // Plain-C declarations for the generated TCL property-reading/search
 // surface - one Id typedef, friendly-id-by-name lookup (name-indexed
 // classes only), property table accessors, is_child-field enumeration
-// pairs, get_<type> search, and current-instance access (has_current_access
-// classes only), per class. Covers every TCL-readable class uniformly -
-// only delete_X still has a hand-written counterpart elsewhere, currently
-// for Terminal/TerminalPort/Obstruction/Shape (unrelated to this file).
+// pairs, get_<type> search, current-instance access (has_current_access
+// classes only), create_<type>, update_<type>, and delete_<type>, per
+// class. Covers every TCL-readable class uniformly - the only CRUD-ish
+// surface still hand-written elsewhere is Shape's own
+// remove_shape_rect/_polygon/_path (removing one geometry entry by index,
+// not per-class flag-driven CRUD - unrelated to this file).
 
 // --- Friendly-id-by-name lookups (name-indexed classes only) ---
 {% for klass in classes %}
@@ -121,5 +123,17 @@ Le{{klass.name}}Id le_create_{{klass.to_snake_case()}}(LeHandle *handle{% if kla
 // docstring in root.hpp). ---
 {% for klass in classes %}
 int le_update_{{klass.to_snake_case()}}(LeHandle *handle, {{klass.update_api_params()}});
+{% endfor %}
+
+// --- delete_<type> - cascades to every owned pool-backed child reachable
+// through Klass.tcl_child_list_fields(), however many schema-graph levels
+// deep that goes for this particular class (see Klass.delete_api_body()'s
+// own docstring for the full recursive-at-codegen-time mechanism and the
+// undo/redo ordering it depends on) - a class with no such fields (most
+// of the ~35) gets a trivial, non-cascading delete instead. Returns 0 on
+// success, nonzero if handle is null or id doesn't name a live object of
+// this class on this handle. ---
+{% for klass in classes %}
+int le_delete_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}Id id);
 {% endfor %}
 """

@@ -90,11 +90,12 @@
 // id/expression per call; the Tcl proc loops over multiple tokens/
 // expressions itself and unions the per-call results. Search-result
 // accessors are uniformly count+by-index (get_<type>_cmd/get_<type>_at),
-// same shape as every property table below - most of this surface is
-// generated (see backend/CLAUDE.md's TCL codegen section), including
-// every class's own create_<type> now; only delete_*/set_* for Terminal/
-// TerminalPort/Obstruction/Shape stay hand-written here, and even those
-// reuse generated property/search accessors.
+// same shape as every property table below - this whole surface is
+// generated now (see backend/CLAUDE.md's TCL codegen section), including
+// every class's own create_<type>/update_<type>/delete_<type>; the only
+// hand-written CRUD-ish surface left is Shape's own remove_shape_rect/
+// _polygon/_path (removing one geometry entry by index, further below -
+// not per-class flag-driven CRUD in the same sense).
 //
 // --- Property tables and search results (Phase 5) ---
 // Deliberately NOT built as Tcl lists/dicts in C++ here - that needs
@@ -192,29 +193,20 @@ constexpr long long kInvalidId = 0xFFFFFFFFLL;
 /// is never revisited afterward, injected or not.
 void set_session_handle(long long handle_address);
 
-// --- Terminal CRUD (create_terminal_cmd/update_terminal_cmd are
-// generated - see le_tcl_shim_generated.hpp - not hand-written here) ---
-
-int delete_terminal(const char *id);
-
-// --- TerminalPort CRUD (create_terminal_port_cmd is generated) ---
-
-int delete_terminal_port(const char *id);
-
-// --- Obstruction CRUD (create_obstruction_cmd is generated) ---
-
-int delete_obstruction(const char *id);
+// --- Terminal/TerminalPort/Obstruction CRUD - create_X_cmd/update_X_cmd/
+// delete_X_cmd are all generated (see le_tcl_shim_generated.hpp), nothing
+// hand-written here for these three classes anymore. ---
 
 // --- Shape CRUD (rects/polygons/paths - texts deliberately excluded,
 // see TCL_EXPLORATION.md's round-7 finding: they're a Pipeline-computed
 // render-time label, never LEF-authored data; create_shape_cmd/
-// update_shape_cmd are generated - see le_tcl_shim_generated.hpp - takes
-// both a terminal_port_id and an obstruction_id token, exactly one of
-// which must resolve, replacing this header's former create_terminal_port_shape_cmd/
+// update_shape_cmd/delete_shape_cmd are generated - see
+// le_tcl_shim_generated.hpp - create_shape_cmd takes both a
+// terminal_port_id and an obstruction_id token, exactly one of which must
+// resolve, replacing this header's former create_terminal_port_shape_cmd/
 // create_obstruction_shape_cmd split) ---
 
 const char *shape_layer_name(const char *id);
-int delete_shape(const char *id);
 
 int shape_rect_count(const char *id);
 /// @brief The rect at `index`, as a 4-element "ll_x ll_y ur_x ur_y"

@@ -90,21 +90,13 @@ const char *technology_id();
 int set_current_design_cmd(long long design_id);
 void set_session_handle(long long handle_address);
 
-// --- Terminal (create_terminal_cmd/update_terminal_cmd are generated -
-// le_api_generated.i) ---
-int delete_terminal(const char *id);
+// --- Terminal/TerminalPort/Obstruction CRUD is fully generated now
+// (create_X_cmd/update_X_cmd/delete_X_cmd - le_api_generated.i) ---
 
-// --- TerminalPort (create_terminal_port_cmd is generated) ---
-int delete_terminal_port(const char *id);
-
-// --- Obstruction (create_obstruction_cmd is generated) ---
-int delete_obstruction(const char *id);
-
-// --- Shape (create_shape_cmd/update_shape_cmd are generated - unify the
-// former create_terminal_port_shape_cmd/create_obstruction_shape_cmd
-// split) ---
+// --- Shape (create_shape_cmd/update_shape_cmd/delete_shape_cmd are
+// generated - create_shape_cmd unifies the former
+// create_terminal_port_shape_cmd/create_obstruction_shape_cmd split) ---
 const char *shape_layer_name(const char *id);
-int delete_shape(const char *id);
 
 int shape_rect_count(const char *id);
 const char *shape_rect_at(const char *id, int index);

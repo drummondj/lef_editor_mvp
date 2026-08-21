@@ -1,6 +1,6 @@
 ---
 name: regen-tcl
-description: Regenerate the TCL/SWIG property-reading, search, create_<type>, and update_<type> surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class, a has_current_access flag, or a create/update-field's optionality/type, or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope, stale create_<type>/update_<type> signature).
+description: Regenerate the TCL/SWIG property-reading, search, create_<type>, update_<type>, and delete_<type> surface (backend/src/api/generated_tcl/, backend/src/tcl/generated/) from src/database/schema.py using the local codegen fork's `tcl` target. Use whenever schema.py changes a TCL-readable class, a has_current_access flag, a create/update-field's optionality/type, or a class's tcl_child_list_fields() (delete_<type>'s own cascade shape), or when the generated TCL surface looks out of sync (missing class, stale field, stale friendly-id lookup, wrong get_<type> default scope, stale create_<type>/update_<type>/delete_<type> signature).
 user-invocable: true
 allowed-tools:
   - Bash
@@ -17,31 +17,35 @@ class's `get_<type>` default scope (`-of` omitted) is derived. Never edit
 `generated_tcl/`/`tcl/generated/` directly - re-run codegen instead.
 
 This is a **separate generation target** from `regen-database` - it
-covers property *reading*, `get_<type>` *search*, `create_<type>`, and
-`update_<type>` for every TCL-readable class, uniformly (~35 today -
-`Terminal`/`TerminalPort`/`Obstruction`/`Shape` also have a hand-written
-`delete_X` elsewhere, plus Shape's own `remove_shape_rect`/`_polygon`/
-`_path` (removing one geometry entry by index) - every class's
-`create_<type>`/`update_<type>` is generated, including these four, and
-including Shape's own `-rects`/`-polygons`/`-paths` flags, which take a
-*list* of a flattenable embedded struct, not just one - see
-`Field.list_compound_kind()`). `update_<type>` is
-the *only* way any field is ever mutated after creation - there is no
+covers property *reading*, `get_<type>` *search*, `create_<type>`,
+`update_<type>`, and `delete_<type>` for every TCL-readable class,
+uniformly (~35 today, including Shape's own `-rects`/`-polygons`/
+`-paths` flags, which take a *list* of a flattenable embedded struct, not
+just one - see `Field.list_compound_kind()`). `update_<type>` is the
+*only* way any field is ever mutated after creation - there is no
 per-field setter reachable from TCL anymore, generated or hand-written
 (see backend/CLAUDE.md's `src/tcl/` bullet for the full "no per-field
-setters" constraint). `read_lef`, session/viewport/design-selection, the
-coordinate-list SWIG typemap itself (`le_api.i`, hand-written since it
-needs real Tcl_Interp access - the *generated* `%apply` lines that reuse
-it for each `list_compound_kind()` field live in
-`le_api_generated_i_j2.py`), `delete_X`/`remove_shape_rect`/`_polygon`/
-`_path` for the classes that still have hand-written CRUD, and the
-filter-expression evaluator itself (`filter.hpp`) all stay hand-written -
-none of that is per-class flag-driven CRUD, so it doesn't belong in a
-generator. See
-`create_api_body()`/`update_api_body()`'s own docstrings
-(`codegen/codegen/schema.py`) for exactly what each covers (field scope,
-required-vs-optional, compound-field flattening, the multi-parent
-exactly-one check, the single-parent-only reparent flag).
+setters" constraint). `delete_<type>` cascades to every owned pool-backed
+child reachable through `Klass.tcl_child_list_fields()`, however many
+schema-graph levels deep that goes for a given class - see
+`Klass.delete_api_body()`'s own docstring for the recursive-at-codegen-
+time cascade mechanism and the deepest-first/self-last undo/redo
+recording order it depends on; a class with no such fields (most of the
+~35) gets a trivial, non-cascading delete instead. `read_lef`, session/
+viewport/design-selection, the coordinate-list SWIG typemap itself
+(`le_api.i`, hand-written since it needs real Tcl_Interp access - the
+*generated* `%apply` lines that reuse it for each `list_compound_kind()`
+field live in `le_api_generated_i_j2.py`), Shape's own
+`remove_shape_rect`/`_polygon`/`_path` (removing one geometry entry by
+index - not per-class flag-driven CRUD in the same sense `delete_<type>`
+is), and the filter-expression evaluator itself (`filter.hpp`) all stay
+hand-written - none of that is per-class flag-driven CRUD, so it doesn't
+belong in a generator. See
+`create_api_body()`/`update_api_body()`/`delete_api_body()`'s own
+docstrings (`codegen/codegen/schema.py`) for exactly what each covers
+(field scope, required-vs-optional, compound-field flattening, the
+multi-parent exactly-one check, the single-parent-only reparent flag,
+the delete cascade plan).
 
 ## Steps
 
@@ -158,7 +162,7 @@ again on subsequent regenerations:
   `#include "generated_tcl/declarations.inc"` further down (friendly-id-
   by-name lookups, property-table declarations, `is_child` enumeration,
   current-instance access, `get_<type>` search declarations, and
-  `le_create_<type>`/`le_update_<type>` declarations).
+  `le_create_<type>`/`le_update_<type>`/`le_delete_<type>` declarations).
 - `api.cpp` - **five** injection points: `#include "generated_tcl/snapshot_appliers.hpp"`
   near the top of the file with the rest of its ordinary top-level
   `#include`s (UPDATES.md item 21) - unlike every other generated_tcl/
@@ -175,8 +179,8 @@ again on subsequent regenerations:
   another translation unit); `#include "generated_tcl/property_accessors_public.inc"`
   *inside* `extern "C" { ... }` (the real `le_X_property_count/_at/_path`,
   friendly-id-by-name lookups, `le_current_X`/`le_set_current_X`, and
-  `le_create_X`/`le_update_X` - external C linkage required since
-  `le_tcl_shim.cpp` calls
+  `le_create_X`/`le_update_X`/`le_delete_X` - external C linkage required
+  since `le_tcl_shim.cpp` calls
   them; a function defined
   inside an anonymous namespace has internal linkage regardless of
   `extern "C"`, so putting these there produces unresolved-symbol link
@@ -184,7 +188,11 @@ again on subsequent regenerations:
   into one; `le_create_X`/`le_update_X`'s generated bodies also each
   record themselves into `handle->command_history`'s currently-recording
   transaction, if any, using `apply_<snake>_snapshot` from
-  `snapshot_appliers.hpp` above - see UPDATES.md item 21);
+  `snapshot_appliers.hpp` above - see UPDATES.md item 21; `le_delete_X`
+  records itself the same way, but doesn't need `apply_<snake>_snapshot`
+  at all - a delete's own undo is a plain `create_x(snapshot)` replay, not
+  a field-by-field apply, see `Klass.delete_api_body()`'s own docstring,
+  `codegen/codegen/schema.py`);
   `#include "generated_tcl/search.inc"` right after it, also
   inside `extern "C" { ... }` (`le_get_X`/`le_search_result_X_at`, same
   linkage reasoning). `filter_field_tables()`'s body is also generated -
@@ -204,35 +212,51 @@ again on subsequent regenerations:
   hand-written, shared/class-agnostic helpers the generated procs call
   into).
 
-`create_<type>` and `update_<type>` are generated for every class already
-(property reading, search, create, and update are all uniform today) -
-`Terminal`/`TerminalPort`/`Obstruction`/`Shape` had hand-written `create_X`
-before this, and `Terminal`/`Shape`/`Abstract` had hand-written per-field
-setters (`set_terminal_name`/`set_terminal_direction_cmd`/
-`set_shape_layer_name`/`update_abstract_boundary_cmd`) before `update_X`
-landed - all deleted across every file above (`api.hpp`/`api.cpp`/
-`le_tcl_shim.hpp`/`.cpp`/`le_api.i`/`le_tcl_procs.tcl`) when the generated
-equivalents landed, to avoid duplicate-symbol link errors or a stale
-hand-written Tcl `proc` silently shadowing the generated one (Tcl allows
-redefining a `proc` with no error - `le_tcl_procs.tcl` sources
-`generated/le_tcl_procs_generated.tcl` *before* its own hand-written procs,
-so a same-named hand-written one defined later always wins silently rather
-than erroring, which is exactly what happened until the stale ones were
-removed). `Shape`'s own `create_terminal_port_shape_cmd`/
-`create_obstruction_shape_cmd` split became one generated
-`create_shape -terminal_port|-obstruction`, not two - see
-`create_api_body()`'s exactly-one-parent check.
+`create_<type>`, `update_<type>`, and `delete_<type>` are all generated
+for every class now (property reading, search, create, update, and
+delete are all uniform today) - `Terminal`/`TerminalPort`/`Obstruction`/
+`Shape` had hand-written `create_X` before `create_<type>` landed,
+`Terminal`/`Shape`/`Abstract` had hand-written per-field setters
+(`set_terminal_name`/`set_terminal_direction_cmd`/`set_shape_layer_name`/
+`update_abstract_boundary_cmd`) before `update_X` landed, and those same
+four classes had hand-written `delete_X` (with no Tcl-level wrapper proc
+at all - just a bare SWIG-bound `int delete_X(const char *id)`) before
+`delete_<type>` landed - every one of these deleted across every file
+above (`api.hpp`/`api.cpp`/`le_tcl_shim.hpp`/`.cpp`/`le_api.i`/
+`le_tcl_procs.tcl`) when its generated equivalent landed, to avoid
+duplicate-symbol link errors or a stale hand-written Tcl `proc` silently
+shadowing the generated one (Tcl allows redefining a `proc` with no error
+- `le_tcl_procs.tcl` sources `generated/le_tcl_procs_generated.tcl`
+*before* its own hand-written procs, so a same-named hand-written one
+defined later always wins silently rather than erroring, which is
+exactly what happened until the stale ones were removed - `delete_X` had
+no hand-written Tcl proc to shadow anything, but still needed its bare
+SWIG declaration/definition removed from `le_tcl_shim.hpp`/`.cpp`/
+`le_api.i` to avoid a duplicate-symbol clash with the new generated
+`delete_X_cmd`/Tcl `delete_X` proc pair). `Shape`'s own
+`create_terminal_port_shape_cmd`/`create_obstruction_shape_cmd` split
+became one generated `create_shape -terminal_port|-obstruction`, not two
+- see `create_api_body()`'s exactly-one-parent check.
 `update_abstract_boundary` has no replacement - `Abstract.boundary` is a
 list-of-`Polygon` field, structurally `list_compound_kind()`-eligible the
 same way `Shape.polygons` is, but explicitly deferred
-(`create_excluded=True` in `backend/src/database/schema.py`, this
+(`create_excluded=True` in `backend/src/database/schema.py`, that
 round's own scope was `Shape.rects`/`.polygons`/`.paths` specifically),
 so boundary-setting is unsupported via TCL until a future round flips
 that flag - a real, accepted coverage gap, not an oversight (see
 `Field.create_excluded`'s own docstring in `codegen/codegen/schema.py`
-for the full list of similarly-deferred fields across the schema). If a
-future round generates `delete_X` too (`Terminal`/`TerminalPort`/
-`Obstruction`/`Shape` are the last four classes with any hand-written
-CRUD left, alongside `Shape`'s own `remove_shape_rect`/`_polygon`/
-`_path`), delete that class's hand-written version from all of the files
-above first, the same way.
+for the full list of similarly-deferred fields across the schema).
+`delete_<type>`'s own cascade (`Klass.delete_api_body()`) fixed a real
+bug in the formerly hand-written `le_delete_terminal`, which only ever
+cascaded one level deep (each `TerminalPort`, but never that port's own
+`Shape`s, leaving them as orphaned pool entries) - the generator instead
+recursively expands the *actual* schema graph via
+`Klass.tcl_child_list_fields()`, however many levels deep a given class's
+subtree actually goes (e.g. `Technology`'s own `non_default_rules` ->
+`vias` -> `layers` chain is 3 levels), so this class of bug can't
+reappear for any class without the generator itself being wrong. The
+sole remaining hand-written CRUD-ish surface is `Shape`'s own
+`remove_shape_rect`/`_polygon`/`_path` (removing one geometry entry by
+index) - not per-class flag-driven CRUD in the same sense
+`create_<type>`/`update_<type>`/`delete_<type>` are, so it stays out of
+scope for this generator.

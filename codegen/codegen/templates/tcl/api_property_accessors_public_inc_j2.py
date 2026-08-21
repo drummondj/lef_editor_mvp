@@ -201,4 +201,17 @@ int le_update_{{klass.to_snake_case()}}(LeHandle *handle, {{klass.update_api_par
 {{klass.update_api_body()}}
 }
 {% endfor %}
+
+// --- delete_<type> - see api_declarations_inc_j2's own comment for the
+// cascade-to-owned-children convention every one of these follows
+// uniformly (see Klass.delete_api_body() for how this body is actually
+// built - the recursive cascade plan, the deepest-first/self-last
+// Transaction::record_delete ordering, and why a leaf class's own delete
+// needs none of that machinery). ---
+{% for klass in classes %}
+int le_delete_{{klass.to_snake_case()}}(LeHandle *handle, Le{{klass.name}}Id id)
+{
+{{klass.delete_api_body()}}
+}
+{% endfor %}
 """

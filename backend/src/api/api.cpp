@@ -54,9 +54,9 @@ struct LeHandle
     le::Renderer renderer;
 
     // Undo/redo stack + command-recall log (UPDATES.md item 21) - every
-    // generated le_create_X/le_update_X and the 4 hand-written
-    // le_delete_X functions record themselves into whatever transaction
-    // is currently recording (see command_history.is_recording()); Move
+    // generated le_create_X/le_update_X/le_delete_X function records
+    // itself into whatever transaction is currently recording (see
+    // command_history.is_recording()); Move
     // (le_mouse_up's Edit-mode branch) and le_repl_eval (the Tcl-side
     // wrapper every typed console command goes through) are the two
     // callers that bracket one with begin()/end().
@@ -2036,69 +2036,6 @@ extern "C"
         return terminal ? terminal->name.c_str() : nullptr;
     }
 
-    int le_delete_terminal(LeHandle *handle, LeTerminalId id)
-    {
-        if (!handle)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalId terminal_id = from_c(id);
-        const le::TerminalData *existing_terminal = handle->root.get_terminal(terminal_id);
-        if (!existing_terminal)
-            return 1;
-        const le::TerminalData terminal_snapshot = *existing_terminal;
-
-        // Cascade first (see le_delete_terminal's own doc comment for why
-        // this API layer does this rather than leaving it to
-        // Root::delete_terminal's generic no-cascade default) - copy the
-        // port id list first since deleting a port mutates the same
-        // index Root::get_terminal_ports() reads from.
-        const std::vector<le::TerminalPortId> port_ids = handle->root.get_terminal_ports(terminal_id);
-        std::vector<le::TerminalPortData> port_snapshots;
-        port_snapshots.reserve(port_ids.size());
-        for (const le::TerminalPortId port_id : port_ids)
-            port_snapshots.push_back(*handle->root.get_terminal_port(port_id));
-
-        // UPDATES.md item 21 - grab the terminal's own live-id cell
-        // *before* deleting anything, so each cascaded port's undo
-        // (recorded below) can repoint its own .terminal field to
-        // wherever the terminal ends up if this whole delete is later
-        // undone-then-redone. The terminal's own record_delete step is
-        // recorded *last* (after every port's), so Transaction::undo_all's
-        // reverse-order replay recreates the terminal before its ports.
-        le::editing::Transaction *txn = handle->command_history.current();
-        const std::shared_ptr<le::editing::IdCell<le::TerminalId>> terminal_cell =
-            txn ? txn->id_cell_for(terminal_id) : nullptr;
-
-        for (const le::TerminalPortId port_id : port_ids)
-            handle->root.delete_terminal_port(port_id);
-
-        const bool deleted = handle->root.delete_terminal(terminal_id);
-        handle->root.bump_mutation_version();
-
-        if (txn)
-        {
-            for (size_t i = 0; i < port_ids.size(); ++i)
-            {
-                txn->record_delete<le::TerminalPortId, le::TerminalPortData>(
-                    port_ids[i], port_snapshots[i],
-                    [terminal_cell](le::Root &r, const le::TerminalPortData &d)
-                    {
-                        le::TerminalPortData fixed = d;
-                        fixed.terminal = terminal_cell->id;
-                        return r.create_terminal_port(fixed);
-                    },
-                    [](le::Root &r, le::TerminalPortId i) { return r.delete_terminal_port(i); });
-            }
-            txn->record_delete<le::TerminalId, le::TerminalData>(
-                terminal_id, terminal_snapshot,
-                [](le::Root &r, const le::TerminalData &d) { return r.create_terminal(d); },
-                [](le::Root &r, le::TerminalId i) { return r.delete_terminal(i); });
-        }
-
-        return deleted ? 0 : 1;
-    }
-
     int32_t le_search_terminal(LeHandle *handle, const char *filter_expression)
     {
         if (!handle || !filter_expression)
@@ -2118,63 +2055,6 @@ extern "C"
         return static_cast<int32_t>(handle->terminal_search_results.size());
     }
 
-    int le_delete_terminal_port(LeHandle *handle, LeTerminalPortId id)
-    {
-        if (!handle)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::TerminalPortId port_id = from_c(id);
-        const le::TerminalPortData *existing_port = handle->root.get_terminal_port(port_id);
-        if (!existing_port)
-            return 1;
-        const le::TerminalPortData port_snapshot = *existing_port;
-
-        // Cascade first (see le_delete_terminal_port's own doc comment) -
-        // copy the shape id list first since deleting a shape mutates the
-        // same index Root::get_terminal_port_shapes() reads from.
-        const std::vector<le::ShapeId> shape_ids = handle->root.get_terminal_port_shapes(port_id);
-        std::vector<le::ShapeData> shape_snapshots;
-        shape_snapshots.reserve(shape_ids.size());
-        for (const le::ShapeId shape_id : shape_ids)
-            shape_snapshots.push_back(*handle->root.get_shape(shape_id));
-
-        // UPDATES.md item 21 - see le_delete_terminal's own comment on
-        // this same pattern (grab the parent's live-id cell before
-        // deleting, record children's delete steps before the parent's).
-        le::editing::Transaction *txn = handle->command_history.current();
-        const std::shared_ptr<le::editing::IdCell<le::TerminalPortId>> port_cell =
-            txn ? txn->id_cell_for(port_id) : nullptr;
-
-        for (const le::ShapeId shape_id : shape_ids)
-            handle->root.delete_shape(shape_id);
-
-        const bool deleted = handle->root.delete_terminal_port(port_id);
-        handle->root.bump_mutation_version();
-
-        if (txn)
-        {
-            for (size_t i = 0; i < shape_ids.size(); ++i)
-            {
-                txn->record_delete<le::ShapeId, le::ShapeData>(
-                    shape_ids[i], shape_snapshots[i],
-                    [port_cell](le::Root &r, const le::ShapeData &d)
-                    {
-                        le::ShapeData fixed = d;
-                        fixed.terminal_port = port_cell->id;
-                        return r.create_shape(fixed);
-                    },
-                    [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
-            }
-            txn->record_delete<le::TerminalPortId, le::TerminalPortData>(
-                port_id, port_snapshot,
-                [](le::Root &r, const le::TerminalPortData &d) { return r.create_terminal_port(d); },
-                [](le::Root &r, le::TerminalPortId i) { return r.delete_terminal_port(i); });
-        }
-
-        return deleted ? 0 : 1;
-    }
-
     int32_t le_search_terminal_port(LeHandle *handle, const char *filter_expression)
     {
         if (!handle || !filter_expression)
@@ -2192,60 +2072,6 @@ extern "C"
             [&expr](const le::Root &root, le::TerminalPortId id, const le::TerminalPortData &data)
             { return le::evaluate_filter(*expr, root, id, data); });
         return static_cast<int32_t>(handle->terminal_port_search_results.size());
-    }
-
-    int le_delete_obstruction(LeHandle *handle, LeObstructionId id)
-    {
-        if (!handle)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ObstructionId obstruction_id = from_c(id);
-        const le::ObstructionData *existing_obstruction = handle->root.get_obstruction(obstruction_id);
-        if (!existing_obstruction)
-            return 1;
-        const le::ObstructionData obstruction_snapshot = *existing_obstruction;
-
-        // Cascade first (see le_delete_obstruction's own doc comment).
-        const std::vector<le::ShapeId> shape_ids = handle->root.get_obstruction_shapes(obstruction_id);
-        std::vector<le::ShapeData> shape_snapshots;
-        shape_snapshots.reserve(shape_ids.size());
-        for (const le::ShapeId shape_id : shape_ids)
-            shape_snapshots.push_back(*handle->root.get_shape(shape_id));
-
-        // UPDATES.md item 21 - see le_delete_terminal's own comment on
-        // this same pattern.
-        le::editing::Transaction *txn = handle->command_history.current();
-        const std::shared_ptr<le::editing::IdCell<le::ObstructionId>> obstruction_cell =
-            txn ? txn->id_cell_for(obstruction_id) : nullptr;
-
-        for (const le::ShapeId shape_id : shape_ids)
-            handle->root.delete_shape(shape_id);
-
-        const bool deleted = handle->root.delete_obstruction(obstruction_id);
-        handle->root.bump_mutation_version();
-
-        if (txn)
-        {
-            for (size_t i = 0; i < shape_ids.size(); ++i)
-            {
-                txn->record_delete<le::ShapeId, le::ShapeData>(
-                    shape_ids[i], shape_snapshots[i],
-                    [obstruction_cell](le::Root &r, const le::ShapeData &d)
-                    {
-                        le::ShapeData fixed = d;
-                        fixed.obstruction = obstruction_cell->id;
-                        return r.create_shape(fixed);
-                    },
-                    [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
-            }
-            txn->record_delete<le::ObstructionId, le::ObstructionData>(
-                obstruction_id, obstruction_snapshot,
-                [](le::Root &r, const le::ObstructionData &d) { return r.create_obstruction(d); },
-                [](le::Root &r, le::ObstructionId i) { return r.delete_obstruction(i); });
-        }
-
-        return deleted ? 0 : 1;
     }
 
     int32_t le_search_obstruction(LeHandle *handle, const char *filter_expression)
@@ -2317,37 +2143,6 @@ extern "C"
 
         const le::ShapeData *shape = handle->root.get_shape(from_c(id));
         return shape ? shape->layer_name.c_str() : nullptr;
-    }
-
-    int le_delete_shape(LeHandle *handle, LeShapeId id)
-    {
-        if (!handle)
-            return 1;
-        std::lock_guard<std::mutex> lock(handle->mutex_);
-
-        const le::ShapeId shape_id = from_c(id);
-        const le::ShapeData *existing_shape = handle->root.get_shape(shape_id);
-        if (!existing_shape)
-            return 1;
-        const le::ShapeData shape_snapshot = *existing_shape;
-
-        const bool deleted = handle->root.delete_shape(shape_id);
-        handle->root.bump_mutation_version();
-
-        // UPDATES.md item 21 - a leaf delete (Shape has no children of
-        // its own), so no id-cell indirection is needed the way the
-        // cascading deletes above need it: this shape's own parent
-        // (terminal_port/obstruction) isn't touched by this call, so its
-        // id in the snapshot stays valid regardless of undo/redo.
-        if (le::editing::Transaction *txn = handle->command_history.current())
-        {
-            txn->record_delete<le::ShapeId, le::ShapeData>(
-                shape_id, shape_snapshot,
-                [](le::Root &r, const le::ShapeData &d) { return r.create_shape(d); },
-                [](le::Root &r, le::ShapeId i) { return r.delete_shape(i); });
-        }
-
-        return deleted ? 0 : 1;
     }
 
     int32_t le_shape_rect_count(LeHandle *handle, LeShapeId id)

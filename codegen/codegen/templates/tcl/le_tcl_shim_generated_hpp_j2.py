@@ -61,4 +61,14 @@ const char *create_{{klass.to_snake_case()}}_cmd({{klass.create_shim_params()}})
 {% for klass in classes %}
 const char *update_{{klass.to_snake_case()}}_cmd({{klass.update_shim_params()}});
 {% endfor %}
+
+// --- delete_<type> - positional form behind `delete_<type> <id>
+// [-help]` (le_tcl_procs.tcl's own generated delete_<type> proc resolves
+// no flags of its own, just the one positional id token, then calls this
+// - see api_declarations_inc_j2's own comment for the cascade-to-owned-
+// children convention every one of these follows uniformly). Returns 0
+// on success, nonzero on failure (unknown id). ---
+{% for klass in classes %}
+int delete_{{klass.to_snake_case()}}_cmd(const char *id);
+{% endfor %}
 """
