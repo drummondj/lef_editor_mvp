@@ -34,6 +34,7 @@
 // this replaced.
 #include "include/ports/SkFontMgr_directory.h"
 #include <limits.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #ifndef LE_FONT_DIR
 #error "LE_FONT_DIR must be set by backend/CMakeLists.txt"
@@ -74,6 +75,26 @@ namespace le
             // that ambiguity for the next report.
             auto try_font_dir = [](const std::string& dir) -> sk_sp<SkTypeface>
             {
+                // Checked explicitly, before ever constructing a
+                // SkFontMgr: confirmed via a real report that
+                // SkFontMgr_New_Custom_Directory does NOT fail cleanly
+                // (empty countFamilies()/null matchStyle()) when given a
+                // directory that doesn't exist at all - it instead
+                // produces a *non-null* SkTypeface with an empty family
+                // name and no real glyph data, which this function used
+                // to treat as success, short-circuiting before ever
+                // trying the correct fallback directory. Since LE_FONT_DIR
+                // is a compile-time path that's frequently wrong at
+                // runtime (that's the whole reason the fallback below
+                // exists), this isn't a hypothetical edge case - it's the
+                // expected common case on a machine other than the one
+                // that built the binary.
+                struct stat st{};
+                if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+                {
+                    spdlog::warn("default_typeface(): '{}' does not exist or is not a directory", dir);
+                    return nullptr;
+                }
                 sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory(dir.c_str());
                 int family_count = font_mgr->countFamilies();
                 if (family_count == 0)
@@ -98,6 +119,18 @@ namespace le
                 }
                 SkString family_name;
                 face->getFamilyName(&family_name);
+                if (family_name.isEmpty())
+                {
+                    // Belt-and-braces alongside the stat() check above -
+                    // this is the exact symptom that check was added to
+                    // catch (a "successful" but degenerate typeface with
+                    // no real family name), kept as a second guard in
+                    // case some other, not-yet-seen input shape produces
+                    // the same degenerate result a missing directory did.
+                    spdlog::warn("default_typeface(): '{}' produced a typeface with no family name "
+                                 "(family_count={}) - treating as not found", dir, family_count);
+                    return nullptr;
+                }
                 spdlog::info("default_typeface(): loaded '{}' from '{}'", family_name.c_str(), dir);
                 return face;
             };
@@ -125,7 +158,28 @@ namespace le
                     buf[len] = '\0';
                     std::string exe_path(buf);
                     size_t slash = exe_path.find_last_of('/');
-                    exe_dir = (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
+                    if (slash == std::string::npos)
+                    {
+                        exe_dir = ".";
+                    }
+                    else if (slash == 0)
+                    {
+                        // The executable lives directly under / (e.g.
+                        // "/lef_editor", exe_path[0..slash] would
+                        // otherwise be an empty substring - confirmed by
+                        // hitting exactly this in a throwaway test
+                        // harness placed at filesystem root: the fallback
+                        // was silently skipped entirely (empty string was
+                        // indistinguishable from readlink() itself
+                        // failing, both handled by the `if
+                        // (!exe_dir.empty())` check below). Unlikely for a
+                        // real install, but cheap to get right.
+                        exe_dir = "/";
+                    }
+                    else
+                    {
+                        exe_dir = exe_path.substr(0, slash);
+                    }
                 }
                 else
                 {

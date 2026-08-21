@@ -41,7 +41,17 @@ std::string ExecutableDir() {
   buf[len] = '\0';
   std::string exe_path(buf);
   size_t slash = exe_path.find_last_of('/');
-  return (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
+  // slash == 0 (executable directly under /) needs its own case - "/"
+  // itself, not an empty substring(0, 0) - see render.cpp's
+  // default_typeface() for the identical bug this mirrors, confirmed via
+  // a real throwaway test harness placed at filesystem root.
+  if (slash == std::string::npos) {
+    return ".";
+  }
+  if (slash == 0) {
+    return "/";
+  }
+  return exe_path.substr(0, slash);
 }
 
 }  // namespace
