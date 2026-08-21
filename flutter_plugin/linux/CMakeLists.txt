@@ -127,30 +127,46 @@ if(LE_LINK_BACKEND)
   target_include_directories(${PLUGIN_NAME} PRIVATE ../src ${TCL_INCLUDE_PATH})
   target_link_libraries(${PLUGIN_NAME} PRIVATE ${TCL_LIBRARY})
 
-  # le_tcl.so/le_tcl_procs.tcl need to be bundled into the app's own lib/
-  # directory too, not referenced via a compile-time absolute path baked
-  # into the binary the way LE_TCL_MODULE_PATH/LE_TCL_PROCS_PATH used to
-  # be - a bundle built on one machine and copied to another has no
-  # LE_BACKEND_DIR at all, so that path was never anything but this build
-  # machine's own local backend/build-linux tree. lef_editor_plugin.cc
-  # now resolves both files at runtime relative to the executable's own
-  # directory instead (see its own comment) - confirmed necessary by a
-  # real "cannot open shared object file" error running a release build
-  # on a different machine than it was built on.
+  # le_tcl.so/le_tcl_procs.tcl/le_tcl_procs_generated.tcl need to be
+  # bundled into the app's own lib/ directory too, not referenced via a
+  # compile-time absolute path baked into the binary the way
+  # LE_TCL_MODULE_PATH/LE_TCL_PROCS_PATH used to be - a bundle built on
+  # one machine and copied to another has no LE_BACKEND_DIR at all, so
+  # that path was never anything but this build machine's own local
+  # backend/build-linux tree. lef_editor_plugin.cc now resolves the first
+  # two at runtime relative to the executable's own directory instead
+  # (see its own comment) - confirmed necessary by a real "cannot open
+  # shared object file" error running a release build on a different
+  # machine than it was built on. le_tcl_procs_generated.tcl doesn't need
+  # a matching C++-side change: le_tcl_procs.tcl's own `source` line
+  # already tries this flat (no generated/ subdirectory) layout as a
+  # fallback after the real source-tree one - see that file's own
+  # comment, added for the same reason ("couldn't read file
+  # .../generated/le_tcl_procs_generated.tcl" on a release build).
   #
-  # Collected here into LE_TCL_BUNDLED_FILES, not appended directly to
-  # lef_editor_plugin_bundled_libraries: that variable already gets its
-  # one and only `set()` call further down this file (Flutter's own
+  # The bundled font (backend/assets/fonts/*.ttf, see render.cpp's own
+  # default_typeface()) rides along here too - LE_FONT_DIR is exactly the
+  # same class of compile-time-build-machine-path problem (confirmed by a
+  # real report of every text label rendering blank on a release build),
+  # and render.cpp's own runtime fallback (see its comment) looks in this
+  # same bundled lib/ directory.
+  #
+  # Collected here into LE_RUNTIME_BUNDLED_FILES, not appended directly
+  # to lef_editor_plugin_bundled_libraries: that variable already gets
+  # its one and only `set()` call further down this file (Flutter's own
   # generated template, bundling the separate FFI shared library) -
   # a second, earlier `set(lef_editor_plugin_bundled_libraries ...
   # PARENT_SCOPE)` here would silently overwrite it rather than add to
   # it (confirmed by hitting exactly that - le_tcl.so never made it into
   # a real built bundle until this was combined into the one call below
-  # instead). LE_TCL_BUNDLED_FILES stays unset (harmless, expands to
+  # instead). LE_RUNTIME_BUNDLED_FILES stays unset (harmless, expands to
   # nothing) when this if(LE_LINK_BACKEND) block doesn't run at all.
-  set(LE_TCL_BUNDLED_FILES
+  file(GLOB LE_BUNDLED_FONT_FILES "${LE_BACKEND_DIR}/assets/fonts/*.ttf")
+  set(LE_RUNTIME_BUNDLED_FILES
     "${LE_BACKEND_TCL_BUILD}/le_tcl.so"
     "${LE_BACKEND_DIR}/src/tcl/le_tcl_procs.tcl"
+    "${LE_BACKEND_DIR}/src/tcl/generated/le_tcl_procs_generated.tcl"
+    ${LE_BUNDLED_FONT_FILES}
   )
 endif()
 
@@ -166,9 +182,9 @@ set(lef_editor_plugin_bundled_libraries
   # Defined in ../src/CMakeLists.txt.
   # This can be changed to accommodate different builds.
   $<TARGET_FILE:lef_editor_plugin>
-  # le_tcl.so/le_tcl_procs.tcl, when LE_LINK_BACKEND is ON - see the
-  # LE_TCL_BUNDLED_FILES comment above for why these are added here
-  # rather than in a separate set() call of their own.
-  ${LE_TCL_BUNDLED_FILES}
+  # le_tcl.so/le_tcl_procs*.tcl/fonts, when LE_LINK_BACKEND is ON - see
+  # the LE_RUNTIME_BUNDLED_FILES comment above for why these are added
+  # here rather than in a separate set() call of their own.
+  ${LE_RUNTIME_BUNDLED_FILES}
   PARENT_SCOPE
 )

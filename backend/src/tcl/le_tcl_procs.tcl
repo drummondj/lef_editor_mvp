@@ -703,7 +703,26 @@ proc default_to_unset {values} {
 # generated - see generated/le_tcl_procs_generated.tcl and backend/
 # CLAUDE.md's TCL section. Never edit that file directly, regenerate via
 # the regen-tcl skill instead.
-source [file join [file dirname [info script]] generated le_tcl_procs_generated.tcl]
+# Tries the real source-tree layout first (generated/le_tcl_procs_generated.tcl,
+# alongside this file, unchanged - ctest/le_shell/tclsh all source this file
+# straight from backend/src/tcl/, where that subdirectory genuinely exists),
+# then falls back to a flat layout (this file's own directory, no generated/
+# subdirectory) - a packaged release bundle can't preserve that nesting (the
+# whole flutter_plugin bundling mechanism installs individual files into one
+# flat lib/ directory, no per-file destination subdirectory) - confirmed
+# necessary by a real "couldn't read file .../generated/le_tcl_procs_generated.tcl:
+# no such file or directory" error running a release build.
+set _le_generated_procs_candidates [list \
+    [file join [file dirname [info script]] generated le_tcl_procs_generated.tcl] \
+    [file join [file dirname [info script]] le_tcl_procs_generated.tcl] \
+]
+foreach _le_candidate $_le_generated_procs_candidates {
+    if {[file exists $_le_candidate]} {
+        source $_le_candidate
+        break
+    }
+}
+unset _le_generated_procs_candidates _le_candidate
 
 # All properties for one token, as a dict - the shared building block
 # behind both get_properties and report_properties.

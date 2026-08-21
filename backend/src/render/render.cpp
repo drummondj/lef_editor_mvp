@@ -4,6 +4,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <string>
+
 // See draw_helpers.hpp's comment on default_typeface() for why this is
 // isolated to its own translation unit: ApplicationServices.h (pulled in by
 // SkFontMgr_mac_ct.h) defines legacy Carbon Rect/Point/Polygon typedefs
@@ -29,6 +31,8 @@
 // - no separate SkFontScanner argument needed, unlike the fontconfig path
 // this replaced.
 #include "include/ports/SkFontMgr_directory.h"
+#include <limits.h>
+#include <unistd.h>
 #ifndef LE_FONT_DIR
 #error "LE_FONT_DIR must be set by backend/CMakeLists.txt"
 #endif
@@ -55,16 +59,46 @@ namespace le
             // bundled family. Confirmed via gdb: matchFamilyStyle(nullptr,
             // ...) returns null even though the font manager itself loaded
             // the bundled font successfully. createStyleSet(0) sidesteps
-            // name-matching entirely - LE_FONT_DIR only ever has the one
-            // bundled family, so "family at index 0" is unambiguous.
-            sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory(LE_FONT_DIR);
-            sk_sp<SkTypeface> face;
-            if (font_mgr->countFamilies() > 0)
+            // name-matching entirely - a candidate directory only ever has
+            // the one bundled family, so "family at index 0" is unambiguous.
+            auto try_font_dir = [](const char* dir) -> sk_sp<SkTypeface>
             {
-                sk_sp<SkFontStyleSet> style_set = font_mgr->createStyleSet(0);
-                if (style_set != nullptr)
+                sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory(dir);
+                if (font_mgr->countFamilies() > 0)
                 {
-                    face = style_set->matchStyle(SkFontStyle());
+                    sk_sp<SkFontStyleSet> style_set = font_mgr->createStyleSet(0);
+                    if (style_set != nullptr)
+                    {
+                        return style_set->matchStyle(SkFontStyle());
+                    }
+                }
+                return nullptr;
+            };
+
+            // LE_FONT_DIR is a compile-time path (this build machine's own
+            // backend/assets/fonts) - correct for ctest/render_preview/local
+            // dev, where that source tree genuinely exists, but never valid
+            // on a machine a packaged release bundle gets copied to. Fall
+            // back to the font bundled next to the running executable
+            // instead (flutter_plugin/linux/CMakeLists.txt's own
+            // LE_RUNTIME_BUNDLED_FILES bundles backend/assets/fonts/*.ttf
+            // into the app's lib/ directory, same place le_tcl.so/
+            // le_tcl_procs.tcl land - see lef_editor_plugin.cc's
+            // ExecutableDir() for the equivalent Tcl-console fix this
+            // mirrors) - confirmed necessary by a real report of every text
+            // label rendering blank on a release build.
+            sk_sp<SkTypeface> face = try_font_dir(LE_FONT_DIR);
+            if (face == nullptr)
+            {
+                char buf[PATH_MAX];
+                ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+                if (len > 0)
+                {
+                    buf[len] = '\0';
+                    std::string exe_path(buf);
+                    size_t slash = exe_path.find_last_of('/');
+                    std::string exe_dir = (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
+                    face = try_font_dir((exe_dir + "/lib").c_str());
                 }
             }
             if (face == nullptr)
@@ -75,7 +109,7 @@ namespace le
                 // if this ever fires, which is otherwise very hard to
                 // diagnose on a machine we can't reproduce against directly -
                 // see backend/CLAUDE.md's Build section for LE_FONT_DIR.
-                spdlog::error("default_typeface(): no usable font found in LE_FONT_DIR ({})", LE_FONT_DIR);
+                spdlog::error("default_typeface(): no usable font found in LE_FONT_DIR ({}) or next to the executable", LE_FONT_DIR);
             }
             return face;
 #else
