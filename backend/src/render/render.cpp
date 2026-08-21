@@ -1,9 +1,11 @@
 #include "draw_helpers.hpp"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkFontStyle.h"
+#include "include/core/SkString.h"
 
 #include <spdlog/spdlog.h>
 
+#include <cerrno>
 #include <string>
 
 // See draw_helpers.hpp's comment on default_typeface() for why this is
@@ -61,18 +63,43 @@ namespace le
             // the bundled font successfully. createStyleSet(0) sidesteps
             // name-matching entirely - a candidate directory only ever has
             // the one bundled family, so "family at index 0" is unambiguous.
-            auto try_font_dir = [](const char* dir) -> sk_sp<SkTypeface>
+            // Every branch below logs *something* - success included, not
+            // just failure. A previous version of this function only ever
+            // logged on total failure, so a report of "text isn't
+            // rendering" against silent (non-error) logs was genuinely
+            // ambiguous: did font *loading* fail (this function's own
+            // concern), or did it succeed but glyph *rasterization*
+            // further down the pipeline fail for some other reason (a
+            // different bug entirely)? Logging the success path closes
+            // that ambiguity for the next report.
+            auto try_font_dir = [](const std::string& dir) -> sk_sp<SkTypeface>
             {
-                sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory(dir);
-                if (font_mgr->countFamilies() > 0)
+                sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory(dir.c_str());
+                int family_count = font_mgr->countFamilies();
+                if (family_count == 0)
                 {
-                    sk_sp<SkFontStyleSet> style_set = font_mgr->createStyleSet(0);
-                    if (style_set != nullptr)
-                    {
-                        return style_set->matchStyle(SkFontStyle());
-                    }
+                    spdlog::warn("default_typeface(): no font families found in '{}'", dir);
+                    return nullptr;
                 }
-                return nullptr;
+                sk_sp<SkFontStyleSet> style_set = font_mgr->createStyleSet(0);
+                if (style_set == nullptr)
+                {
+                    spdlog::warn("default_typeface(): '{}' has {} font famil{} but createStyleSet(0) returned null",
+                                 dir, family_count, family_count == 1 ? "y" : "ies");
+                    return nullptr;
+                }
+                sk_sp<SkTypeface> face = style_set->matchStyle(SkFontStyle());
+                if (face == nullptr)
+                {
+                    spdlog::warn("default_typeface(): '{}' has {} font famil{} but matchStyle() returned null "
+                                 "(the .ttf/.otf file(s) there may have failed to parse)",
+                                 dir, family_count, family_count == 1 ? "y" : "ies");
+                    return nullptr;
+                }
+                SkString family_name;
+                face->getFamilyName(&family_name);
+                spdlog::info("default_typeface(): loaded '{}' from '{}'", family_name.c_str(), dir);
+                return face;
             };
 
             // LE_FONT_DIR is a compile-time path (this build machine's own
@@ -92,13 +119,22 @@ namespace le
             {
                 char buf[PATH_MAX];
                 ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+                std::string exe_dir;
                 if (len > 0)
                 {
                     buf[len] = '\0';
                     std::string exe_path(buf);
                     size_t slash = exe_path.find_last_of('/');
-                    std::string exe_dir = (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
-                    face = try_font_dir((exe_dir + "/lib").c_str());
+                    exe_dir = (slash == std::string::npos) ? "." : exe_path.substr(0, slash);
+                }
+                else
+                {
+                    spdlog::warn("default_typeface(): readlink(\"/proc/self/exe\") failed (errno {}) - "
+                                 "can't compute the executable-relative font fallback path", errno);
+                }
+                if (!exe_dir.empty())
+                {
+                    face = try_font_dir(exe_dir + "/lib");
                 }
             }
             if (face == nullptr)
@@ -108,8 +144,14 @@ namespace le
                 // but every terminal/pin/ruler label silently renders blank
                 // if this ever fires, which is otherwise very hard to
                 // diagnose on a machine we can't reproduce against directly -
-                // see backend/CLAUDE.md's Build section for LE_FONT_DIR.
-                spdlog::error("default_typeface(): no usable font found in LE_FONT_DIR ({}) or next to the executable", LE_FONT_DIR);
+                // see backend/CLAUDE.md's Build section for LE_FONT_DIR. The
+                // two warn() lines above (one per candidate directory) carry
+                // the actual "why" (missing directory vs. empty vs. a file
+                // present but unparseable); this line is deliberately just a
+                // loud, unmissable summary that every label is about to
+                // render blank, not a duplicate of that detail.
+                spdlog::error("default_typeface(): FAILED - no usable font found, every text label will render blank. "
+                              "See the warn() line(s) immediately above for which candidate directories failed and why.");
             }
             return face;
 #else
